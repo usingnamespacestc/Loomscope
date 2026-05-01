@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.local
+.DS_Store
+*.log
+.vite/
+coverage/
+
+# tsc -b artifacts (we use noEmit; emitted .js next to .tsx is a sign of misconfig)
+*.tsbuildinfo
+src/**/*.js
+vite.config.js
+
