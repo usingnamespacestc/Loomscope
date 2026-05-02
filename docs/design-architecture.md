@@ -822,6 +822,85 @@ t=4s     [jsonl] 最终 assistant → ChatNode 'done'
 
 4 次更新而非 6 次；没有 "running" 中间态——节点 instantaneously 从 pending 到 completed。Replay 历史 session 一样的体验——无 running 状态、节点全是 completed。
 
+## Settings 面板（slash commands 映射）
+
+CC 自带 **86 个 slash commands**——Loomscope 不全暴露。按 4 类策略 surface：
+
+### 第 1 类：Loomscope 已有原生 UI（不暴露 slash 命令）
+
+| CC 命令 | Loomscope 替代 |
+|---|---|
+| `/resume`, `/session`, `/tag`, `/rename` | 左侧 session 管理面板 |
+| `/clear` | 左侧"新建 session"按钮 |
+| `/hooks`（管理）| onboarding + 设置面板的 hook 管理 |
+| `/help`, `/exit`, `/keybindings` | Loomscope 自己实现 |
+
+### 第 2 类：设置面板要 surface 的持久配置
+
+Loomscope 设置面板分 **2 个 tab**：
+
+#### Tab A：**CC 配置**（同步写 `~/.claude/settings.json`）
+
+改了影响未来 CC session 行为：
+
+| 设置项 | 对应 CC 命令 | 实现 |
+|---|---|---|
+| 默认 model | `/model` | settings.json `model` 字段下拉 |
+| 自定义 agents | `/agents` | 列出 + 编辑（jsonc-parser 写 settings.json `agents` 字段）|
+| MCP servers | `/mcp` | 列出 + 编辑 `mcpServers` 字段 |
+| 权限规则 | `/permissions` | 列出 + 编辑 `permissions` 字段 |
+| Sandbox 模式 | `/sandbox-toggle` | 开关 |
+| 思考预算 | `/effort` | 下拉（low / medium / high） |
+| 输出风格 | `/output-style` | 下拉 |
+| Skills 列表 | `/skills` | 列表 + 启用/禁用 |
+| 隐私设置 | `/privacy-settings` | 开关组 |
+| Hooks 管理 | `/hooks` | Loomscope hook 状态 + 一键 patch / clear |
+| 通用 config 编辑器（fallback）| `/config` | 直接 JSON 编辑器（未识别字段不破坏） |
+
+#### Tab B：**Loomscope 配置**（写 localStorage / `~/.loomscope/`）
+
+只影响 Loomscope 自己：
+
+| 设置项 | 存储 |
+|---|---|
+| Sidebar 宽度 / 折叠状态 | localStorage `loomscope:ui:*` |
+| Theme（暗黑模式等） | localStorage `loomscope:ui:theme` |
+| Workspace pin / hide | localStorage `loomscope:ui:pinnedWorkspaces` |
+| 默认聚焦的 workspace | localStorage `loomscope:ui:focusedWorkspace` |
+| 端口 | 启动 CLI flag `-p / --port` |
+| 鉴权模式（Mode A / B）| 启动 CLI flag `--bind 0.0.0.0 --auth required` |
+
+### 第 3 类：会话内动作（v∞.2 直接 canvas 输入框打）
+
+`/compact` `/summary` `/branch` `/rewind` `/init` `/commit` `/commit-push-pr` `/context` `/cost` `/usage` `/stats` `/memory` `/break-cache` 等——这些是"在当前 session 里执行 X"，CC 的 agent loop 原样处理。Loomscope **不需要做特殊 UI**——v∞.2 用户在输入框打 `/compact` 跟在终端打效果一样。
+
+唯一例外：**`/compact` 用得多，做成 canvas 工具栏一个按钮**。点 = 输入框自动填 `/compact` 再发。其它命令不放工具栏，让用户自己打。
+
+### 第 4 类：明确**不实现**
+
+| 类别 | 命令（部分）|
+|---|---|
+| 终端专属 | `/vim`, `/terminalSetup`, `/chrome`, `/desktop`, `/mobile`, `/voice`, `/ide`, `/copy` |
+| 鉴权 | `/login`, `/logout`, `/oauth-refresh`, `/upgrade` |
+| 调试/诊断 | `/doctor`, `/heapdump`, `/perf-issue`, `/debug-tool-call`, `/ant-trace`, `/bughunter` |
+| 外部集成 | `/install-github-app`, `/install-slack-app`, `/pr_comments`, `/review`, `/autofix-pr`, `/issue` |
+| Loomscope 不走的协议 | `/bridge`, `/teleport`, `/share`, `/remote-env`, `/remote-setup` |
+| 范围外 | `/export` (non-goal), `/diff` (canvas 已有), `/files`, `/cd`, `/add-dir` |
+| 其它 / 边缘 | `/btw`, `/stickers`, `/feedback`, `/release-notes`, `/insights`, `/good-claude` 等 |
+
+### Plan mode 特殊处理
+
+`/plan` 不是普通"命令"——是**会话模式**，进入后 LLM 不直接执行只规划。`permission-mode` 字段 jsonl 里有记录。
+
+提案：**Canvas 顶部模式 toggle**——`Edit | Plan` 二态切换，等同于按 `/plan` 进入或退出。模式持续影响后续多轮，用户切换需要清晰可见——这是少数应该有原生 UI 的会话内动作。
+
+### 实现细节
+
+- **CC 配置 tab 写盘**：用 jsonc-parser 保留用户原 settings.json 格式（comments / 自定义 indent / 键序），跟"hooks 自动 patch"用同一套写盘策略
+- **未识别字段保留**：用户 settings.json 里我们不认识的字段（CC 升级 / 第三方插件加的）原封不动透传——绝不"清理"
+- **CC 配置 tab 跟 CC 实时同步**：用户在 Loomscope 改了 model 后，下次 CC 启动新 session 自然读到——不需要 Loomscope 通知 CC
+- **冲突处理**：Loomscope 改 settings.json 时如果检测到 CC 进程也在写（罕见），用 file lock 串行；详见 architecture.md "hooks 自动 patch / 清除"小节
+
 ## 前端状态管理
 
 **决定（2026-05-02）**：**Zustand 5.0** + slice 模式 + `persist` middleware。

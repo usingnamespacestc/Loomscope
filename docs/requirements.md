@@ -143,6 +143,7 @@ Loomscope 不是单一形态，至少要支持两种使用方式：
 - ❌ **L3 共指（Figma 多人鼠标 / 共同选中）**：v∞ 共读（L1）+ 共写（L2）支持；但不做"实时同步对方鼠标 / 折叠状态"那种 multiplayer UI。视频会议口头协调即可。
 - ❌ **公网暴露**（v0/v∞ 范围内）：不内置 TLS / 不做用户系统 / 不打 Docker image。**远端访问推荐 Tailscale / Cloudflare Tunnel / SSH tunnel**——overlay 网络层解决，Loomscope 仍然 localhost 监听。
   - 未来 backlog：基础功能开发完后，**可考虑做 Tier 1 + Tier 2 公网安全**（详见 `design-architecture.md` "未来 backlog · 公网暴露"）。即使做完，仍优先推荐 overlay 方案，公网直连作 last resort。
+- ❌ **不暴露 CC 全部 86 个 slash commands**：只 surface "第 2 类配置命令"对应的设置 UI（如 `/model` `/agents` `/mcp` `/permissions` 等）+ "第 1 类导航命令"在 Loomscope 自己的 UI 里有对应（`/resume` → 左侧 session 面板 等）。第 3 类会话内动作（`/compact` `/summary` `/branch` 等）用户在 v∞.2 canvas 输入框直接打——CC 自己处理。第 4 类（终端 / 鉴权 / 调试 / CCR / 外部集成）**完全不实现**。详细分类见 `design-architecture.md` "Settings 面板"章节。
 
 ## 性能目标
 
