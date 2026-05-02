@@ -27,6 +27,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { layoutChatFlow } from "@/canvas/layoutDag";
+import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
 import { ChatNodeCard } from "@/canvas/nodes/ChatNodeCard";
 import { ContinuationArrowDefs, ContinuationEdge } from "@/canvas/edges/ContinuationEdge";
 import type { ChatFlow } from "@/data/types";
@@ -73,6 +74,14 @@ export function ChatFlowCanvas({ chatFlow, sessionId }: ChatFlowCanvasProps) {
           chatFlow={chatFlow}
           sessionId={sessionId}
           onEdgeHover={setHoveredEdge}
+        />
+        <ModelRibbonLayer
+          chatFlow={chatFlow}
+          hoveredEdge={
+            hoveredEdge
+              ? { source: hoveredEdge.source, target: hoveredEdge.target }
+              : null
+          }
         />
       </ReactFlowProvider>
 
