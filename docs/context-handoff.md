@@ -21,15 +21,20 @@
 
 - **v0.0 scaffold**（commit `8ca1ef0`）：Vite 5 + React 18 + TS 5.6 + Tailwind 3 + `@xyflow/react` 12 + `@dagrejs/dagre` + Vitest。空 App 壳 + 一个 smoke test。
 - **6 篇设计文档**——大部分讨论已收敛，TODO 标签已大幅消化（仍少量遗留，本文末尾"剩余开放问题"列出）。
+- **v0.1 数据解析层**（commit `ea61a98`）：`src/data/` + `src/parse/` 共 ~1900 行（含 454 行测试）；39/39 unit tests；256MB session 实测 2.19s 解析 / 0 失败。
 
-## 还没做的部分（v0.1 起）
+## 还没做的部分（v0.2 起）
 
-- 数据解析层（`src/data/types.ts` + `src/parse/jsonl.ts` + `src/parse/sidecar.ts` + `src/parse/workflow-builder.ts` + 测试 fixtures）
-- Backend（Hono + zod，提供 12 个 REST endpoint + SSE）
-- Frontend state（Zustand 5 + 4 slice + persist middleware）
-- Canvas 渲染（`src/canvas/`，参考 Agentloom）
-- 实时 file-tail + hook push（v∞.0）
-- 启动 / 接管 / prompt 续接（v∞.1 + v∞.2）
+- v0.2 minimal canvas（ChatFlow 横向 DAG 渲染 + 节点折叠/展开）
+- v0.3 inner WorkFlow（ChatNode 展开后看到内部 llm_call / tool_call / delegate / compact 节点）
+- v0.4 drill panel（右侧详情）
+- v0.5 sub-agent 双态（折叠 rich card + 展开真嵌套子 ChatFlow）
+- v0.6 compact ChatNode 视觉 + file-history-snapshot 时间窗绑定
+- v0.7 file-tail 实时增量
+- v0.8+ 性能优化 / 跨 session 搜索 / SQLite FTS5
+- Backend（Hono + zod，12 个 REST endpoint + SSE）—— 跟 canvas 一起做或先做
+- Frontend state（Zustand 5 + 4 slice + persist middleware）—— v0.2 一起
+- v∞.0 read-only 远程观察 / v∞.1 启动新 session / v∞.2 接管 + prompt 续接
 
 详见 `plan.md`。
 
@@ -112,7 +117,12 @@ npm run build
 ## 历史更新
 
 - **2026-05-01** 项目立项 + v0.0 scaffold 完成 + 5 篇文档初版（`4884d0e`）
-- **2026-05-02** 大量设计讨论收敛 → 6 篇文档全面 fleshed out。关键发现 + 决策（按时间顺序）：
+- **2026-05-02 v0.1 ship（commit `ea61a98`）** —— 数据解析层落地：
+  - 文件：`src/data/types.ts`、`src/parse/raw-record.ts`、`src/parse/jsonl.ts`、`src/parse/workflow-builder.ts`、`src/parse/sidecar.ts`、`__fixtures__/synthetic/`
+  - 39/39 unit tests 绿；256MB session 实测 2.19 秒解析 / 0 失败 / 93 delegate / 139 compact / 1522 ChatNode / 39434 llm_call / 21886 tool_call
+  - 实测纠正 7 处 doc 错误：promptId 仅在 user 记录 / sourceToolUseID 罕见走 block-level / compact dup uuid 处理 / file-history-snapshot 全 orphan / scheduled trigger 启发式 / 多 root 不存在 / flow events carve-out 时机
+  - 详见 `design-data-model.md` "v0.1 实测确认的解析规范" 小节
+- **2026-05-02 设计阶段（commits `b003f7b` → `c4edc8f`）** —— 大量设计讨论收敛，6 篇文档全面 fleshed out。关键发现 + 决策（按时间顺序）：
   - Sub-agent trace 实测**不是不存而是存在 sidecar**——`subagents/agent-<id>.jsonl` 完整 trace；v0 支持真嵌套展开（推翻原"必须叶子节点"假设）
   - ScheduleWakeup vs CronCreate 区分：前者本地、后者远端 CCR；222 vs 0 实测频次说明日常用的是 ScheduleWakeup
   - Recap (away_summary) 真相：是 next-ChatNode brief，91% 后继 user record（之前以为是 ScheduleWakeup 流水的一环）

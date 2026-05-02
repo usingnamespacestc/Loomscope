@@ -127,9 +127,11 @@ Sidecar 目录：
 - 记录层：`type=='user' and toolUseResult != null`
 - block 层：`message.content[*].type == 'tool_result'`，含 `tool_use_id`（snake_case，跟 record 层 `sourceToolUseID` 不同字段名！）
 
-⚠ **关键反直觉点 2**：tool_result 反向指针有**两个**：
-- `sourceToolUseID` → 对应的 `tool_use` block id（精确到 block）
-- `sourceToolAssistantUUID` → 对应 tool_use 所在 assistant 记录的 uuid
+⚠ **关键反直觉点 2**（实测修正 2026-05-02）：tool_result 真实反向指针**走 block 层不是 record 层**：
+- ✅ **block 层 `message.content[*].tool_use_id`**（snake_case）—— 实测 24176 次必有
+- ⚠ record 层 `sourceToolUseID` —— 实测 24177 配对里仅 10 次出现，**几乎不可用**
+- record 层 `sourceToolAssistantUUID` —— 实测 24177 次出现，但指的是 assistant 记录的 uuid 不是 tool_use block 的 id
+- ⇒ Loomscope 解析必须走 block-level `tool_use_id`，不要依赖 record-level `sourceToolUseID`
 
 ⚠ **关键反直觉点 3**：`message` 内部还有自己的 `type` 字段（如 `message.content[*].type` ∈ {text, thinking, tool_use, tool_result, image, tool_reference}），跟顶层 `type` 字段是不同维度。`tool_use` / `text` / `thinking` 计数（24176 / 12861 / 7981）算的是 block 数不是 record 数。
 
@@ -141,12 +143,21 @@ parentUuid          → 任一记录指向其前驱记录的 uuid（DAG 边）
                      - user 记录的 parentUuid = 上一条 assistant 的 uuid（继续会话）
                      - user 记录 parentUuid=null = 第一条用户消息 / 重启会话
                      - assistant 记录的 parentUuid = 它响应的 user 消息的 uuid
-promptId            → 同一组 user→assistant→tool→assistant→... 共享同一 promptId
-                     ⇒ 一个 promptId = 一个 ChatNode
+promptId            → ⚠ **实测修正 2026-05-02 (v0.1 实现时发现)**：
+                     promptId **仅在 type='user' 记录上**，assistant / attachment /
+                     file-history-snapshot / system 等都没有该字段
+                     实测 256MB session：26228/26228 user 有 promptId；39434 assistant、4466 attachment、
+                     2099 file-history-snapshot、1924 system 全部 0 个 promptId
+                     ⇒ 解析时其它 type 走 parentUuid 回溯找最近的 user 节点继承
+                     ⇒ 跨 compact_boundary 时（parentUuid:null + logicalParentUuid:<尾巴 uuid>）
+                       要 hop logicalParentUuid 一次，否则 post-compact 链会断
+                     ⇒ 一个 promptId = 一个 ChatNode（不变）
 requestId           → 一次 Anthropic API 调用产生的所有记录组（assistant 主+follow-up 都同 requestId）
                      ⇒ 一个 requestId = 一个 WorkFlow 内的一次 LLM 调用 + 它附带的 tool_calls
-sourceToolUseID     → 某条 tool_result 记录对应的 tool_use id（反向链）
-sourceToolAssistantUUID → 那条 tool_use 所属 assistant 记录的 uuid
+sourceToolUseID     → ⚠ **实测罕见**：256MB session 24177 个 tool_use/result 配对里仅 10 次出现
+                     真实反向链路走 block 层 message.content[*].tool_use_id（snake_case）
+sourceToolAssistantUUID → 实测 24177 次出现，**这才是 record-level 的反向指针**——
+                     指向对应 tool_use 所在 assistant 记录的 uuid（不是 tool_use block 的 id）
 isCompactSummary    → true 表示这条 user 记录的 message.content 是"前一段会话的压缩摘要"
                      ⚠ 反直觉：标在 type='user' role='user' 记录上（不是 assistant！）
                      CC 把 LLM 生成的 summary 文本以 user 角色塞回新会话作为续写起点
@@ -346,6 +357,53 @@ function buildWorkflow(records, userMsg): WorkFlow {
   // Compact records → compact WorkNode at top
 }
 ```
+
+## v0.1 实测确认的解析规范（2026-05-02）
+
+v0.1 解析层 ship 时（commit `ea61a98`）实测对 256MB session 解析 2.19 秒、0 失败，确认了下面的规范：
+
+### 跨 ChatNode transition 的"flow events"在 bucketing 前 carve out
+
+以下 system 子类 / 特殊记录**不属于任何一个 ChatNode 的 WorkFlow**——它们是 ChatNode 之间的过渡 marker，应在 bucketing 之前 carve 成 `chatFlow.flowEvents`：
+
+| 记录类型 | 角色 |
+|---|---|
+| `system / scheduled_task_fire` | ScheduleWakeup 火事件，介于上一 ChatNode 和被火 ChatNode 之间 |
+| `system / away_summary` | recap，归属下一 ChatNode 的 brief（详见 Recap 章节）|
+| `system / compact_boundary` | compact 事件 marker，介于 pre/post-compact ChatNode |
+
+如果让它们走 promptId bucketing，会污染上游 ChatNode 的 WorkFlow（"上游 ChatNode 凭空多出一个 fire 事件"），违反"ChatNode = 一轮 user→assistant 对话"的语义。
+
+### Compact 段 dup uuid 的处理
+
+实测 256MB session 里 139 个 isCompactSummary user 记录中：
+- **3 对 promptId 相同 + uuid 完全相同**——大概率 CC 写盘 bug（同记录写两次）
+- **5 对 promptId 相同 + uuid 不同**——可能合法（同 prompt 触发两次 compact 实例？罕见）
+
+⇒ Parser 保 **faithful**：保留全 139 个 compact WorkNode，重复的加 `#1` `#2` 后缀
+⇒ Canvas 层若觉得视觉吵可以 dedup，但**parser 层不丢数据**
+
+### file-history-snapshot 全是 orphan（v0.1 暂不绑 ChatNode）
+
+实测 2099 条 `file-history-snapshot` 记录**全部 `parentUuid:null`**，没有 promptId，没法走标准 bucketing。
+
+⇒ v0.1 全部进 `chatFlow.orphans`
+⇒ v0.6 实现"本轮改了 N 文件"时，按 timestamp 时间窗反推归属 ChatNode（对应 plan.md v0.6 任务）
+
+### scheduled trigger 启发式 join
+
+`scheduled_task_fire` 记录的 `parentUuid` 指向上一段最后的 `turn_duration` system 记录，**不指向**触发它的 ScheduleWakeup tool_use 节点。所以反向 join 必须用启发式：
+
+- **当前实现**（v0.1）：fire 之前 timestamp 最近的一个 ScheduleWakeup tool_use 节点
+- **未来增强**（v∞ 阶段）：用 ScheduleWakeup tool_result 的 `toolUseResult.scheduledFor` 时间戳精确匹配 fire 的 timestamp（差 < 5 秒判同一对）
+
+实测 256MB session：74 个 scheduled ChatNode + 296 个 awaySummary 通过启发式正确归属。
+
+### 多 root 处理（实测：单 root 是常态）
+
+之前担心的"多个 user `parentUuid:null` 怎么处理"——实测 256MB session **只有 1 条**符合（即 session 第一条 user）。
+
+⇒ 不需要特殊化处理；多 root 时自然成为 `parentChatNodeId=null` 的兄弟 ChatNode，`chatFlow.chatNodes` 按 root user 的 timestamp 排序。
 
 ## Sidecar 文件机制
 
@@ -687,7 +745,7 @@ const RawRecordSchema = z.object({
    - 一次 LLM 调用 retry 后，是否同时存在失败记录 + 最终成功的 assistant 记录？
    - 错误记录有没有 `retryAttempt` / `retryInMs` 之类的字段？
    - 错误记录的 parentUuid 和后续成功记录的 parentUuid 关系是什么？
-3. **多个 user `parentUuid=null` 出现时**：是新会话还是 session reset？多 root 怎么处理（要不要并列展示，要不要 collapse 成单一 timeline）？
+3. ~~**多个 user `parentUuid=null` 出现时**~~ — v0.1 实测关闭：256MB session 只有 1 条 mid-session multi-root（即首条 user）。处理策略：不特殊化，多 root 自然成为兄弟 ChatNode（`parentChatNodeId=null`），按 timestamp 排序。详见上方"v0.1 实测确认的解析规范"小节。
 4. **attachment 的 UI 表现**：图片要不要预览？文件附件要不要 link 到本地路径？
 5. ~~**content 中的非常大字段**~~ — 实测确认 Claude Code 自己已经做了 lazy 化：超阈值的 tool_result content 写到 `tool-results/<id>.txt`，主 jsonl 只剩引用（`ContentReplacementRecord`）。Loomscope 跟着这套机制走即可。
 
