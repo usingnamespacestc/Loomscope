@@ -22,10 +22,9 @@
 - **v0.0 scaffold**（commit `8ca1ef0`）：Vite 5 + React 18 + TS 5.6 + Tailwind 3 + `@xyflow/react` 12 + `@dagrejs/dagre` + Vitest。空 App 壳 + 一个 smoke test。
 - **6 篇设计文档**——大部分讨论已收敛，TODO 标签已大幅消化（仍少量遗留，本文末尾"剩余开放问题"列出）。
 - **v0.1 数据解析层**（commit `ea61a98`）：`src/data/` + `src/parse/` 共 ~1900 行（含 454 行测试）；39/39 unit tests；256MB session 实测 2.19s 解析 / 0 失败。
+- **v0.2 minimal canvas**（commit `342357f`）：Hono backend (`src/server/`) + Zustand 4-slice (`src/store/`) + Canvas (`src/canvas/` React Flow + dagre LR) + UI (`src/components/` Sidebar + Header) + dev wiring（vite 5175 proxy → hono 5174）。99/99 tests，256MB 端到端 3.37s。
 
-## 还没做的部分（v0.2 起）
-
-- v0.2 minimal canvas（ChatFlow 横向 DAG 渲染 + 节点折叠/展开）
+## 还没做的部分（v0.3 起）
 - v0.3 inner WorkFlow（ChatNode 展开后看到内部 llm_call / tool_call / delegate / compact 节点）
 - v0.4 drill panel（右侧详情）
 - v0.5 sub-agent 双态（折叠 rich card + 展开真嵌套子 ChatFlow）
@@ -117,6 +116,15 @@ npm run build
 ## 历史更新
 
 - **2026-05-01** 项目立项 + v0.0 scaffold 完成 + 5 篇文档初版（`4884d0e`）
+- **2026-05-02 v0.2 ship（commit `342357f`）** —— minimal canvas 落地：
+  - Backend（Hono + zod + commander，3 endpoint，CSRF + CORS）
+  - Store（Zustand 5 + 4 slice + persist 仅 UI 偏好）
+  - Canvas（React Flow + dagre LR + ChatNodeCard）
+  - UI（VS Code 风格 Sidebar + Header）
+  - Dev wiring（vite 5175 proxy → hono 5174）
+  - 99/99 tests 全绿，256MB session 端到端 3.37s（backend 解析 + JSON serialize）
+  - 待办（不阻塞 v0.3）：customTitle/agentName 接入 / session listing 优化 / 浏览器端 FPS 实测
+  - 详 `plan.md` v0.2 章节
 - **2026-05-02 v0.1 ship（commit `ea61a98`）** —— 数据解析层落地：
   - 文件：`src/data/types.ts`、`src/parse/raw-record.ts`、`src/parse/jsonl.ts`、`src/parse/workflow-builder.ts`、`src/parse/sidecar.ts`、`__fixtures__/synthetic/`
   - 39/39 unit tests 绿；256MB session 实测 2.19 秒解析 / 0 失败 / 93 delegate / 139 compact / 1522 ChatNode / 39434 llm_call / 21886 tool_call

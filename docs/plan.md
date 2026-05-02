@@ -8,7 +8,7 @@
 |---|---|---|---|
 | **v0.0** | scaffold | Vite+React+TS+Tailwind+xyflow+dagre 工程能跑 dev/build/test | ✅ commit `8ca1ef0` |
 | **v0.1** | parser | `src/parse/jsonl.ts` + `src/data/types.ts` + sidecar loader + 39 unit tests | ✅ commit `ea61a98`（256MB session 2.19s 解析 / 0 失败）|
-| **v0.2** | minimal canvas | 解析后的 ChatFlow 渲染成 React Flow canvas（只 ChatFlow 层） | |
+| **v0.2** | minimal canvas | Hono backend + Zustand 4-slice + ChatFlow 横向 canvas + Sidebar | ✅ commit `342357f`（99/99 tests，256MB 解析+序列化 3.37s） |
 | **v0.3** | inner WorkFlow | ChatNode 展开后看到内部 WorkFlow（tool_call / llm_call / delegate） | |
 | **v0.4** | drill panel | 选节点后右侧栏显示完整内容 | |
 | **v0.5** | sub-agent 双态 | delegate WorkNode 折叠态 rich card + 展开态嵌套子 WorkFlow（lazy 读 sidecar） | |
@@ -60,11 +60,22 @@
 - file-history-snapshot → 全 orphan（parentUuid:null），v0.6 时间窗绑定
 - permission-mode → 看 promptId 决定入桶或 flow event
 
-## v0.2 — minimal canvas
+## v0.2 — minimal canvas（已 ship 2026-05-02 commit `342357f`）
 
-只画 ChatFlow 层的纵向 DAG，每个 ChatNode 是一张简单卡片（user message preview + assistant text preview）。**不展开 WorkFlow**。
+落地概览：
+- **Backend** `src/server/`：Hono + zod + commander，3 endpoint（workspaces / workspaces/sessions / sessions/:id），CSRF + strict-origin CORS
+- **Store** `src/store/`：Zustand 5 + 4 slice（UI/Workspace/Session 实，LiveEvent stub）+ persist 仅 partialize UI
+- **Canvas** `src/canvas/`：React Flow + dagre LR 布局，ChatNodeCard 含 user/assistant preview + tool/llm 计数
+- **UI** `src/components/`：VS Code 风格 collapsible Sidebar + Header + App
+- **Dev wiring**：vite 5175 proxy → hono 5174，concurrently 同时起两端
 
-成功标准：能加载实测的 256MB session 不卡死，画出 N 个 ChatNode 的纵向链。
+实测：99 tests 1.0s 跑完 / 256MB session 解析+序列化 3.37s / workspace 扫 6 dirs <50ms / 21-session listing ~2s。
+
+下一步遗留（不阻塞 v0.3）：
+- customTitle / agentName 等 CC `CustomTitleMessage` / `AgentNameMessage` 类型 record 接入 workspace 扫描（v0.4 顺手做）
+- 21-session listing 优化：每 jsonl 只读前 1KB + 末尾 4KB（v0.4）
+- 256MB session 预解析 cache（v0.8）
+- 256MB 浏览器端实测——架构师本机跑一次确认 FPS
 
 ## v0.3 — inner WorkFlow
 

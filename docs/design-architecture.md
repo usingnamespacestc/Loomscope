@@ -61,6 +61,10 @@ GET /api/workspaces
 GET /api/workspaces/:cwdEncoded/sessions
   → [ { sessionId, title, modified, messageCount, gitBranch, fileSize, isSidechain }, ... ]
   ⚠ title 用 CC 的 fallback 链：agentName → customTitle → summary → firstPrompt → "Autonomous session" → sessionId.slice(0,8)
+  ⚠ messageCount 语义：jsonl **行数** proxy（cheap），不是 turn 数。Session 列表是 size 提示不是精确指标
+  ⚠ agentName / customTitle / summary 不在 user/assistant record 字段里——是独立 record type
+    （`CustomTitleMessage` / `AgentNameMessage` / `SummaryMessage`，定义见 `~/claude-code-source-code/src/types/logs.ts:55-118`）
+    扫 session 时要专门 collect 这几个 record type 的内容，v0.2 暂未实现，v0.4 drill panel 一起做
 ```
 
 ### Session 主 jsonl
