@@ -180,30 +180,92 @@ export function ChatNodeCard({ data, selected }: NodeProps<ChatNodeRFNode>) {
   );
 }
 
-// Click-to-copy node id line. Ports Agentloom's NodeIdLine pattern:
-// click → write to clipboard → flash "已复制" for 900ms → revert.
+// Click-to-copy node id line. Modern clipboard API + execCommand fallback,
+// surfaces failure reason inline if both fail.
+type CopyState =
+  | { kind: "idle" }
+  | { kind: "copied" }
+  | { kind: "error"; msg: string };
+
+async function copyToClipboardWithFallback(text: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  // Modern API — works in secure context (https / localhost / file://).
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return { ok: true };
+    } catch (e) {
+      // Permission denied or transient failure — fall through to fallback.
+    }
+  }
+
+  // Legacy fallback: hidden textarea + execCommand('copy'). Works in
+  // non-secure HTTP contexts and older browsers.
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.top = "0";
+    ta.style.left = "0";
+    ta.style.opacity = "0";
+    ta.style.pointerEvents = "none";
+    ta.setAttribute("readonly", "");
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (ok) return { ok: true };
+    return { ok: false, reason: "execCommand 拒绝复制（浏览器策略）" };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: e instanceof Error ? e.message : "剪贴板 API 不可用",
+    };
+  }
+}
+
 function NodeIdLine({ nodeId }: { nodeId: string }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<CopyState>({ kind: "idle" });
 
   const onClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(nodeId);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 900);
-    } catch {
-      // clipboard API unavailable (insecure context, browser perm) — ignore
+    const result = await copyToClipboardWithFallback(nodeId);
+    if (result.ok) {
+      setState({ kind: "copied" });
+      window.setTimeout(() => setState({ kind: "idle" }), 900);
+    } else {
+      setState({ kind: "error", msg: result.reason });
+      // Keep error visible longer so user can read.
+      window.setTimeout(() => setState({ kind: "idle" }), 2500);
     }
   };
 
+  const className = [
+    "mt-1 cursor-pointer truncate font-mono text-[9px] text-center transition-colors",
+    state.kind === "copied"
+      ? "text-teal-600"
+      : state.kind === "error"
+        ? "text-rose-600"
+        : "text-gray-400 hover:text-blue-500",
+  ].join(" ");
+
+  const display =
+    state.kind === "copied"
+      ? "已复制"
+      : state.kind === "error"
+        ? `✗ 复制失败：${state.msg}`
+        : nodeId;
+
+  const title =
+    state.kind === "copied"
+      ? "已复制"
+      : state.kind === "error"
+        ? `复制失败：${state.msg}`
+        : nodeId;
+
   return (
-    <div
-      onClick={onClick}
-      className="mt-1 cursor-pointer truncate font-mono text-[9px] text-gray-400 text-center hover:text-blue-500 transition-colors"
-      title={copied ? "已复制" : nodeId}
-      data-testid={`node-id-${nodeId}`}
-    >
-      {copied ? "已复制" : nodeId}
+    <div onClick={onClick} className={className} title={title} data-testid={`node-id-${nodeId}`}>
+      {display}
     </div>
   );
 }
