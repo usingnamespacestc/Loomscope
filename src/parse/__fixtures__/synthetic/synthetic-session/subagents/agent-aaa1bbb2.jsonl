@@ -1,0 +1,2 @@
+{"type":"user","uuid":"sub-u1","parentUuid":null,"promptId":"p2-sub","isSidechain":true,"sessionId":"synthetic-session","timestamp":"2026-01-01T00:01:00Z","message":{"role":"user","content":"Walk the perf graph and return the top 3 bottlenecks."}}
+{"type":"assistant","uuid":"sub-a1","parentUuid":"sub-u1","promptId":"p2-sub","isSidechain":true,"sessionId":"synthetic-session","timestamp":"2026-01-01T00:01:01Z","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"Three top bottlenecks identified."}]}}
