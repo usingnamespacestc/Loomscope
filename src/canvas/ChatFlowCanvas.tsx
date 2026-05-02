@@ -69,6 +69,13 @@ export function ChatFlowCanvas({ chatFlow, sessionId }: ChatFlowCanvasProps) {
           minZoom={0.05}
           maxZoom={2}
           proOptions={{ hideAttribution: true }}
+          // Viewer mode: layout is dagre-deterministic, no manual edits.
+          nodesDraggable={false}
+          nodesConnectable={false}
+          edgesReconnectable={false}
+          elementsSelectable={true}
+          deleteKeyCode={null}
+          panOnDrag={true}
         >
           <Background gap={24} size={1} color="#d1d5db" />
           <Controls position="bottom-right" className="!shadow-md !border !border-gray-200" />

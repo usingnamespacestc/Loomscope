@@ -11,10 +11,13 @@ import type { Edge as RFEdge, Node as RFNode } from "@xyflow/react";
 
 import type { ChatFlow, ChatNode } from "@/data/types";
 
-export const NODE_WIDTH = 320;
-export const NODE_HEIGHT = 130;
+// Match Agentloom's w-52 (208px) for visual family resemblance.
+// Height auto-grows with content; dagre uses NODE_HEIGHT only as a layout
+// hint for rank computation.
+export const NODE_WIDTH = 208;
+export const NODE_HEIGHT = 150;
 export const RANKSEP = 90;
-export const NODESEP = 30;
+export const NODESEP = 24;
 
 export interface ChatNodeRFData extends Record<string, unknown> {
   chatNode: ChatNode;
@@ -25,6 +28,12 @@ export interface ChatNodeRFData extends Record<string, unknown> {
   llmCount: number;
   totalThinkingChars: number;
   isCompactSummary: boolean;
+  // Token bar inputs — last llm_call's input + cache 表示该轮 context window 占用.
+  contextTokens: number;
+  maxContextTokens: number | null;
+  // Edge presence — drives whether handle dots show.
+  hasIncomingEdge: boolean;
+  hasOutgoingEdge: boolean;
 }
 
 export type ChatNodeRFNode = RFNode<ChatNodeRFData, "chatNode">;
@@ -63,6 +72,16 @@ export function layoutChatFlow(chatFlow: ChatFlow): {
 
   dagre.layout(g);
 
+  // Pre-compute which nodes have parents/children — drives Handle visibility.
+  const parentIds = new Set<string>();
+  const childIds = new Set<string>();
+  for (const cn of chatFlow.chatNodes) {
+    if (cn.parentChatNodeId) {
+      childIds.add(cn.id);
+      parentIds.add(cn.parentChatNodeId);
+    }
+  }
+
   const nodes: ChatNodeRFNode[] = chatFlow.chatNodes.map((cn) => {
     const pos = g.node(cn.id);
     // dagre returns the *center*; React Flow expects top-left.
@@ -72,14 +91,43 @@ export function layoutChatFlow(chatFlow: ChatFlow): {
       id: cn.id,
       type: "chatNode",
       position: { x, y },
-      data: deriveCardData(cn),
+      data: deriveCardData(cn, {
+        hasIncomingEdge: childIds.has(cn.id),
+        hasOutgoingEdge: parentIds.has(cn.id),
+      }),
     };
   });
 
   return { nodes, edges };
 }
 
-function deriveCardData(cn: ChatNode): ChatNodeRFData {
+const DEFAULT_MAX_CONTEXT_TOKENS = 200_000; // claude-opus-4 / sonnet-4 default
+
+// Pull `cache_creation + cache_read + input_tokens` from the *last* llm_call's
+// usage — that snapshot represents how much context CC sent on the most
+// recent LLM invocation in this ChatNode (which is the relevant denominator
+// for "how full is the context window after this turn").
+function deriveContextTokens(cn: ChatNode): {
+  contextTokens: number;
+  maxContextTokens: number | null;
+} {
+  const llms = cn.workflow.nodes.filter((n) => n.kind === "llm_call");
+  if (llms.length === 0) return { contextTokens: 0, maxContextTokens: null };
+  const last = llms[llms.length - 1];
+  if (last.kind !== "llm_call") return { contextTokens: 0, maxContextTokens: null };
+  const u = (last.usage ?? {}) as Record<string, unknown>;
+  const num = (k: string) => (typeof u[k] === "number" ? (u[k] as number) : 0);
+  const contextTokens =
+    num("input_tokens") + num("cache_creation_input_tokens") + num("cache_read_input_tokens");
+  // No source-of-truth for max yet; future v0.3+ can read last.model.
+  return { contextTokens, maxContextTokens: null };
+}
+
+function deriveCardData(
+  cn: ChatNode,
+  edges: { hasIncomingEdge: boolean; hasOutgoingEdge: boolean },
+): ChatNodeRFData {
+  const { contextTokens, maxContextTokens } = deriveContextTokens(cn);
   return {
     chatNode: cn,
     userPreview: previewUserContent(cn.userMessage.content),
@@ -93,7 +141,26 @@ function deriveCardData(cn: ChatNode): ChatNodeRFData {
       return acc + n.thinking.reduce((a, t) => a + (t.text?.length ?? 0), 0);
     }, 0),
     isCompactSummary: cn.isCompactSummary,
+    contextTokens,
+    maxContextTokens,
+    hasIncomingEdge: edges.hasIncomingEdge,
+    hasOutgoingEdge: edges.hasOutgoingEdge,
   };
+}
+
+export const TOKEN_BAR_DEFAULT_MAX = DEFAULT_MAX_CONTEXT_TOKENS;
+
+export function formatTokensKM(n: number | null | undefined): string {
+  if (n == null) return "";
+  const M = 1_000_000;
+  const K = 1_000;
+  if (n >= M) {
+    const v = n / M;
+    return v >= 10 || v % 1 === 0 ? `${Math.round(v)}M` : `${v.toFixed(1)}M`;
+  }
+  const v = n / K;
+  if (v < 1) return `${n}`;
+  return v >= 10 || v % 1 === 0 ? `${Math.round(v)}k` : `${v.toFixed(1)}k`;
 }
 
 const PREVIEW_LEN = 80;
