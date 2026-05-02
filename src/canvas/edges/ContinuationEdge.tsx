@@ -1,21 +1,18 @@
-// continuation edge — solid gray with a filled arrow. Per
-// `design-visual-language.md` "v0 实现 (3 类)" table.
-//
-// We render with the React Flow default arrow marker since our colors
-// already disambiguate from `spawn` (orange/triangle, v0.3+ when WorkFlow
-// shows up).
+// continuation edge — Bezier curve (matches Agentloom; smooth-step was
+// too "right-angle"). solid slate-400 stroke + filled arrow head.
 
-import { BaseEdge, getSmoothStepPath } from "@xyflow/react";
+import { BaseEdge, getBezierPath } from "@xyflow/react";
 import type { EdgeProps } from "@xyflow/react";
 
 export function ContinuationEdge(props: EdgeProps) {
-  const [d] = getSmoothStepPath({
+  const [d] = getBezierPath({
     sourceX: props.sourceX,
     sourceY: props.sourceY,
     sourcePosition: props.sourcePosition,
     targetX: props.targetX,
     targetY: props.targetY,
     targetPosition: props.targetPosition,
+    curvature: 0.25,
   });
   return <BaseEdge id={props.id} path={d} style={{ stroke: "#94a3b8", strokeWidth: 1.5 }} markerEnd="url(#arrow-continuation)" />;
 }

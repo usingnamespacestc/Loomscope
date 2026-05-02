@@ -26,6 +26,7 @@ export function ChatNodeCard({ data, selected }: NodeProps<ChatNodeRFNode>) {
   const compact = data.isCompactSummary;
   const triggerSchedule = cn.trigger === "scheduled";
   const isRoot = cn.parentChatNodeId === null && !data.hasIncomingEdge;
+  const isLeaf = !data.hasOutgoingEdge && !isRoot && !compact && !triggerSchedule;
 
   // Background tint by primary state.
   const bgClass = compact
@@ -34,7 +35,9 @@ export function ChatNodeCard({ data, selected }: NodeProps<ChatNodeRFNode>) {
       ? "bg-amber-50"
       : isRoot
         ? "bg-blue-50/60"
-        : "bg-white";
+        : isLeaf
+          ? "bg-green-50"
+          : "bg-white";
 
   // 3px left accent strip — Agentloom signature.
   const accentClass = compact
@@ -43,7 +46,9 @@ export function ChatNodeCard({ data, selected }: NodeProps<ChatNodeRFNode>) {
       ? "border-l-[3px] border-l-amber-500"
       : isRoot
         ? "border-l-[3px] border-l-blue-400"
-        : "";
+        : isLeaf
+          ? "border-l-[3px] border-l-green-400"
+          : "";
 
   // Border color around the rest of the card.
   const borderClass = selected
@@ -52,7 +57,9 @@ export function ChatNodeCard({ data, selected }: NodeProps<ChatNodeRFNode>) {
       ? "border-teal-300"
       : triggerSchedule
         ? "border-amber-300"
-        : "border-gray-300 hover:border-gray-400";
+        : isLeaf
+          ? "border-green-300"
+          : "border-gray-300 hover:border-gray-400";
 
   return (
     <div
@@ -89,6 +96,8 @@ export function ChatNodeCard({ data, selected }: NodeProps<ChatNodeRFNode>) {
           </span>
         ) : isRoot ? (
           <span className="text-[10px] text-blue-600 font-medium">root</span>
+        ) : isLeaf ? (
+          <span className="text-[10px] text-green-700 font-medium">leaf</span>
         ) : (
           <span className="text-[10px] text-gray-400 font-medium">chat</span>
         )}
@@ -143,6 +152,26 @@ export function ChatNodeCard({ data, selected }: NodeProps<ChatNodeRFNode>) {
             : { background: "transparent", width: 0, height: 0, border: "none" }
         }
       />
+
+      {/* Enter-WorkFlow drill button — visible on hover. v0.2 占位（点了
+          仅 console.log），v0.3 inner WorkFlow 落地时接 store action 切到
+          ChatNode 内部视图。Compact node 不展开内部 WorkFlow（其内部内容
+          已被压缩进 summary）。 */}
+      {!compact && (
+        <button
+          type="button"
+          className="absolute -bottom-2.5 right-2 hidden h-5 items-center gap-0.5 rounded border border-blue-300 bg-white px-1.5 text-[10px] font-medium text-blue-600 shadow-sm transition-colors hover:bg-blue-50 group-hover/card:flex"
+          onClick={(e) => {
+            e.stopPropagation();
+            // TODO v0.3: useStore.getState().drillIntoWorkflow(cn.id)
+            console.debug("[v0.3 stub] drill into WorkFlow:", cn.id);
+          }}
+          title="进入工作流（v0.3 实现）"
+          data-testid={`enter-workflow-${cn.id}`}
+        >
+          ⤢ 进入工作流
+        </button>
+      )}
     </div>
   );
 }

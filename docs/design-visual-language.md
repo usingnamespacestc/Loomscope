@@ -471,9 +471,12 @@ w-52 rounded-lg border shadow-sm p-2.5 text-xs leading-snug
 compact:    border-l-[3px] border-l-teal-500    + bg-teal-50
 scheduled:  border-l-[3px] border-l-amber-500   + bg-amber-50
 root:       border-l-[3px] border-l-blue-400    + bg-blue-50/60
+leaf:       border-l-[3px] border-l-green-400   + bg-green-50    // 无下游 edge
 failed:     border-l-[3px] border-l-rose-500    + bg-rose-50
 default:    （无 accent）                          bg-white
 ```
+
+⚠ 状态优先级（高→低）：compact / scheduled > root > leaf > default。一个节点只取一个最高优先级状态。
 
 **整卡边框**（accent 之外的三边）：
 
@@ -486,7 +489,15 @@ default:    border-gray-300 hover:border-gray-400
 
 ⚠ 整卡 bg 跟 accent 同色系——状态视觉是**整体染色 + 左条强调**，不是单独 chip 标记。
 
+### Edge 形态（v0.2 polish 后）
+
+Continuation edge 用 **`getBezierPath` Bezier 曲线**（curvature=0.25），不是 `getSmoothStepPath` 折线——后者太"直角"，跟 Agentloom 不一致。
+
 ### TokenBar（context window 用量）
+
+`maxTokens` 由 last llm_call 的 `model` 字段决定（CC 源码 `src/utils/context.ts`）：
+- 含 `[1m]` 后缀 → **1_000_000**
+- 其它 → **200_000** (`MODEL_CONTEXT_WINDOW_DEFAULT`)
 
 直接照搬 Agentloom 实现：
 

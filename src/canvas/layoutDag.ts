@@ -29,8 +29,9 @@ export interface ChatNodeRFData extends Record<string, unknown> {
   totalThinkingChars: number;
   isCompactSummary: boolean;
   // Token bar inputs — last llm_call's input + cache 表示该轮 context window 占用.
+  // maxContextTokens 由 last llm_call 的 model 字段决定（[1m] 后缀 = 1M, 其它 = 200k）.
   contextTokens: number;
-  maxContextTokens: number | null;
+  maxContextTokens: number;
   // Edge presence — drives whether handle dots show.
   hasIncomingEdge: boolean;
   hasOutgoingEdge: boolean;
@@ -101,7 +102,16 @@ export function layoutChatFlow(chatFlow: ChatFlow): {
   return { nodes, edges };
 }
 
-const DEFAULT_MAX_CONTEXT_TOKENS = 200_000; // claude-opus-4 / sonnet-4 default
+const DEFAULT_MAX_CONTEXT_TOKENS = 200_000; // CC source: MODEL_CONTEXT_WINDOW_DEFAULT
+
+// CC source `src/utils/context.ts:has1mContext`: model strings ending in
+// `[1m]` (case-insensitive) opt into 1M context. All other public Claude
+// models (opus-4, sonnet-4, haiku-4 etc.) cap at 200k.
+function maxContextForModel(model?: string): number {
+  if (!model) return DEFAULT_MAX_CONTEXT_TOKENS;
+  if (/\[1m\]/i.test(model)) return 1_000_000;
+  return DEFAULT_MAX_CONTEXT_TOKENS;
+}
 
 // Pull `cache_creation + cache_read + input_tokens` from the *last* llm_call's
 // usage — that snapshot represents how much context CC sent on the most
@@ -109,18 +119,19 @@ const DEFAULT_MAX_CONTEXT_TOKENS = 200_000; // claude-opus-4 / sonnet-4 default
 // for "how full is the context window after this turn").
 function deriveContextTokens(cn: ChatNode): {
   contextTokens: number;
-  maxContextTokens: number | null;
+  maxContextTokens: number;
 } {
   const llms = cn.workflow.nodes.filter((n) => n.kind === "llm_call");
-  if (llms.length === 0) return { contextTokens: 0, maxContextTokens: null };
+  if (llms.length === 0)
+    return { contextTokens: 0, maxContextTokens: DEFAULT_MAX_CONTEXT_TOKENS };
   const last = llms[llms.length - 1];
-  if (last.kind !== "llm_call") return { contextTokens: 0, maxContextTokens: null };
+  if (last.kind !== "llm_call")
+    return { contextTokens: 0, maxContextTokens: DEFAULT_MAX_CONTEXT_TOKENS };
   const u = (last.usage ?? {}) as Record<string, unknown>;
   const num = (k: string) => (typeof u[k] === "number" ? (u[k] as number) : 0);
   const contextTokens =
     num("input_tokens") + num("cache_creation_input_tokens") + num("cache_read_input_tokens");
-  // No source-of-truth for max yet; future v0.3+ can read last.model.
-  return { contextTokens, maxContextTokens: null };
+  return { contextTokens, maxContextTokens: maxContextForModel(last.model) };
 }
 
 function deriveCardData(
