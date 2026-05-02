@@ -84,8 +84,8 @@ export function ChatNodeCard({ data, selected }: NodeProps<ChatNodeRFNode>) {
         }
       />
 
-      {/* Top row: state chip (left) + id (right) */}
-      <div className="flex items-center justify-between mb-1.5 min-h-[14px]">
+      {/* Top row: state chip only (id moved to bottom — Agentloom convention) */}
+      <div className="flex items-center mb-1.5 min-h-[14px]">
         {compact ? (
           <span className="inline-flex items-center gap-0.5 rounded bg-teal-200/80 px-1 py-0.5 text-[10px] font-semibold text-teal-900">
             ⊞ compact
@@ -101,7 +101,6 @@ export function ChatNodeCard({ data, selected }: NodeProps<ChatNodeRFNode>) {
         ) : (
           <span className="text-[10px] text-gray-400 font-medium">chat</span>
         )}
-        <span className="font-mono text-[9px] text-gray-400">{cn.id.slice(0, 6)}</span>
       </div>
 
       {/* User message */}
@@ -140,6 +139,15 @@ export function ChatNodeCard({ data, selected }: NodeProps<ChatNodeRFNode>) {
             ▸{Math.round(data.totalThinkingChars / 100) / 10}k
           </span>
         )}
+      </div>
+
+      {/* Node id at bottom — Agentloom convention. Truncated mono, low
+          contrast so it doesn't compete with content. */}
+      <div
+        className="mt-1 text-center font-mono text-[9px] text-gray-400 truncate"
+        title={cn.id}
+      >
+        {cn.id.slice(0, 8)}
       </div>
 
       <Handle
