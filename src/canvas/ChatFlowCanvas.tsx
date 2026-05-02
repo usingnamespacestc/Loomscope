@@ -1,18 +1,25 @@
 // Main canvas — renders one ChatFlow as a horizontal DAG.
 //
+// On session open, we focus on the *latest* ChatNode (rightmost in LR
+// layout, last by timestamp) at zoom=1, instead of fitView's "show all
+// at once" behavior. fitView for a 1500-node session shrinks each card
+// to a few pixels — useless. The latest turn is what users want to see
+// when opening the canvas; older turns can be reached via pan/zoom or
+// keyboard navigation.
+//
 // React Flow handles viewport culling for us as long as nodes stay outside
 // the visible rect; we don't add extra fold logic in v0.2 (planned for the
 // "default-fold old ChatNodes" optimization once we hit perf walls per
 // `requirements.md`).
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import {
   Background,
   Controls,
-  MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
   type EdgeTypes,
   type NodeTypes,
 } from "@xyflow/react";
@@ -33,6 +40,19 @@ export interface ChatFlowCanvasProps {
 }
 
 export function ChatFlowCanvas({ chatFlow, sessionId }: ChatFlowCanvasProps) {
+  return (
+    <div className="w-full h-full relative">
+      <ReactFlowProvider>
+        <svg width={0} height={0} style={{ position: "absolute" }}>
+          <ContinuationArrowDefs />
+        </svg>
+        <CanvasInner chatFlow={chatFlow} sessionId={sessionId} />
+      </ReactFlowProvider>
+    </div>
+  );
+}
+
+function CanvasInner({ chatFlow, sessionId }: ChatFlowCanvasProps) {
   const { nodes, edges } = useMemo(() => layoutChatFlow(chatFlow), [chatFlow]);
   const setSelected = useStore((s) => s.setSelected);
   const selectedNodeId = useStore(
@@ -52,42 +72,47 @@ export function ChatFlowCanvas({ chatFlow, sessionId }: ChatFlowCanvasProps) {
     [nodes, selectedNodeId],
   );
 
+  const rf = useReactFlow();
+  // Focus on the latest ChatNode when the user opens a different session.
+  // Re-running on every chatFlow change is intentional — for v0.2 a
+  // chatFlow change == "user picked a different session". When v0.7
+  // file-tail lands, this dependency should narrow to chatFlow.id so
+  // incremental updates don't yank the viewport away from the user.
+  const focusedSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (nodes.length === 0) return;
+    if (focusedSessionRef.current === chatFlow.id) return;
+    const latest = nodes[nodes.length - 1]; // chatNodes are timestamp-sorted asc
+    rf.fitView({
+      nodes: [{ id: latest.id }],
+      padding: 0.4,
+      maxZoom: 1.0,
+      minZoom: 0.5,
+      duration: 0,
+    });
+    focusedSessionRef.current = chatFlow.id;
+  }, [chatFlow.id, nodes, rf]);
+
   return (
-    <div className="w-full h-full relative">
-      <ReactFlowProvider>
-        <svg width={0} height={0} style={{ position: "absolute" }}>
-          <ContinuationArrowDefs />
-        </svg>
-        <ReactFlow
-          nodes={decoratedNodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          onNodeClick={onNodeClick}
-          fitView
-          fitViewOptions={{ padding: 0.15, maxZoom: 1.0 }}
-          minZoom={0.05}
-          maxZoom={2}
-          proOptions={{ hideAttribution: true }}
-          // Viewer mode: layout is dagre-deterministic, no manual edits.
-          nodesDraggable={false}
-          nodesConnectable={false}
-          edgesReconnectable={false}
-          elementsSelectable={true}
-          deleteKeyCode={null}
-          panOnDrag={true}
-        >
-          <Background gap={24} size={1} color="#d1d5db" />
-          <Controls position="bottom-right" className="!shadow-md !border !border-gray-200" />
-          <MiniMap
-            pannable
-            zoomable
-            className="!bg-white !border !border-gray-200 !rounded-md !shadow-md"
-            maskColor="rgba(243, 244, 246, 0.7)"
-            nodeColor="#94a3b8"
-          />
-        </ReactFlow>
-      </ReactFlowProvider>
-    </div>
+    <ReactFlow
+      nodes={decoratedNodes}
+      edges={edges}
+      nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
+      onNodeClick={onNodeClick}
+      minZoom={0.05}
+      maxZoom={2}
+      proOptions={{ hideAttribution: true }}
+      // Viewer mode: layout is dagre-deterministic, no manual edits.
+      nodesDraggable={false}
+      nodesConnectable={false}
+      edgesReconnectable={false}
+      elementsSelectable={true}
+      deleteKeyCode={null}
+      panOnDrag={true}
+    >
+      <Background gap={24} size={1} color="#d1d5db" />
+      <Controls position="bottom-right" className="!shadow-md !border !border-gray-200" />
+    </ReactFlow>
   );
 }
