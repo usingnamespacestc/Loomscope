@@ -278,6 +278,15 @@ describe("buildChatFlow / parseJsonlText (synthetic fixture)", () => {
     }
   });
 
+  it("backfills compactMetadata.logicalParentChatNodeId via resolvePromptId (v0.7 M3)", () => {
+    // p3 is the compact ChatNode; the boundary's logicalParentUuid =
+    // fixtureUuids.a3 (an assistant record in p2). resolvePromptId
+    // should walk that uuid → its parentUuid chain → land on p2.
+    const cf = fixtureChatFlow();
+    const cn3 = cf.chatNodes.find((c) => c.id === "p3");
+    expect(cn3?.compactMetadata?.logicalParentChatNodeId).toBe("p2");
+  });
+
   it("flags a ChatNode as scheduled when its user record traces back through a fire", () => {
     const cf = fixtureChatFlow();
     const cn4 = cf.chatNodes.find((c) => c.id === "p4");

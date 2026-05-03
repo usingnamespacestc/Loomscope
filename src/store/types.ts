@@ -64,10 +64,14 @@ export interface WorkspaceSlice {
 // Drill-stack frame. v0.3 ships only ``chatnode`` frames (one ChatNode →
 // its inner WorkFlow). v0.5 adds ``subworkflow`` frames for sub-agent
 // real-nesting (lazy-loaded sidecar WorkFlow under a delegate WorkNode).
-// Keeping the union open now means v0.5 doesn't have to retrofit.
+// v0.7 adds ``compact-original`` frames for drilling into the
+// pre-compact original turn sequence behind a compact ChatNode.
+// Keeping the union open now means future drill kinds slot in without
+// retrofitting all consumers.
 export type DrillFrame =
   | { kind: "chatnode"; chatNodeId: string }
-  | { kind: "subworkflow"; parentWorkNodeId: string };
+  | { kind: "subworkflow"; parentWorkNodeId: string }
+  | { kind: "compact-original"; compactChatNodeId: string };
 
 // Cached sub-agent ChatFlow plus its AgentMetadata. Stored per
 // ``(sessionId, agentId)`` and dropped on session unload — sub-agents
@@ -138,6 +142,15 @@ export interface SessionSlice {
   // WorkNode in that frame's WorkFlow. Triggers loadSubAgent if the
   // cache is cold. Idempotent on the same parentWorkNodeId.
   enterSubWorkflow: (sessionId: string, parentWorkNodeId: string) => void;
+  // ── v0.7 compact-original drill ──
+  // Push a ``compact-original`` drill frame for the given compact
+  // ChatNode. The current top frame must be ``chatnode`` (i.e. the
+  // user is currently viewing this compact ChatNode's workflow) OR
+  // empty (drill straight from ChatFlow canvas). The compact ChatNode
+  // must have a resolvable ``compactMetadata.logicalParentChatNodeId``
+  // so the resolver can compute the pre-compact range. Idempotent on
+  // the same compactChatNodeId at the top.
+  enterCompactOriginal: (sessionId: string, compactChatNodeId: string) => void;
   // Legacy v0.5 fold toggle — keyed on a ChatNode id, manipulates
   // ``foldedNodeIds`` membership. Used by the drill-down chat-flow
   // fold UX (currently dormant in production but kept for future

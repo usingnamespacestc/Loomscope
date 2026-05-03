@@ -169,7 +169,14 @@ export interface CompactNode extends NodeBase {
   kind: "compact";
   parentUuid: string | null;
   boundaryUuid?: string; // matching system/compact_boundary uuid
-  logicalParentUuid?: string; // pre-compact tail
+  logicalParentUuid?: string; // pre-compact tail (raw record uuid)
+  // v0.7 M3: ChatNode id (= promptId) of the ChatNode that contains
+  // logicalParentUuid's record. Pre-resolved at parse time so the
+  // compact-original drill resolver can walk parentChatNodeId from
+  // here without re-walking parentUuid chains. null when the lookup
+  // fails (rare; logicalParentUuid points at a record we couldn't
+  // bucket, or the field is missing from the boundary).
+  logicalParentChatNodeId?: string | null;
   trigger?: "auto" | "manual" | string;
   preTokens?: number;
   preCompactDiscoveredTools?: unknown;

@@ -148,16 +148,29 @@ describe("ChatNodeCard — compact branch", () => {
     expect(screen.getByTestId("compact-trigger-unknown")).toBeTruthy();
   });
 
-  it("renders '⤢ 展开 pre-compact' button as disabled placeholder (M3 wires it)", () => {
+  it("renders '⤢ 展开 pre-compact' enabled when compact has resolvable logicalParentChatNodeId (M3)", () => {
     const cn = makeChatNode({
-      compactMetadata: makeCompactMeta({ trigger: "auto" }),
+      compactMetadata: makeCompactMeta({
+        trigger: "auto",
+        logicalParentChatNodeId: "p-pre-tail",
+      }),
+      workflow: { nodes: [makeCompactMeta()], edges: [] },
+    });
+    render(withRF(<ChatNodeCard {...nodeProps(cn)} />));
+    const btn = screen.getByTestId(`compact-pre-${cn.id}`) as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toMatch(/展开 pre-compact/);
+  });
+
+  it("disables '⤢ 展开 pre-compact' when logicalParentChatNodeId is missing (M3)", () => {
+    const cn = makeChatNode({
+      compactMetadata: makeCompactMeta({ trigger: "auto" }), // no logicalParentChatNodeId
       workflow: { nodes: [makeCompactMeta()], edges: [] },
     });
     render(withRF(<ChatNodeCard {...nodeProps(cn)} />));
     const btn = screen.getByTestId(`compact-pre-${cn.id}`) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
-    expect(btn.textContent).toMatch(/展开 pre-compact/);
-    expect(btn.title).toMatch(/M3/);
+    expect(btn.title).toMatch(/logicalParentUuid/);
   });
 
   it("shows '进入工作流' button when inner workflow has llm_call (drill into post-compact continuation)", () => {

@@ -324,7 +324,11 @@ function CompactCard({
       {cn.workflow.nodes.some((n) => n.kind === "llm_call") && (
         <DrillButton chatNodeId={cn.id} />
       )}
-      <CompactPreCompactButton chatNodeId={cn.id} accent={palette.kind} />
+      <CompactPreCompactButton
+        chatNodeId={cn.id}
+        accent={palette.kind}
+        hasPreCompactRange={Boolean(cn.compactMetadata?.logicalParentChatNodeId)}
+      />
 
       <NodeIdLine nodeId={cn.id} />
 
@@ -391,36 +395,58 @@ function formatTokensCompact(n: number): string {
   return String(n);
 }
 
-// Pre-compact drill button — placeholder in v0.7 M2 (shipped disabled
-// with a "M3" hint title), wired to enterCompactOriginal in M3. We
-// ship the visual + button位置 in M2 so the chrome regression doesn't
-// land in two passes; the user can already see what affordance is
-// coming. Tone matches the compact card's trigger palette so the
-// disabled state still reads as part of the card chrome.
+// Pre-compact drill button — wires to enterCompactOriginal (v0.7 M3).
+// Disabled when the compact ChatNode has no resolvable
+// logicalParentChatNodeId (rare; logicalParentUuid missing on the
+// underlying boundary OR the pre-resolution failed at parse time).
+// Tone matches the compact card's trigger palette so the chrome reads
+// as a continuation of the card body.
 function CompactPreCompactButton({
   chatNodeId,
   accent,
+  hasPreCompactRange,
 }: {
   chatNodeId: string;
   accent: "auto" | "manual" | "failed";
+  hasPreCompactRange: boolean;
 }) {
-  const tone =
+  const enter = useStore((s) => s.enterCompactOriginal);
+  const activeId = useStore((s) => s.activeSessionId);
+  const baseTone =
     accent === "manual"
-      ? "border-purple-200 bg-purple-50/40 text-purple-500"
+      ? "border-purple-200 bg-purple-50/40 text-purple-700 hover:border-purple-400 hover:bg-purple-50 hover:text-purple-800"
       : accent === "failed"
-        ? "border-rose-200 bg-rose-50/40 text-rose-500"
-        : "border-teal-200 bg-teal-50/40 text-teal-500";
+        ? "border-rose-200 bg-rose-50/40 text-rose-700 hover:border-rose-400 hover:bg-rose-50 hover:text-rose-800"
+        : "border-teal-200 bg-teal-50/40 text-teal-700 hover:border-teal-400 hover:bg-teal-50 hover:text-teal-800";
+  const disabledTone =
+    accent === "manual"
+      ? "border-purple-200 bg-purple-50/40 text-purple-400"
+      : accent === "failed"
+        ? "border-rose-200 bg-rose-50/40 text-rose-400"
+        : "border-teal-200 bg-teal-50/40 text-teal-400";
   return (
     <button
       type="button"
-      disabled
-      className={`mt-1 flex w-full items-center justify-center gap-1 rounded border px-2 py-1 text-[10px] cursor-not-allowed opacity-60 ${tone}`}
-      onClick={(e) => e.stopPropagation()}
+      disabled={!hasPreCompactRange}
+      className={`mt-1 flex w-full items-center justify-center gap-1 rounded border px-2 py-1 text-[10px] transition-colors ${
+        hasPreCompactRange
+          ? baseTone
+          : `${disabledTone} cursor-not-allowed opacity-60`
+      }`}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!activeId || !hasPreCompactRange) return;
+        enter(activeId, chatNodeId);
+      }}
       data-testid={`compact-pre-${chatNodeId}`}
-      title="v0.7 M3 wires this — drill into the pre-compact original turn sequence"
+      title={
+        hasPreCompactRange
+          ? "drill into the pre-compact original turn sequence"
+          : "compact_boundary 缺 logicalParentUuid — 无法定位 pre-compact 段"
+      }
     >
       <span>⤢</span>
-      <span>展开 pre-compact (M3)</span>
+      <span>展开 pre-compact</span>
     </button>
   );
 }

@@ -367,6 +367,23 @@ export function buildChatFlow(
   // Link parentChatNodeId + scheduled trigger.
   linkChatNodeParents(chatNodes, indexByUuid, scheduledFireByUuid);
 
+  // v0.7 M3: backfill compactMetadata.logicalParentChatNodeId. The raw
+  // CompactNode (built in workflow-builder) only has the record-level
+  // logicalParentUuid; resolving it to a ChatNode id requires the
+  // indexByUuid + resolvePromptId chain, which only lives here in
+  // buildChatFlow. Pre-compute so the compact-original drill resolver
+  // can walk parentChatNodeId from a known ChatNode without any uuid
+  // chain walk at runtime.
+  for (const cn of chatNodes) {
+    if (!cn.isCompactSummary || !cn.compactMetadata) continue;
+    const lpu = cn.compactMetadata.logicalParentUuid;
+    if (!lpu) {
+      cn.compactMetadata.logicalParentChatNodeId = null;
+      continue;
+    }
+    cn.compactMetadata.logicalParentChatNodeId = resolvePromptId(lpu);
+  }
+
   // Attach scheduled triggerSource (workNodeId = the ScheduleWakeup tool_use
   // block id of the most-recent ScheduleWakeup before the fire). We resolve
   // by walking the fire.parentUuid chain to find a tool_use we know about.

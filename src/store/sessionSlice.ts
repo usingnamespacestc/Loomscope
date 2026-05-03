@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
 
-import type { ChatFlow, DelegateNode } from "@/data/types";
+import type { ChatFlow, ChatNode, DelegateNode } from "@/data/types";
 import type { AgentMetadata } from "@/parse/sidecar";
 import type {
   DrillFrame,
@@ -292,6 +292,55 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     // the cache entry and re-renders when ``status`` flips.
     void get().loadSubAgent(sessionId, agentId);
   },
+
+  // v0.7 M3: drill into the pre-compact original turn sequence behind
+  // a compact ChatNode. Push policy:
+  //   top is subworkflow            → PUSH (drilling from inside a sub
+  //                                    ChatFlow into one of its compacts)
+  //   anything else (empty / chatnode / compact-original) → REPLACE
+  //                                    with single compact-original frame
+  //                                    (treats inner-workflow view and
+  //                                    pre-compact view as alternative
+  //                                    views of the same compact ChatNode,
+  //                                    not nested layers)
+  // Idempotent on the same compactChatNodeId at the top.
+  enterCompactOriginal: (sessionId, compactChatNodeId) => {
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur || !cur.chatFlow) return;
+    const top = cur.drillStack[cur.drillStack.length - 1];
+    if (
+      top?.kind === "compact-original" &&
+      top.compactChatNodeId === compactChatNodeId
+    ) {
+      return;
+    }
+    // Validate: the compact ChatNode must live in the currently
+    // visible scope (top-level if stack is empty / chatnode-only;
+    // sub-agent ChatFlow if a subworkflow frame is in play).
+    const view = resolveDrillView(cur);
+    const scope: ChatFlow =
+      view?.mode === "sub-chatflow"
+        ? view.chatFlow
+        : view?.mode === "workflow"
+          ? view.scopeChatFlow
+          : cur.chatFlow;
+    const compactCn = scope.chatNodes.find((c) => c.id === compactChatNodeId);
+    if (!compactCn?.isCompactSummary) return;
+    if (!compactCn.compactMetadata?.logicalParentChatNodeId) return;
+
+    const drillStack: DrillFrame[] =
+      top?.kind === "subworkflow"
+        ? [...cur.drillStack, { kind: "compact-original", compactChatNodeId }]
+        : [{ kind: "compact-original", compactChatNodeId }];
+    const updated = new Map(sessions);
+    updated.set(sessionId, {
+      ...cur,
+      drillStack,
+      workflowSelectedNodeId: null,
+    });
+    set({ sessions: updated });
+  },
 });
 
 /**
@@ -332,10 +381,49 @@ export interface DrillBreadcrumbItem {
   // ``hover`` tooltip — full id / agentId etc.
   title: string;
   // Frame kind for icon selection.
-  kind: "chatnode" | "subworkflow";
+  kind: "chatnode" | "subworkflow" | "compact-original";
   // True when this frame represents an auto-compact sub-agent
   // (agentId starts with ``acompact-``).
   isAutoCompact: boolean;
+}
+
+// v0.7 M3: compute the pre-compact original turn range for a compact
+// ChatNode, walking parentChatNodeId from
+// ``compactMetadata.logicalParentChatNodeId`` (= the tail ChatNode of
+// the段 that was compacted) backward until we hit either:
+//   - the session root (parentChatNodeId === null)
+//   - a previous compact ChatNode (those represent earlier compactions
+//     and are NOT part of this compact's pre-compact range — they're
+//     already a fold marker themselves)
+// Returns [] when the anchor isn't a compact ChatNode, the
+// logicalParentChatNodeId is missing, or the chain is empty/dangling.
+// Order: time-ascending (root-most first, tail last) so ChatFlowCanvas
+// renders the段 in its natural reading order.
+export function computePreCompactRange(
+  scope: ChatFlow,
+  compactChatNodeId: string,
+): ChatNode[] {
+  const byId = new Map(scope.chatNodes.map((c) => [c.id, c]));
+  const compactCn = byId.get(compactChatNodeId);
+  if (!compactCn?.isCompactSummary) return [];
+  const startId = compactCn.compactMetadata?.logicalParentChatNodeId;
+  if (!startId) return [];
+  const start = byId.get(startId);
+  if (!start) return [];
+  const collected: ChatNode[] = [];
+  let cursor: ChatNode | undefined = start;
+  // Cap at 5000 hops as a defensive cycle guard. Real sessions don't
+  // hit this; corrupt parentChatNodeId chains from JSONL surgery
+  // shouldn't lock the resolver.
+  for (let hops = 0; cursor && hops < 5000; hops += 1) {
+    collected.push(cursor);
+    if (!cursor.parentChatNodeId) break;
+    const next = byId.get(cursor.parentChatNodeId);
+    if (!next) break;
+    if (next.isCompactSummary) break; // earlier compact; stop here
+    cursor = next;
+  }
+  return collected.reverse();
 }
 
 export function resolveDrillView(state: SessionState): ResolvedDrillView | null {
@@ -354,6 +442,37 @@ export function resolveDrillView(state: SessionState): ResolvedDrillView | null 
         kind: "chatnode",
         label: `ChatNode (${cn.id.slice(0, 8)})`,
         title: `ChatNode ${cn.id}`,
+        isAutoCompact: false,
+      });
+      continue;
+    }
+    if (frame.kind === "compact-original") {
+      // The compact ChatNode anchor must live in the current scope.
+      // We advance the scope to a synthetic ChatFlow holding only the
+      // pre-compact range; downstream chatnode frames (rare but
+      // possible) would then resolve against that synthetic scope.
+      const anchor = scopeChatFlow.chatNodes.find(
+        (c) => c.id === frame.compactChatNodeId,
+      );
+      if (!anchor?.isCompactSummary) return null;
+      const range = computePreCompactRange(scopeChatFlow, frame.compactChatNodeId);
+      if (range.length === 0) return null;
+      // Synthetic ChatFlow: head ChatNode's parentChatNodeId rewritten
+      // to null so layoutDag doesn't render a dangling edge to a
+      // compacted-out ancestor that isn't in the synthetic node set.
+      const head = range[0];
+      scopeChatFlow = {
+        ...scopeChatFlow,
+        chatNodes: [{ ...head, parentChatNodeId: null }, ...range.slice(1)],
+        orphans: [],
+        flowEvents: [],
+      };
+      chatNode = null;
+      labels.push({
+        depth,
+        kind: "compact-original",
+        label: `⊞ pre-compact (${anchor.id.slice(0, 8)})`,
+        title: `pre-compact original sequence behind compact ChatNode ${anchor.id}`,
         isAutoCompact: false,
       });
       continue;
@@ -389,6 +508,9 @@ export function resolveDrillView(state: SessionState): ResolvedDrillView | null 
     if (!chatNode) return null;
     return { mode: "workflow", chatNode, scopeChatFlow, frameLabels: labels };
   }
+  // subworkflow OR compact-original at the top → render the (possibly
+  // synthetic) scopeChatFlow recursively via ChatFlowCanvas. App.tsx
+  // doesn't need a new viewMode.
   return { mode: "sub-chatflow", chatFlow: scopeChatFlow, frameLabels: labels };
 }
 
@@ -406,7 +528,7 @@ function resolveDelegate(
     if (frame.kind === "chatnode") {
       chatNode =
         state.chatFlow?.chatNodes.find((c) => c.id === frame.chatNodeId) ?? null;
-    } else {
+    } else if (frame.kind === "subworkflow") {
       // subworkflow: previous chatNode must contain a delegate w/
       // matching id whose agentId names a cached sub ChatFlow.
       if (!chatNode) return null;
@@ -422,6 +544,13 @@ function resolveDelegate(
       // (see handoff: 73% of sub-agents have only 1 ChatNode). Multi-
       // ChatNode rendering is v0.5.1 backlog.
       chatNode = cached.chatFlow.chatNodes[0] ?? null;
+    } else {
+      // compact-original frames don't expose any delegate WorkNodes
+      // visible to enterSubWorkflow's lookup — bail. (In practice
+      // enterSubWorkflow is never called from a compact-original view
+      // because that view contains no delegate WorkNodes; this branch
+      // exists to satisfy the discriminated-union exhaustiveness check.)
+      return null;
     }
   }
   if (!chatNode) return null;
