@@ -23,5 +23,12 @@ export default defineConfig({
   test: {
     environment: "happy-dom",
     globals: true,
+    // e2e/** uses Playwright (`@playwright/test`), not Vitest. v0.7
+    // shipped e2e against Agentloom's playwright binary rather than
+    // adding @playwright/test as a Loomscope devDep — exclude the
+    // dir from Vitest discovery so `npm test` doesn't try to import
+    // a package that isn't installed here. Project-local Playwright
+    // install is v0.10 polish backlog.
+    exclude: ["e2e/**", "node_modules/**", "dist/**"],
   },
 });

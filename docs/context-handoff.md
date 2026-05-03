@@ -27,12 +27,13 @@
 - **v0.4 drill panel**（commit `36f02b7`）：右侧 resizable sidebar + 5 类 WorkNode detail + chunked tool-result lazy-load (`?start=` byte offset + 滚动加载) + MarkdownView (Agentloom 同款) + JsonView + DiffView (零 lib，自动检测 structuredPatch)。195/195 tests。
 - **v0.4 + selection perf fix**（commit `df65051`）：从 v0.4 暴露的 selection round-trip 458ms → 提前从 v0.10 拉出。每卡用 Zustand selector 自己订阅 `selectedNodeId === ownId`，wrapper 不再重 decorate `nodes` prop。1522-ChatNode session 实测 78.9ms avg / 86ms max（5.8×）。202/202 tests。
 - **v0.5 sub-agent 真嵌套**（commit `74d49d9`）：双击 delegate → drill 替换主视图（选项 A，复用 v0.3 drillStack）+ lazy load sidecar jsonl + Map cache + auto-compact badge（agentId 前缀判别）+ DrillBreadcrumb 多级回退。227/227 tests；cache hit 22ms / cold 1830ms / 实测全 session 嵌套深度 max 2 层。**实测发现**：27% sub-agent sidecar 是多 ChatNode（v0.5 渲染 [0] + banner，完整渲染 → v0.5.1，已被 v0.6 吸收）
-- **v0.6 第一次尝试 + revert**（commits `01c3bcf` → `cfe9026` 后 `f9f6f03` 回滚）：M1（Node 类型）+ M2（store dual-write nodeTree）保留作 latent 数据层基础；M3-M7（视觉层压平）revert，恢复 v0.5 dual-canvas + drill 模型 + ribbon。v0.6 第一版误读了作者意图（作者本意：数据层 Node 类型统一 + 视觉层 ChatFlow/WorkFlow 嵌套保留）。**v0.6 redo 待**
+- **v0.6 第一次尝试 + revert**（commits `01c3bcf` → `cfe9026` 后 `f9f6f03` 回滚）：M1（Node 类型）+ M2（store dual-write nodeTree）保留作 latent 数据层基础；M3-M7（视觉层压平）revert，恢复 v0.5 dual-canvas + drill 模型 + ribbon。v0.6 第一版误读了作者意图（作者本意：数据层 Node 类型统一 + 视觉层 ChatFlow/WorkFlow 嵌套保留）
+- **v0.6 redo ship**（commits `a48f990` → `121aa4b`，5 milestone）：NodeBase + ChatNode/WorkNode `extends`；递归 ChatFlowCanvas 走 sub-ChatFlow drill（amber banner 消失）；TokenBar/NodeIdLine 抽 shared atoms 给 5 类 WorkNode。235/235 tests；解析 2500 → 1960ms。8 硬约束全过
+- **`<synthetic>` 假 llm_call 过滤 fix**（`a13da49`）：429 / API error / "No response requested" / 用户中断 4 类 placeholder 共用 sentinel；filter `model="<synthetic>"` + `errors[]` 后所有 last-llm_call 派生（TokenBar / ribbon / tooltip）回归正常
+- **v0.7 compact handling**（commits `fbcc4bb` → `2e2033f`，6 milestone + e2e）：file-history-snapshot 走 messageId 直接绑定（**v0.1 时间窗假设推翻，100% 命中**）+ ChatNodeCard 📁 N 角标 + DrillPanel snapshot vs tool_use 副作用并排揭示 + compact ChatNode 三色 dashed chrome + compact-original drill 沿 logicalParentUuid 反追 + logical 弱边（131/131 ship）+ compact_file_reference 精装 card。**实测发现**：compact ChatNode inner workflow 不是空的（128/131 含 llm_call，是 post-compact 续接被 promptId bucket 进同一节点），抉择 1C 中途纠错为 1C' 双按钮。235 → **284 (+49)** + 4 个 e2e；解析 1860ms
 
-## 还没做的部分（v0.6 redo 起）
-- **v0.6 redo** —— 用 M1-M2 的 Node 类型作为 ChatNode/WorkNode 共享 base；视觉层维持 ChatFlowCanvas/WorkFlowCanvas dual-canvas drill；delegate 可 drill 进 sub-ChatFlow（解决 sub-agent multi-ChatNode）；WorkNode 加 TokenBar + NodeIdLine（跟 ChatNode 互通）。**这是当前最高优先级**
-- v0.7 compact handling（基于 v0.6 redo 后的 Node 互通模型）+ file-history-snapshot 时间窗绑定 + logical 弱边 —— CompactDetail 已留提示文案
-- v0.8 fork 浏览（`forkedFrom` + `custom-title` parser / server merge / ConversationView + branchMemory / canvas fork badge）
+## 还没做的部分（v0.8 起）
+- v0.8 fork 浏览（`forkedFrom` + `custom-title` parser / server merge / **DrillPanel 2-tab（Detail + Conversation）** / ConversationView + branchMemory / canvas fork badge）
 - v0.9 file-tail 实时增量
 - v0.10 性能优化 / WorkFlow viewport 持久化 / 跨 session 搜索 (SQLite FTS5)
 - v∞.0 read-only 远程观察 / v∞.1 启动新 session / v∞.2 leaf-continuation 续接 prompt / **v∞.3 任意节点 fork composer（"120% of CC"）**

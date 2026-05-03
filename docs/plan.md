@@ -14,7 +14,7 @@
 | **v0.4 +** | selection perf fix | per-card Zustand 订阅，去掉 wrapper 重 prop 注入 | ✅ commit `df65051`（202/202；1522-ChatNode 458→78.9ms / 5.8×） |
 | **v0.5** | sub-agent 双态 | drill 替换主视图（选项 A）+ 双击 delegate → push subworkflow 帧 + lazy load + cache + auto-compact badge + breadcrumb 多级 | ✅ commit `74d49d9`（227/227；cache hit 22ms / cold drill 1830ms / 实测嵌套深度 max 2）|
 | **v0.6** | **数据模型统一**（Node 树重构）| 第一版（`01c3bcf` → `cfe9026`）误读为视觉层压平，已 revert（`f9f6f03`）；redo 走"NodeBase 共享 + 视觉嵌套保留 + sub-ChatFlow drill" | ✅ redo M1+M3+M4+M5+M6 commits `a48f990` → `121aa4b`（235/235；NodeBase + ChatNode/WorkNode `extends`；多 ChatNode banner 消失；TokenBar/NodeIdLine 抽 shared atoms；解析 2500 → 1960ms）|
-| **v0.7** | compact handling | 处理 isCompactSummary 节点 + logicalParentUuid 边 + file-history-snapshot 绑定（基于 v0.6 统一 Node）| ✅ shipped 2026-05-03 commits `fbcc4bb` → M6 |
+| **v0.7** | compact handling | 处理 isCompactSummary 节点 + logicalParentUuid 边 + file-history-snapshot 绑定（基于 v0.6 统一 Node）| ✅ commits `fbcc4bb` → `2e2033f`（284/284 + 4 e2e；snapshot 100% 命中；compact 三色 dashed + compact-original drill + logical 弱边 + compact_file_reference 精装；解析 1860ms）|
 | **v0.8** | fork 浏览 | parser 读 `forkedFrom` + `custom-title` / server merge fork 树 / **DrillPanel 2-tab（Detail + Conversation）** / ConversationView + branchMemory（在 Conversation tab 内）/ canvas fork badge | |
 | **v0.9** | file-tail mode | 监听 jsonl mtime 增量更新 canvas | |
 | **v0.10** | polish & 性能 | 大 session 性能验证（256MB session 30s 内首屏） | |
