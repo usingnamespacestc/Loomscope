@@ -1,6 +1,7 @@
-// `/api/sessions/:id`             — parsed ChatFlow JSON
-// `/api/sessions/:id/tool-results/:refId`
-//                                   — chunked overflow tool_result text
+// `/api/sessions/:id`                          — parsed ChatFlow JSON
+// `/api/sessions/:id/tool-results/:refId`      — chunked overflow tool_result text
+// `/api/sessions/:id/subagents/:agentId`       — parsed sub-agent ChatFlow JSON
+//                                                (?subdir=<name> for grouped runs)
 //
 // Session JSONL is located by scanning project subdirs (no sessionId→path
 // index yet; v0.2 scan is fast enough). The sidecar directory mirrors
@@ -15,6 +16,8 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 
 import { parseJsonlFile } from "@/parse/jsonl";
+import { SidecarLoader, type AgentMetadata } from "@/parse/sidecar";
+import type { ChatFlow } from "@/data/types";
 
 export interface SessionsRouteOptions {
   rootDir: string;
@@ -27,6 +30,12 @@ const SESSION_ID_RE = /^[a-f0-9-]{8,}$/i;
 // ``..%2F`` payload can't even reach the path joiner. We additionally
 // guard with a resolved-prefix check below — defense in depth.
 const TOOL_RESULT_REF_ID_RE = /^[A-Za-z0-9_-]+$/;
+// Sub-agent IDs follow CC's recordSidechainTranscript() naming:
+// hex string (regular sub-agents) or ``acompact-<hex>`` /
+// ``aside_question-<hex>`` for harness-spawned variants. Same safe-
+// charset constraint applies; subdir (optional) is a folder name and
+// gets the same treatment.
+const SUB_AGENT_ID_RE = /^[A-Za-z0-9_-]+$/;
 
 // Default chunk size for tool-result overflow streaming (200 KB). The
 // frontend reads the first chunk synchronously into the panel and
@@ -152,7 +161,79 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
     },
   );
 
+  // Sub-agent sidecar loader. Returns the parsed ChatFlow JSON for one
+  // sub-agent jsonl, plus its meta.json (when available). Used by v0.5
+  // double-click-to-drill into sub-agent's WorkFlow.
+  //
+  // Same two-layer path-traversal guard as tool-results:
+  //   1. zod regex restricts agentId / subdir to [A-Za-z0-9_-]
+  //   2. resolved jsonl path must live under <sidecarDir>/subagents/
+  app.get(
+    "/:id/subagents/:agentId",
+    zValidator(
+      "param",
+      z.object({
+        id: z.string().regex(SESSION_ID_RE),
+        agentId: z.string().regex(SUB_AGENT_ID_RE),
+      }),
+    ),
+    zValidator(
+      "query",
+      z.object({
+        // Optional grouping subdir (CC's setAgentTranscriptSubdir for
+        // workflow-runs etc.). Same charset limit as agentId.
+        subdir: z.string().regex(SUB_AGENT_ID_RE).optional(),
+      }),
+    ),
+    async (c) => {
+      const { id, agentId } = c.req.valid("param");
+      const { subdir } = c.req.valid("query");
+
+      const jsonlPath = await locateSessionJsonl(opts.rootDir, id);
+      if (!jsonlPath) return c.json({ error: "session not found" }, 404);
+
+      const sidecarDir = jsonlPath.replace(/\.jsonl$/, "");
+      const loader = new SidecarLoader(sidecarDir);
+      const jsonlAbs = path.resolve(loader.subAgentJsonlPath(agentId, subdir));
+      const subagentsRoot = path.resolve(path.join(sidecarDir, "subagents")) + path.sep;
+      // Path traversal guard 2: resolved path must sit under subagents/.
+      if (!jsonlAbs.startsWith(subagentsRoot)) {
+        return c.json({ error: "invalid agentId" }, 400);
+      }
+
+      const stat = await fsp.stat(jsonlAbs).catch(() => null);
+      if (!stat?.isFile()) {
+        return c.json({ error: "sub-agent not found" }, 404);
+      }
+
+      let chatFlow: ChatFlow;
+      try {
+        const result = await parseJsonlFile(jsonlAbs);
+        chatFlow = result.chatFlow;
+      } catch (err) {
+        return c.json(
+          { error: "parse failed", message: err instanceof Error ? err.message : String(err) },
+          500,
+        );
+      }
+      // meta.json is optional — fall through silently when absent.
+      const meta: AgentMetadata | null = await loader
+        .loadAgentMetadata(agentId, subdir)
+        .catch(() => null);
+
+      const body: SubAgentResponse = { agentId, subdir: subdir ?? null, chatFlow, meta };
+      return c.json(body);
+    },
+  );
+
   return app;
+}
+
+export interface SubAgentResponse {
+  agentId: string;
+  subdir: string | null;
+  chatFlow: ChatFlow;
+  meta: AgentMetadata | null;
 }
 
 async function locateSessionJsonl(rootDir: string, sessionId: string): Promise<string | null> {

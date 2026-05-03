@@ -3,6 +3,9 @@
 // ``drillStack`` is non-empty. The chosen drill model (option C) means
 // only one canvas type renders at a time — picked by ``viewMode``.
 // Breadcrumb pinned top-left when in WorkFlow view to navigate back.
+// v0.5: drillStack can hold mixed chatnode + subworkflow frames; the
+// breadcrumb walks all of them, and the canvas resolves the active
+// ChatNode through the cached sub-agent ChatFlows.
 //
 // Visual chrome per `design-visual-language.md` 视觉 token 章节.
 
@@ -14,7 +17,10 @@ import { DrillPanel } from "@/components/drill/DrillPanel";
 import { Header } from "@/components/Header";
 import { Sidebar } from "@/components/Sidebar";
 import { useStore } from "@/store/index";
-import type { ChatFlow, ChatNode } from "@/data/types";
+import {
+  resolveDrilledChatNode,
+  type DrillBreadcrumbItem,
+} from "@/store/sessionSlice";
 
 export default function App() {
   const activeId = useStore((s) => s.activeSessionId);
@@ -26,17 +32,20 @@ export default function App() {
     }
   }, [activeId, session]);
 
-  // Resolve which view to show + which ChatNode (if drilled). Computing
-  // here rather than inside the canvas so the breadcrumb has access to
-  // the same data without separate selectors.
+  // Resolve which view to show. Sub-agent drill frames pull the
+  // current ChatNode out of the cache, so the resolver returns null
+  // (= ChatFlow view) until the cache fills.
   const view = useMemo(() => {
-    if (!session?.chatFlow || !activeId) return { mode: "chatflow" as const };
-    const top = session.drillStack[0];
-    if (!top || top.kind !== "chatnode") return { mode: "chatflow" as const };
-    const cn = findChatNode(session.chatFlow, top.chatNodeId);
-    if (!cn) return { mode: "chatflow" as const }; // stale id — silent fallback
-    return { mode: "workflow" as const, chatNode: cn };
-  }, [session?.chatFlow, session?.drillStack, activeId]);
+    if (!session || !activeId) return { mode: "chatflow" as const };
+    const resolved = resolveDrilledChatNode(session);
+    if (!resolved) return { mode: "chatflow" as const };
+    return {
+      mode: "workflow" as const,
+      chatNode: resolved.chatNode,
+      frameLabels: resolved.frameLabels,
+      multiChatNodeNotice: resolved.multiChatNodeNotice,
+    };
+  }, [session, activeId]);
 
   return (
     <div className="h-screen w-screen flex flex-col bg-gray-50 text-gray-900">
@@ -52,8 +61,12 @@ export default function App() {
           )}
           {activeId && session?.chatFlow && view.mode === "workflow" && (
             <>
-              <WorkFlowCanvas chatNode={view.chatNode} sessionId={activeId} />
-              <DrillBreadcrumb sessionId={activeId} chatNode={view.chatNode} />
+              <WorkFlowCanvas
+                chatNode={view.chatNode}
+                sessionId={activeId}
+                multiChatNodeNotice={view.multiChatNodeNotice}
+              />
+              <DrillBreadcrumb sessionId={activeId} frames={view.frameLabels} />
             </>
           )}
         </main>
@@ -70,26 +83,19 @@ export default function App() {
   );
 }
 
-function findChatNode(cf: ChatFlow, id: string): ChatNode | null {
-  // Linear lookup is fine — ChatFlow has at most ~1500 nodes per
-  // 256MB session and this only runs once per render.
-  for (const cn of cf.chatNodes) if (cn.id === id) return cn;
-  return null;
-}
-
 function DrillBreadcrumb({
   sessionId,
-  chatNode,
+  frames,
 }: {
   sessionId: string;
-  chatNode: ChatNode;
+  frames: DrillBreadcrumbItem[];
 }) {
   const exitWorkflow = useStore((s) => s.exitWorkflow);
-  const previewId = chatNode.id.length > 12 ? `${chatNode.id.slice(0, 12)}…` : chatNode.id;
+  const truncate = useStore((s) => s.truncateDrillStack);
   return (
     <nav
       data-testid="drill-breadcrumb"
-      className="absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded border border-gray-300 bg-white/90 px-2.5 py-1.5 text-xs text-gray-700 shadow-sm"
+      className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-1.5 rounded border border-gray-300 bg-white/90 px-2.5 py-1.5 text-xs text-gray-700 shadow-sm max-w-[80%]"
     >
       <button
         type="button"
@@ -99,13 +105,40 @@ function DrillBreadcrumb({
       >
         ← ChatFlow
       </button>
-      <span className="text-gray-400">/</span>
-      <span
-        className="font-mono text-[11px] text-gray-900"
-        title={`ChatNode ${chatNode.id}`}
-      >
-        WorkFlow ({previewId})
-      </span>
+      {frames.map((frame, i) => {
+        const isLast = i === frames.length - 1;
+        const truncateTo = i + 1;
+        return (
+          <span key={i} className="flex items-center gap-1">
+            <span className="text-gray-400">/</span>
+            {isLast ? (
+              <span
+                className={[
+                  "font-mono text-[11px]",
+                  frame.isAutoCompact ? "text-purple-700 font-semibold" : "text-gray-900",
+                ].join(" ")}
+                title={frame.title}
+                data-testid={`drill-breadcrumb-frame-${i}`}
+              >
+                {frame.label}
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => truncate(sessionId, truncateTo)}
+                className={[
+                  "font-mono text-[11px] hover:text-blue-600 hover:underline transition-colors",
+                  frame.isAutoCompact ? "text-purple-700 font-semibold" : "",
+                ].join(" ")}
+                title={frame.title}
+                data-testid={`drill-breadcrumb-frame-${i}`}
+              >
+                {frame.label}
+              </button>
+            )}
+          </span>
+        );
+      })}
     </nav>
   );
 }

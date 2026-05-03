@@ -15,6 +15,7 @@ import { JsonView } from "@/components/JsonView";
 import { MarkdownView } from "@/components/MarkdownView";
 import { DiffView, extractStructuredPatch } from "@/components/DiffView";
 import { useToolResultChunks } from "@/components/drill/useToolResultChunks";
+import { useStore } from "@/store/index";
 import type {
   AttachmentNode,
   CompactNode,
@@ -58,7 +59,9 @@ function WorkNodeDetailImpl({ workNode, sessionId }: Props) {
       {workNode.kind === "tool_call" && (
         <ToolCallDetail node={workNode} sessionId={sessionId} />
       )}
-      {workNode.kind === "delegate" && <DelegateDetail node={workNode} />}
+      {workNode.kind === "delegate" && (
+        <DelegateDetail node={workNode} sessionId={sessionId} />
+      )}
       {workNode.kind === "compact" && <CompactDetail node={workNode} />}
       {workNode.kind === "attachment" && <AttachmentDetail node={workNode} />}
     </div>
@@ -347,7 +350,16 @@ function formatBytes(n: number): string {
 
 // ── delegate ──────────────────────────────────────────────────────────
 
-function DelegateDetail({ node }: { node: DelegateNode }) {
+function DelegateDetail({ node, sessionId }: { node: DelegateNode; sessionId: string }) {
+  const isAutoCompact = (node.agentId ?? "").startsWith("acompact-");
+  const enterSubWorkflow = useStore((s) => s.enterSubWorkflow);
+  // Subscribe to the sub-agent cache entry for this delegate so the
+  // panel reflects in-flight / error state from a parallel drill.
+  const cacheEntry = useStore((s) =>
+    node.agentId
+      ? s.sessions.get(sessionId)?.subAgentCache.get(node.agentId) ?? null
+      : null,
+  );
   return (
     <>
       <Section title="Sub-agent">
@@ -361,10 +373,59 @@ function DelegateDetail({ node }: { node: DelegateNode }) {
             <li>totalToolUseCount: {node.totalToolUseCount}</li>
           )}
         </ul>
-        <div className="mt-1.5 text-[10px] text-gray-400">
-          v0.5 才打开 sub-agent 真嵌套（lazy 加载 sidecar jsonl）
-        </div>
+        {isAutoCompact && (
+          <div className="mt-1.5 inline-flex items-center rounded bg-purple-200/80 px-1.5 py-0.5 text-[10px] font-semibold text-purple-900">
+            ⊞ auto-compact agent
+          </div>
+        )}
+        {node.agentId ? (
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={() => enterSubWorkflow(sessionId, node.id)}
+              className={[
+                "inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] transition-colors",
+                cacheEntry?.status === "loading"
+                  ? "border-gray-200 bg-gray-50 text-gray-400 cursor-wait"
+                  : "border-purple-300 bg-purple-50 text-purple-800 hover:border-purple-500 hover:bg-purple-100",
+              ].join(" ")}
+              disabled={cacheEntry?.status === "loading"}
+              data-testid="drill-into-subagent"
+            >
+              {cacheEntry?.status === "loading" ? (
+                <>⏳ Loading sub-agent…</>
+              ) : (
+                <>⤢ Drill into sub-agent</>
+              )}
+            </button>
+            {cacheEntry?.status === "error" && (
+              <div className="mt-1 text-[10px] text-rose-700">
+                load failed: {cacheEntry.error ?? "unknown error"}
+              </div>
+            )}
+            {cacheEntry?.status === "ready" &&
+              cacheEntry.chatFlow &&
+              cacheEntry.chatFlow.chatNodes.length > 1 && (
+                <div className="mt-1 text-[10px] text-amber-700">
+                  ⚠ sub-agent has {cacheEntry.chatFlow.chatNodes.length} ChatNodes;
+                  v0.5 shows the first only
+                </div>
+              )}
+          </div>
+        ) : (
+          <div className="mt-1.5 text-[10px] text-gray-400">
+            (no agentId — sub-agent sidecar can't be located)
+          </div>
+        )}
       </Section>
+
+      {cacheEntry?.meta?.worktreePath && (
+        <Section title="Sub-agent meta">
+          <ul className="text-[11px] text-gray-700 font-mono space-y-0.5">
+            <li>worktreePath: {cacheEntry.meta.worktreePath}</li>
+          </ul>
+        </Section>
+      )}
 
       {node.description && (
         <Section title="Description">

@@ -23,6 +23,7 @@ function seedSession() {
       selectedNodeId: null,
       workflowSelectedNodeId: null,
       drillStack: [],
+      subAgentCache: new Map(),
       isLoading: false,
       error: null,
       lastUpdated: 0,

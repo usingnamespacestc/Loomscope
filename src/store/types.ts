@@ -3,6 +3,7 @@
 // `LiveEventSlice` without rippling across the rest of the store.
 
 import type { ChatFlow } from "@/data/types";
+import type { AgentMetadata } from "@/parse/sidecar";
 
 // ─── UI slice ────────────────────────────────────────────────────────────────
 
@@ -68,6 +69,20 @@ export type DrillFrame =
   | { kind: "chatnode"; chatNodeId: string }
   | { kind: "subworkflow"; parentWorkNodeId: string };
 
+// Cached sub-agent ChatFlow plus its AgentMetadata. Stored per
+// ``(sessionId, agentId)`` and dropped on session unload — sub-agents
+// from a different session would have stale parentChatNodeId / uuid
+// references anyway, so cross-session sharing isn't valuable.
+export interface SubAgentCacheEntry {
+  status: "loading" | "ready" | "error";
+  chatFlow: ChatFlow | null;
+  meta: AgentMetadata | null;
+  error: string | null;
+  // Last access timestamp (ms). Reserved for future LRU eviction —
+  // current implementation keeps everything until session switch.
+  lastAccess: number;
+}
+
 export interface SessionState {
   chatFlow: ChatFlow | null;
   foldedNodeIds: Set<string>;
@@ -82,6 +97,12 @@ export interface SessionState {
   // Not persisted across reloads (v0.3 deliberate; v0.7 / v∞ may move
   // to URL routing instead).
   drillStack: DrillFrame[];
+  // ``agentId → entry`` cache for sub-agent ChatFlows loaded via the
+  // ``/api/sessions/:id/subagents/:agentId`` endpoint. v0.5 keeps
+  // everything in memory; eviction policy (LRU / max-size) is v0.9
+  // backlog — real measurement in v0.5 says total per-session payload
+  // is ~5 MB so the obvious risk is low.
+  subAgentCache: Map<string, SubAgentCacheEntry>;
   isLoading: boolean;
   error: string | null;
   lastUpdated: number;
@@ -100,6 +121,22 @@ export interface SessionSlice {
   exitWorkflow: (sessionId: string) => void;
   truncateDrillStack: (sessionId: string, depth: number) => void;
   setWorkflowSelected: (sessionId: string, nodeId: string | null) => void;
+  // ── v0.5 sub-agent nesting ──
+  // Lazy-load a sub-agent's ChatFlow + meta and cache it. In-flight
+  // calls dedupe (multiple double-clicks on the same delegate fold
+  // into a single fetch). Returns the cache entry's ``status`` after
+  // the call completes — useful for tests / debugging.
+  loadSubAgent: (
+    sessionId: string,
+    agentId: string,
+    subdir?: string,
+  ) => Promise<SubAgentCacheEntry>;
+  // Push a ``subworkflow`` drill frame (= drill into the sub-agent's
+  // inner WorkFlow). The current top frame must already be a chatnode
+  // or subworkflow; ``parentWorkNodeId`` must resolve to a ``delegate``
+  // WorkNode in that frame's WorkFlow. Triggers loadSubAgent if the
+  // cache is cold. Idempotent on the same parentWorkNodeId.
+  enterSubWorkflow: (sessionId: string, parentWorkNodeId: string) => void;
 }
 
 // ─── Live event slice (stub for v∞.0) ────────────────────────────────────────

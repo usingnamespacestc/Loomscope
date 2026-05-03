@@ -223,6 +223,128 @@ describe("GET /api/sessions/:id/tool-results/:refId", () => {
   });
 });
 
+describe("GET /api/sessions/:id/subagents/:agentId", () => {
+  const SID = "33333333-3333-4000-8000-000000000001";
+  const PROJECT = "-home-user-Foo";
+  const AGENT_ID = "abc123def456";
+
+  // Tiny but parseable sub-agent jsonl: one user prompt + one
+  // assistant reply, all marked isSidechain:true (matches CC's
+  // recordSidechainTranscript invariant).
+  const subAgentJsonl = [
+    {
+      type: "user",
+      uuid: "su1",
+      sessionId: SID,
+      promptId: "sp1",
+      isSidechain: true,
+      message: { role: "user", content: "Find perf hot spots." },
+      timestamp: "2026-05-03T00:00:00.000Z",
+    },
+    {
+      type: "assistant",
+      uuid: "sa1",
+      parentUuid: "su1",
+      sessionId: SID,
+      isSidechain: true,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Three hot spots identified." }],
+        stop_reason: "end_turn",
+      },
+      timestamp: "2026-05-03T00:00:01.000Z",
+    },
+  ];
+  const META = {
+    agentType: "Explore",
+    description: "Find perf hot spots",
+  };
+
+  beforeEach(async () => {
+    const projectDir = path.join(tmpRoot, PROJECT);
+    await fs.mkdir(projectDir, { recursive: true });
+    await writeJsonl(path.join(projectDir, `${SID}.jsonl`), [
+      { type: "user", uuid: "u1", sessionId: SID, promptId: "p1", message: { content: "hi" } },
+    ]);
+    const subagentsDir = path.join(projectDir, SID, "subagents");
+    await fs.mkdir(subagentsDir, { recursive: true });
+    await writeJsonl(path.join(subagentsDir, `agent-${AGENT_ID}.jsonl`), subAgentJsonl);
+    await fs.writeFile(
+      path.join(subagentsDir, `agent-${AGENT_ID}.meta.json`),
+      JSON.stringify(META),
+    );
+  });
+
+  it("returns the parsed sub-agent ChatFlow + meta on happy path", async () => {
+    const res = await app.request(`/api/sessions/${SID}/subagents/${AGENT_ID}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      agentId: string;
+      subdir: string | null;
+      chatFlow: { chatNodes: unknown[] };
+      meta: { agentType: string; description?: string } | null;
+    };
+    expect(body.agentId).toBe(AGENT_ID);
+    expect(body.subdir).toBeNull();
+    expect(body.chatFlow.chatNodes.length).toBeGreaterThan(0);
+    expect(body.meta?.agentType).toBe("Explore");
+  });
+
+  it("returns meta=null when meta.json is missing (older CC versions)", async () => {
+    await fs.rm(
+      path.join(tmpRoot, PROJECT, SID, "subagents", `agent-${AGENT_ID}.meta.json`),
+    );
+    const res = await app.request(`/api/sessions/${SID}/subagents/${AGENT_ID}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { meta: unknown };
+    expect(body.meta).toBeNull();
+  });
+
+  it("supports the optional ?subdir param for grouped runs", async () => {
+    const groupedDir = path.join(
+      tmpRoot,
+      PROJECT,
+      SID,
+      "subagents",
+      "workflow_run_x",
+    );
+    await fs.mkdir(groupedDir, { recursive: true });
+    await writeJsonl(path.join(groupedDir, `agent-${AGENT_ID}.jsonl`), subAgentJsonl);
+    const res = await app.request(
+      `/api/sessions/${SID}/subagents/${AGENT_ID}?subdir=workflow_run_x`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { subdir: string | null };
+    expect(body.subdir).toBe("workflow_run_x");
+  });
+
+  it("404s when the sub-agent jsonl doesn't exist", async () => {
+    const res = await app.request(`/api/sessions/${SID}/subagents/no_such_agent`);
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when the session itself doesn't exist", async () => {
+    const res = await app.request(
+      `/api/sessions/00000000-0000-4000-8000-deadbeef0000/subagents/${AGENT_ID}`,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("400s on agentId with path-traversal characters", async () => {
+    const res = await app.request(
+      `/api/sessions/${SID}/subagents/${encodeURIComponent("../../etc/passwd")}`,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("400s on subdir with path-traversal characters", async () => {
+    const res = await app.request(
+      `/api/sessions/${SID}/subagents/${AGENT_ID}?subdir=${encodeURIComponent("../sneaky")}`,
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("CSRF middleware", () => {
   it("rejects POST without X-Loomscope-Token", async () => {
     const res = await app.request("/api/health", { method: "POST" });

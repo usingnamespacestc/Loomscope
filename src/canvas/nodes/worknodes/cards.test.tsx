@@ -166,6 +166,7 @@ describe("DelegateCard", () => {
               parentUuid: null,
               toolName: "Agent",
               agentType: "Explore",
+              agentId: "abc_def_123",
               description: "Map the backend",
               content: "Found 3 services",
               totalDurationMs: 50_000,
@@ -184,6 +185,55 @@ describe("DelegateCard", () => {
     expect(screen.getByText(/50\.0s/)).toBeTruthy();
     expect(screen.getByText(/49\.6k/)).toBeTruthy();
     expect(screen.getByText(/🔧 21/)).toBeTruthy();
+    // v0.5: drill affordance hint visible when agentId present.
+    expect(screen.getByText(/double-click to drill/)).toBeTruthy();
+  });
+
+  it("v0.5: shows the auto-compact badge when agentId starts with acompact-", () => {
+    render(
+      withRF(
+        <DelegateCard
+          {...nodeProps("delegate", "d-ac", {
+            workNode: {
+              id: "d-ac",
+              kind: "delegate",
+              parentUuid: null,
+              toolName: "Agent",
+              // Some old sessions report an unrelated agentType here;
+              // the prefix on agentId is the canonical auto-compact signal.
+              agentType: "general-purpose",
+              agentId: "acompact-deadbeef",
+            },
+          })}
+        />,
+      ),
+    );
+    expect(screen.getByTestId("auto-compact-badge")).toBeTruthy();
+    // Regular agentType chip suppressed when auto-compact badge wins.
+    expect(screen.queryByText("general-purpose")).toBeNull();
+    const card = screen.getByTestId("worknode-delegate-d-ac");
+    expect(card.dataset.autoCompact).toBe("true");
+  });
+
+  it("v0.5: hides the drill affordance when agentId is missing", () => {
+    render(
+      withRF(
+        <DelegateCard
+          {...nodeProps("delegate", "d-noagent", {
+            workNode: {
+              id: "d-noagent",
+              kind: "delegate",
+              parentUuid: null,
+              toolName: "Agent",
+              agentType: "Explore",
+              // no agentId — sidecar can't be located, so the hint
+              // would mislead the user.
+            },
+          })}
+        />,
+      ),
+    );
+    expect(screen.queryByText(/double-click to drill/)).toBeNull();
   });
 });
 

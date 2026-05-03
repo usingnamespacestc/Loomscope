@@ -54,6 +54,10 @@ const edgeTypes: EdgeTypes = {
 export interface WorkFlowCanvasProps {
   chatNode: ChatNode;
   sessionId: string;
+  // v0.5: when the active drill frame is a sub-agent whose ChatFlow
+  // has more than one ChatNode, surface a banner explaining we're
+  // showing only the first. Multi-ChatNode rendering is v0.5.1 backlog.
+  multiChatNodeNotice?: { totalChatNodes: number } | null;
 }
 
 export function WorkFlowCanvas(props: WorkFlowCanvasProps) {
@@ -68,15 +72,27 @@ export function WorkFlowCanvas(props: WorkFlowCanvasProps) {
   );
 }
 
-function CanvasInner({ chatNode, sessionId }: WorkFlowCanvasProps) {
+function CanvasInner({ chatNode, sessionId, multiChatNodeNotice }: WorkFlowCanvasProps) {
   const { nodes, edges } = useMemo(() => layoutWorkFlow(chatNode), [chatNode]);
   const setSelected = useStore((s) => s.setWorkflowSelected);
+  const enterSubWorkflow = useStore((s) => s.enterSubWorkflow);
 
   const onNodeClick = useCallback(
     (_e: unknown, node: { id: string }) => {
       setSelected(sessionId, node.id);
     },
     [setSelected, sessionId],
+  );
+
+  // Double-click on a delegate WorkNode → drill into its sub-WorkFlow.
+  // Other kinds ignore double-click (no behavior change). The store
+  // action handles the agentId resolution + lazy load + dedupe.
+  const onNodeDoubleClick = useCallback(
+    (_e: unknown, node: { id: string; type?: string }) => {
+      if (node.type !== "delegate") return;
+      enterSubWorkflow(sessionId, node.id);
+    },
+    [enterSubWorkflow, sessionId],
   );
 
   // No `decoratedNodes` indirection: each WorkNode card subscribes to
@@ -129,30 +145,42 @@ function CanvasInner({ chatNode, sessionId }: WorkFlowCanvasProps) {
   }
 
   return (
-    <ReactFlow
-      data-testid="workflow-canvas"
-      nodes={nodes}
-      edges={decoratedEdges}
-      nodeTypes={nodeTypes}
-      edgeTypes={edgeTypes}
-      onNodeClick={onNodeClick}
-      minZoom={0.1}
-      maxZoom={2}
-      proOptions={{ hideAttribution: true }}
-      nodesDraggable={false}
-      nodesConnectable={false}
-      edgesReconnectable={false}
-      elementsSelectable={true}
-      deleteKeyCode={null}
-      panOnDrag={true}
-    >
-      <Background gap={24} size={1} color="#d1d5db" />
-      <Controls
-        position="bottom-left"
-        showInteractive={false}
-        className="!shadow-md !border !border-gray-200"
-      />
-    </ReactFlow>
+    <>
+      <ReactFlow
+        data-testid="workflow-canvas"
+        nodes={nodes}
+        edges={decoratedEdges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        onNodeClick={onNodeClick}
+        onNodeDoubleClick={onNodeDoubleClick}
+        minZoom={0.1}
+        maxZoom={2}
+        proOptions={{ hideAttribution: true }}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        edgesReconnectable={false}
+        elementsSelectable={true}
+        deleteKeyCode={null}
+        panOnDrag={true}
+      >
+        <Background gap={24} size={1} color="#d1d5db" />
+        <Controls
+          position="bottom-left"
+          showInteractive={false}
+          className="!shadow-md !border !border-gray-200"
+        />
+      </ReactFlow>
+      {multiChatNodeNotice && (
+        <div
+          data-testid="multi-chatnode-notice"
+          className="absolute right-3 top-3 z-20 rounded border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 shadow-sm max-w-[280px]"
+          title="Multi-ChatNode sub-agent rendering is deferred to v0.5.1"
+        >
+          ⚠ Sub-agent has {multiChatNodeNotice.totalChatNodes} ChatNodes; showing the first
+        </div>
+      )}
+    </>
   );
 }
 

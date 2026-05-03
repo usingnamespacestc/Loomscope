@@ -1,7 +1,8 @@
-// delegate (sub-agent) WorkNode card. v0.3 ships the **folded** rich
-// card per design-visual-language.md: agentType badge, description,
-// duration / token / call-count chips, content head. Real嵌套 expand
-// (load sidecar jsonl, render sub-WorkFlow) is v0.5.
+// delegate (sub-agent) WorkNode card. v0.3 shipped the folded rich
+// card; v0.5 surfaces the "double-click to drill" affordance + an
+// auto-compact badge for harness-spawned agents (agentId starts with
+// ``acompact-``). The double-click handler itself lives on
+// WorkFlowCanvas — here we just hint the affordance.
 
 import { Handle, Position } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
@@ -18,6 +19,7 @@ import { handleStyle, workNodeChromeClass } from "./cardChrome";
 export function DelegateCard({ id, data }: NodeProps<DelegateRFNode>) {
   const n = data.workNode;
   const failed = n.status === "failed" || n.isError === true;
+  const isAutoCompact = (n.agentId ?? "").startsWith("acompact-");
   const accent = failed ? "rose" : "purple";
   const contentPreview = delegateContentPreview(n);
   const desc = (n.description ?? "").trim();
@@ -29,6 +31,8 @@ export function DelegateCard({ id, data }: NodeProps<DelegateRFNode>) {
       style={{ width: WF_NODE_SIZE.delegate.width }}
       data-testid={`worknode-delegate-${n.id}`}
       data-worknode-kind="delegate"
+      data-auto-compact={isAutoCompact ? "true" : "false"}
+      title="Double-click to drill into sub-agent"
     >
       <Handle
         type="target"
@@ -39,10 +43,23 @@ export function DelegateCard({ id, data }: NodeProps<DelegateRFNode>) {
       <div className="flex items-center gap-1 mb-1">
         <span>🤖</span>
         <span className="text-[10px] font-medium text-purple-700">Agent</span>
-        {n.agentType && (
-          <span className="ml-1 inline-flex items-center rounded bg-purple-200/80 px-1 py-0.5 text-[9px] font-semibold text-purple-900">
-            {n.agentType}
+        {isAutoCompact ? (
+          // Auto-compact badge replaces the agentType chip — the
+          // underlying meta sometimes misreports agentType for these,
+          // so the agentId prefix is the canonical signal.
+          <span
+            className="ml-1 inline-flex items-center rounded bg-purple-300/80 px-1 py-0.5 text-[9px] font-semibold text-purple-900"
+            data-testid="auto-compact-badge"
+            title="harness-spawned auto-compact agent"
+          >
+            ⊞ auto-compact
           </span>
+        ) : (
+          n.agentType && (
+            <span className="ml-1 inline-flex items-center rounded bg-purple-200/80 px-1 py-0.5 text-[9px] font-semibold text-purple-900">
+              {n.agentType}
+            </span>
+          )
         )}
         {failed && (
           <span className="ml-auto text-rose-600 font-bold" title="failed">
@@ -60,6 +77,16 @@ export function DelegateCard({ id, data }: NodeProps<DelegateRFNode>) {
         <div className="mt-1 pt-1 border-t border-purple-200/60 text-[10px] text-gray-700 break-words line-clamp-2">
           <span className="text-purple-600 font-medium">Result: </span>
           {contentPreview}
+        </div>
+      )}
+      {/* Drill affordance — small text hint at the bottom right. The
+          actual handler is wired on WorkFlowCanvas's onNodeDoubleClick
+          so it works whether the user double-clicks the card body or
+          this hint specifically. Hidden when the delegate has no
+          agentId (sidecar can't be located). */}
+      {n.agentId && (
+        <div className="mt-1 text-[9px] text-purple-500 italic text-right">
+          ⤢ double-click to drill
         </div>
       )}
       <Handle
