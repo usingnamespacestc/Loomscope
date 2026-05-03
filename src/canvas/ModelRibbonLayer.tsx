@@ -101,7 +101,13 @@ export function ModelRibbonLayer({
     <svg
       data-testid="model-ribbon-layer"
       className="pointer-events-none absolute inset-0 h-full w-full"
-      style={{ zIndex: 50, overflow: "visible" }}
+      // z-index above xyflow's stacking (renderer=4, selection=6,
+      // connection-line=1001) so the ribbon is visibly drawn ON TOP
+      // of cards as it passes through their centers. With a lower
+      // z-index the curve is hidden behind cards and the visible
+      // gap-segments collapse to the same look as the old "side-to-
+      // side" approach — which is what we're trying to leave behind.
+      style={{ zIndex: 1100, overflow: "visible" }}
     >
       <g transform={`translate(${tx}, ${ty}) scale(${tz})`}>
         {groups.map((g, i) => (
