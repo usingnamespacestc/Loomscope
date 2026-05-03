@@ -22,6 +22,7 @@ import type {
 
 function makeChatNode(workflow: ChatNode["workflow"]): ChatNode {
   return {
+    kind: "chat",
     id: "p1",
     parentChatNodeId: null,
     rootUserUuid: "u1",

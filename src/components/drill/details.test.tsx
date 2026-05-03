@@ -20,6 +20,7 @@ import type {
 
 function makeChatNode(extra: Partial<ChatNode> = {}): ChatNode {
   return {
+    kind: "chat",
     id: "p1",
     parentChatNodeId: null,
     rootUserUuid: "u1",

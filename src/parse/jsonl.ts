@@ -500,7 +500,9 @@ function buildChatNode(
   const compactWorkNode = workflow.nodes.find((n) => n.kind === "compact");
   const slashCommand = detectSlashCommand(bucket.records);
   return {
+    kind: "chat",
     id: bucket.promptId,
+    timestamp: rootUser.timestamp,
     parentChatNodeId: null, // filled in linkChatNodeParents
     rootUserUuid: rootUser.uuid ?? "",
     userMessage,

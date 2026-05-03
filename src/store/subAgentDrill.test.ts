@@ -37,6 +37,7 @@ function delegateNode(over: Partial<DelegateNode> = {}): DelegateNode {
 
 function makeChatFlow(): ChatFlow {
   const cn: ChatNode = {
+    kind: "chat",
     id: CHAT_NODE_ID,
     parentChatNodeId: null,
     rootUserUuid: "u1",
@@ -69,6 +70,7 @@ function subAgentChatFlow(chatNodeIds: string[]): ChatFlow {
     mainJsonlPath: "/x/sub.jsonl",
     sidecarDir: "/x/sub",
     chatNodes: chatNodeIds.map((id, idx) => ({
+      kind: "chat",
       id,
       parentChatNodeId: idx === 0 ? null : chatNodeIds[idx - 1],
       rootUserUuid: `u-${id}`,
@@ -105,9 +107,6 @@ function seedSession(cf: ChatFlow = makeChatFlow()) {
       selectedNodeId: null,
       workflowSelectedNodeId: null,
       drillStack: [],
-      nodeTree: null,
-      expandedNodeIds: new Set(),
-      focusedSubtreeRootId: null,
       subAgentCache: new Map(),
       isLoading: false,
       error: null,

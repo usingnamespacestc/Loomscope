@@ -2,7 +2,7 @@
 // "前端状态管理" so future v∞ work can drop SSE / hook handlers into
 // `LiveEventSlice` without rippling across the rest of the store.
 
-import type { ChatFlow, NodeTree } from "@/data/types";
+import type { ChatFlow } from "@/data/types";
 import type { AgentMetadata } from "@/parse/sidecar";
 
 // ─── UI slice ────────────────────────────────────────────────────────────────
@@ -73,15 +73,9 @@ export type DrillFrame =
 // ``(sessionId, agentId)`` and dropped on session unload — sub-agents
 // from a different session would have stale parentChatNodeId / uuid
 // references anyway, so cross-session sharing isn't valuable.
-//
-// v0.6 M2 transitional shape: ``chatFlow`` (legacy) + ``nodeTree``
-// (unified) coexist. The store fills both in ``loadSubAgent`` so the
-// canvas / DrillPanel can read whichever shape they currently consume
-// without separate fetches. M5+M6 swap consumers; M7 drops chatFlow.
 export interface SubAgentCacheEntry {
   status: "loading" | "ready" | "error";
   chatFlow: ChatFlow | null;
-  nodeTree: NodeTree | null;
   meta: AgentMetadata | null;
   error: string | null;
   // Last access timestamp (ms). Reserved for future LRU eviction —
@@ -90,48 +84,26 @@ export interface SubAgentCacheEntry {
 }
 
 export interface SessionState {
-  // ── legacy v0.5 shape (consumed by canvas / DrillPanel until M5/M6) ──
   chatFlow: ChatFlow | null;
-  // Folded node ids in the OLD model — legacy code uses this for the
-  // drill-down ChatFlow→WorkFlow toggle. v0.6 reuses the same name
-  // for unified-tree fold state too; the legacy meaning quietly
-  // coexists because v0.5 paths only check membership for a
-  // ChatNode-id key while v0.6 paths check arbitrary Node ids.
+  // ChatFlow-layer fold state. v0.5 used this for the drill-down
+  // ChatFlow→WorkFlow toggle (membership keyed on ChatNode id).
   foldedNodeIds: Set<string>;
   viewport: { x: number; y: number; zoom: number };
   selectedNodeId: string | null;
   // WorkFlow-layer selection — kept independent from ChatFlow's
   // ``selectedNodeId`` so drilling out and back in doesn't lose the
-  // node the user clicked inside the WorkFlow (matches Agentloom).
-  // M2 keeps this for legacy compatibility; M5 collapses selection
-  // into ``selectedNodeId`` per抉择 3 once the canvas reads from the
-  // unified tree.
+  // node the user clicked inside the WorkFlow.
   workflowSelectedNodeId: string | null;
   // Empty stack = ChatFlow view; non-empty = WorkFlow view, with the
-  // first frame's ``chatNodeId`` identifying which ChatNode is opened.
-  // M5 retires drillStack in favour of ``focusedSubtreeRootId`` per
-  // 抉择 2 (right-click context menu → focus subtree).
+  // top frame identifying which ChatNode (or sub-agent ChatFlow) is
+  // opened. v0.6 redo extends drillStack semantics for sub-ChatFlow
+  // drill (subworkflow frame → resolves a full sub-agent ChatFlow,
+  // not just chatNodes[0]).
   drillStack: DrillFrame[];
-
-  // ── v0.6 unified tree state (populated by M2 loaders, consumed by M5+) ──
-  nodeTree: NodeTree | null;
-  // User overrides on top of ``Node.defaultFolded``. Membership in
-  // ``expandedNodeIds`` forces the node visible even when its default
-  // says folded; membership in ``foldedNodeIds`` collapses a default-
-  // unfolded node. v0.6 fold rules per抉择 1 选项 A: turn roots
-  // (user_message + compact) default unfolded, everything else folded.
-  expandedNodeIds: Set<string>;
-  // null = full canvas (rooted at ``rootNodeIds``); non-null = focus
-  // mode rooted at ``focusedSubtreeRootId``'s subtree. Per抉择 2,
-  // entered via right-click context menu, exited via ESC / breadcrumb /
-  // exitFocus button. Not persisted across reloads.
-  focusedSubtreeRootId: string | null;
-
   // ``agentId → entry`` cache for sub-agent ChatFlows loaded via the
   // ``/api/sessions/:id/subagents/:agentId`` endpoint. v0.5 keeps
   // everything in memory; eviction policy (LRU / max-size) is v0.10
-  // backlog. M2 fills both ``chatFlow`` and ``nodeTree`` shapes per
-  // entry (see SubAgentCacheEntry).
+  // backlog.
   subAgentCache: Map<string, SubAgentCacheEntry>;
   isLoading: boolean;
   error: string | null;
@@ -161,26 +133,19 @@ export interface SessionSlice {
     subdir?: string,
   ) => Promise<SubAgentCacheEntry>;
   // Push a ``subworkflow`` drill frame (= drill into the sub-agent's
-  // inner WorkFlow). The current top frame must already be a chatnode
+  // sub-ChatFlow). The current top frame must already be a chatnode
   // or subworkflow; ``parentWorkNodeId`` must resolve to a ``delegate``
   // WorkNode in that frame's WorkFlow. Triggers loadSubAgent if the
   // cache is cold. Idempotent on the same parentWorkNodeId.
   enterSubWorkflow: (sessionId: string, parentWorkNodeId: string) => void;
-
-  // ── v0.6 unified-tree actions ──
-  // Toggle a node's fold state. Adds to ``expandedNodeIds`` /
-  // ``foldedNodeIds`` according to the node's ``defaultFolded``
-  // (override the default). Symmetrical: toggling a node that's
-  // currently overridden in either set removes the override (back to
-  // default). Idempotent on the same id within a single tick.
+  // Legacy v0.5 fold toggle — keyed on a ChatNode id, manipulates
+  // ``foldedNodeIds`` membership. Used by the drill-down chat-flow
+  // fold UX (currently dormant in production but kept for future
+  // ChatFlow-layer fold features). v0.6 redo deliberately does NOT
+  // introduce a unified expand/collapse model — that was the v0.6
+  // first-attempt mistake. See `handoff-v0.6-redo-node-base-interop.md`
+  // hard constraint #4.
   toggleFold: (sessionId: string, nodeId: string) => void;
-  // Enter focus mode with this node as the visible subtree root. Per
-  // 抉择 2, triggered by right-click → "Focus on this subtree" in the
-  // canvas context menu. Selection is preserved (so the focused
-  // subtree opens with the user's last click highlighted).
-  enterFocus: (sessionId: string, nodeId: string) => void;
-  // Exit focus mode. Equivalent to truncating to the full canvas.
-  exitFocus: (sessionId: string) => void;
 }
 
 // ─── Live event slice (stub for v∞.0) ────────────────────────────────────────

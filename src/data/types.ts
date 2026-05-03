@@ -1,17 +1,21 @@
 // Core data model for Loomscope.
 //
-// **v0.6 in progress** — the legacy two-layer model
+// Two-layer DAG (preserved from v0.1-v0.5; v0.6 redo unifies on a
+// shared ``NodeBase`` interface but does NOT collapse the visual
+// layers — see `handoff-v0.6-redo-node-base-interop.md` for why):
 //   ChatFlow → ChatNode[] → WorkFlow → WorkNode[]
-// is being collapsed into a single recursive ``Node`` tree (see
-// ``src/parse/nodeTree.ts`` and the new types at the bottom of this
-// file). Until M7 finishes the migration, both shapes coexist:
-//   - Legacy types still drive store / canvas / components (untouched).
-//   - The unified ``Node`` model is the new source of truth and feeds
-//     M2-M7 consumers as we migrate them milestone by milestone.
 //
-// The legacy section keeps its v0.1-v0.5 shape exactly so M1 ships
-// without breaking 227 existing tests. Once M7 lands, the legacy
-// section gets deleted in one final cleanup commit.
+// **v0.6 redo**: ChatNode and the 5 WorkNode kinds all ``extends
+// NodeBase`` so shared chrome (TokenBar, NodeIdLine, kind-aware
+// selectors) can read common fields (id / kind / model / usage / etc.)
+// without per-shape branching. The visual ChatFlow/WorkFlow split
+// stays — App.tsx still flips viewMode; ChatFlowCanvas + WorkFlowCanvas
+// stay separate; drill-stack model stays. `NodeBase` is data-layer
+// only.
+//
+// First-attempt v0.6 (`handoff-v0.6-data-model-unification.md`,
+// SUPERSEDED) tried to flatten the visual layers into a single Canvas
+// and was reverted (commit `f9f6f03`). Don't repeat that.
 //
 // Spec: docs/design-data-model.md
 // EdgeKind v0 renders the first 3; the remaining 5 are schema-only stubs.
@@ -33,6 +37,12 @@ export type WorkNodeKind =
   | "compact"
   | "attachment";
 
+// Every Node kind that a card can render — both ChatFlow-layer and
+// WorkFlow-layer combined. Used by shared chrome utilities so they
+// don't have to duplicate the WorkNodeKind union with a ``"chat"``
+// alternative.
+export type AnyNodeKind = "chat" | WorkNodeKind;
+
 export type ChatNodeTrigger = "user" | "scheduled";
 export type ChatFlowTrigger = "user" | "cron-fired";
 
@@ -42,29 +52,87 @@ export interface Edge {
   kind: EdgeKind;
 }
 
-// ─── WorkFlow layer ──────────────────────────────────────────────────────────
+// ─── Shared block / value types ─────────────────────────────────────
 
 export interface ThinkingBlock {
   text: string;
   signature?: string;
 }
 
-export interface LlmCallNode {
-  id: string; // assistant record uuid
+// Canonical shape of `usage` on assistant records + sub-agent
+// totals. CC's jsonl actually stores a Record<string, unknown>; this
+// alias gives the shared chrome (TokenBar) one place to look up the
+// commonly-used numeric fields. Unknown extra keys pass through.
+export interface UsageRecord {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  [key: string]: unknown;
+}
+
+// ─── NodeBase (v0.6 redo shared interface) ──────────────────────────
+//
+// Fields on every node, regardless of which layer (ChatFlow / WorkFlow)
+// it belongs to. Pulled out so chrome atoms — TokenBar, NodeIdLine,
+// selection-aware borders — can read them without per-kind branching.
+//
+// Naming: ``id`` is the canonical Node identifier (= promptId for
+// ChatNode, = tool_use block id / record uuid for WorkNode). ``kind``
+// is the discriminator. ``parentUuid`` is the raw record-level
+// ancestry pointer (legacy field; ChatNode renamed it
+// ``parentChatNodeId`` for clarity but the **id-space** is different
+// — keep parentUuid only on WorkNode subtypes; ChatNode has its own
+// ``parentChatNodeId``).
+//
+// What's NOT on NodeBase (and why):
+//   - parentUuid / parentChatNodeId — different id spaces between layers;
+//     fields stay on the concrete subtypes
+//   - WorkFlow / inner sub-graph — only meaningful for ChatNode
+//   - kind-specific payloads (toolName, summaryText, etc.) — concrete
+//     subtypes carry them
+export interface NodeBase {
+  id: string;
+  kind: AnyNodeKind;
+  // Wall-clock timestamp from the underlying record; missing for some
+  // synthetic nodes (e.g. compact summary derived from boundary).
+  timestamp?: string;
+  // Surfaced model identifier when the node represents a model call
+  // (assistant_call) or aggregates one (delegate's last sub-LLM,
+  // ChatNode's terminal assistant). Drives TokenBar's max-context
+  // lookup for those kinds; undefined for kinds with no model
+  // attribution (tool_call / attachment).
+  model?: string;
+  // Token usage at the granularity the kind cares about. ``llm_call``
+  // = the assistant record's own usage; ``delegate`` = sub-agent
+  // aggregated usage; ``compact`` synthesises from preTokens. Optional
+  // because ChatNode-layer reads it through ``aggregate`` instead.
+  usage?: UsageRecord;
+  // Errors observed on the underlying record (api_error subtypes etc.).
+  errors?: NodeError[];
+}
+
+export interface NodeError {
+  type: string;
+  message?: string;
+}
+
+// Backward-compat alias — v0.5 callers used ``WorkNodeError`` for the
+// same shape. Keep the name available so legacy imports don't break.
+export type WorkNodeError = NodeError;
+
+// ─── WorkFlow layer (each kind extends NodeBase) ────────────────────
+
+export interface LlmCallNode extends NodeBase {
   kind: "llm_call";
   parentUuid: string | null;
   requestId?: string;
-  model?: string;
   text: string; // joined text blocks (often "")
   thinking: ThinkingBlock[];
   stopReason?: string;
-  usage?: Record<string, unknown>;
-  timestamp?: string;
-  errors?: WorkNodeError[];
 }
 
-export interface ToolCallNode {
-  id: string; // tool_use block id (toolu_…)
+export interface ToolCallNode extends NodeBase {
   kind: "tool_call";
   parentUuid: string | null; // assistant record uuid that owned the block
   toolName: string;
@@ -74,11 +142,9 @@ export interface ToolCallNode {
   toolUseResult?: unknown; // raw record-level toolUseResult
   isError?: boolean;
   durationMs?: number;
-  timestamp?: string;
 }
 
-export interface DelegateNode {
-  id: string; // tool_use block id
+export interface DelegateNode extends NodeBase {
   kind: "delegate";
   parentUuid: string | null;
   toolName: "Agent" | "Task" | string;
@@ -92,15 +158,14 @@ export interface DelegateNode {
   totalDurationMs?: number;
   totalTokens?: number;
   totalToolUseCount?: number;
-  usage?: Record<string, unknown>;
+  // Aggregated tool usage stats from toolStats (sub-agent's tool-call
+  // breakdown).
   toolStats?: Record<string, unknown>;
   toolUseResult?: unknown;
   isError?: boolean;
-  timestamp?: string;
 }
 
-export interface CompactNode {
-  id: string; // user record uuid (the one with isCompactSummary=true)
+export interface CompactNode extends NodeBase {
   kind: "compact";
   parentUuid: string | null;
   boundaryUuid?: string; // matching system/compact_boundary uuid
@@ -109,16 +174,13 @@ export interface CompactNode {
   preTokens?: number;
   preCompactDiscoveredTools?: unknown;
   summaryText: string; // raw summary content
-  timestamp?: string;
 }
 
-export interface AttachmentNode {
-  id: string; // attachment record uuid
+export interface AttachmentNode extends NodeBase {
   kind: "attachment";
   parentUuid: string | null;
   attachmentType: string;
   raw: unknown;
-  timestamp?: string;
 }
 
 export type WorkNode =
@@ -128,17 +190,12 @@ export type WorkNode =
   | CompactNode
   | AttachmentNode;
 
-export interface WorkNodeError {
-  type: string;
-  message?: string;
-}
-
 export interface WorkFlow {
   nodes: WorkNode[];
   edges: Edge[];
 }
 
-// ─── ChatNode layer ──────────────────────────────────────────────────────────
+// ─── ChatNode layer ──────────────────────────────────────────────────
 
 export interface ChatNodeUserMessage {
   uuid: string;
@@ -152,7 +209,7 @@ export interface ChatNodeMeta {
   scheduledFireUuid?: string; // system/scheduled_task_fire uuid linked to this ChatNode
   fileHistorySnapshotUuids?: string[];
   permissionModeChanges?: Array<{ uuid: string; permissionMode: string }>;
-  errors?: WorkNodeError[];
+  errors?: NodeError[];
 }
 
 // CC slash-command invocation (e.g. /model, /compact, /cost) does NOT go
@@ -168,8 +225,14 @@ export interface SlashCommandInfo {
   stdout?: string; // contents of <local-command-stdout>; ANSI escapes stripped
 }
 
-export interface ChatNode {
-  id: string; // = promptId
+export interface ChatNode extends NodeBase {
+  // ``kind: "chat"`` discriminates ChatNode from WorkNode in code that
+  // works against ``NodeBase``. Cards / chrome that need to switch
+  // behaviour by layer use this; cards specific to ChatFlow vs
+  // WorkFlow can still narrow by interface name as before.
+  kind: "chat";
+  // = promptId (the cluster key for v0.1 bucketing).
+  id: string;
   parentChatNodeId: string | null;
   rootUserUuid: string;
   userMessage: ChatNodeUserMessage;
@@ -184,7 +247,7 @@ export interface ChatNode {
   meta: ChatNodeMeta;
 }
 
-// ─── ChatFlow layer ──────────────────────────────────────────────────────────
+// ─── ChatFlow layer ──────────────────────────────────────────────────
 
 export interface ChatFlow {
   id: string; // = sessionId
@@ -220,193 +283,4 @@ export interface FlowEvent {
   uuid?: string;
   timestamp?: string;
   data?: unknown;
-}
-
-// ─── v0.6 unified Node tree ──────────────────────────────────────────────────
-//
-// Single recursive tree replaces the ChatFlow/ChatNode/WorkFlow/WorkNode
-// stack. Every entity that v0.1-v0.5 represented as a separate type is
-// now a ``Node`` differing only in ``kind`` + which optional fields it
-// populates. Folding is **the** mechanism for visual density: per-kind
-// defaults live in ``defaultFolded`` (set at parse time), the store
-// layers user overrides on top.
-//
-// Why one type instead of a discriminated union per kind: the canvas
-// renders a single ``<NodeCard>`` that branches on ``kind`` for chrome.
-// A discriminated union would force every consumer through a switch
-// statement, which we already had with WorkNode and is exactly the
-// fragmentation v0.6 is trying to undo. Optional fields keyed by kind
-// (documented inline) trade type-precision for code uniformity — it's
-// the right trade for a viewer that has to render every kind anyway.
-
-export type NodeKind =
-  // Root of a "turn" — a user record (or slash-command body, or
-  // ScheduleWakeup sentinel). promptId of the bucket is on this node.
-  | "user_message"
-  // One assistant record. Carries text + thinking blocks. tool_use
-  // blocks emit separate ``tool_call`` / ``delegate`` children.
-  | "assistant_call"
-  // One tool_use block (non-Agent/Task) + its tool_result.
-  | "tool_call"
-  // Agent/Task tool_use + result. ``agentId`` (when present) anchors
-  // sub-agent lazy-load (sidecar is a separate Node tree attached on
-  // demand under this delegate).
-  | "delegate"
-  // isCompactSummary user record + paired compact_boundary metadata.
-  | "compact"
-  // file / edited_text_file / queued_command / invoked_skills /
-  // compact_file_reference / skill_listing.
-  | "attachment";
-
-// Aggregate signals the parser pre-computes for a turn-root
-// ``user_message`` so the folded card can render the v0.5-equivalent
-// chrome (assistant preview + counts + token bar) without walking
-// children at render time. Mirrors the data the legacy ChatNodeCard
-// derived in ``layoutDag.ts`` so option-A folding visually matches v0.5.
-export interface NodeAggregate {
-  // Last assistant_call's text in the turn (terminal reply preview).
-  assistantPreview: string;
-  // Counts of immediate descendants by kind.
-  llmCallCount: number;
-  toolCallCount: number;
-  delegateCount: number;
-  attachmentCount: number;
-  // Sum of thinking-block char counts under this turn (for the
-  // ``▸ thinking Nk`` chip).
-  thinkingChars: number;
-  // Last assistant_call's usage snapshot (input + cache_creation +
-  // cache_read) — drives the TokenBar denominator selection too.
-  contextTokens: number;
-  // From the last assistant_call's model field. Undefined for
-  // slash-command-only turns (no LLM invocation).
-  model?: string;
-}
-
-export interface Node {
-  // Stable id. Conventions:
-  //   - user_message: rootUserUuid (the chosen user record's uuid)
-  //   - assistant_call: assistant record uuid
-  //   - tool_call / delegate: tool_use block id (toolu_…)
-  //   - compact: compact user record uuid (with #N suffix on dup)
-  //   - attachment: attachment record uuid
-  id: string;
-  // Direct parent in the unified tree. ``null`` = top-level (a turn root
-  // whose preceding ChatNode lives in a different session, or the
-  // first turn of the session).
-  parentId: string | null;
-  kind: NodeKind;
-  // Original record uuid (for cross-references / debugging). Same as
-  // ``id`` for most kinds; tool_use kinds preserve the host
-  // assistant uuid here so we can find which llm_call emitted them.
-  uuid?: string;
-  timestamp?: string;
-  // Promptid the underlying record carried (or inherited via parentUuid
-  // walk). Multiple Nodes share a promptId; not 1-1 with id.
-  promptId?: string;
-  // Default fold state computed at parse time. UI overrides accumulate
-  // in store sets ``foldedNodeIds`` / ``expandedNodeIds`` and apply
-  // on top.
-  defaultFolded: boolean;
-  // True iff this node is the root of a promptId bucket (= one of the
-  // 1522 ChatNodes in legacy v0.5 vocabulary). Stable signal for stats
-  // / breadcrumb / "this is a turn boundary" — independent of fold
-  // state or cross-bucket linking re-parenting.
-  isTurnRoot?: boolean;
-
-  // ── user_message ─────────────────────────────────────────────────
-  role?: "user" | "assistant" | "system";
-  content?: unknown; // raw user record content (string or block[])
-  attachments?: Array<{ uuid: string; type: string; raw: unknown }>;
-  slashCommand?: SlashCommandInfo;
-  awaySummary?: { uuid: string; content: string; timestamp?: string };
-  trigger?: ChatNodeTrigger;
-  triggerSource?: { workNodeId: string };
-  fileHistorySnapshotUuids?: string[];
-  permissionModeChanges?: Array<{ uuid: string; permissionMode: string }>;
-  // Pre-computed aggregate (set on user_message kind only) — see
-  // NodeAggregate above.
-  aggregate?: NodeAggregate;
-
-  // ── assistant_call ───────────────────────────────────────────────
-  text?: string;
-  thinking?: ThinkingBlock[];
-  model?: string;
-  stopReason?: string;
-  usage?: Record<string, unknown>;
-  requestId?: string;
-
-  // ── tool_call / delegate ─────────────────────────────────────────
-  toolName?: string;
-  toolInput?: unknown;
-  toolResultUserUuid?: string;
-  toolResultBlock?: unknown;
-  toolUseResult?: unknown;
-  isError?: boolean;
-  durationMs?: number;
-
-  // ── delegate-specific ────────────────────────────────────────────
-  agentId?: string;
-  agentType?: string;
-  description?: string;
-  prompt?: string;
-  status?: string;
-  // The sub-agent's final reply text, surfaced from toolUseResult so
-  // the folded delegate card can show a 1-line head without loading
-  // the sidecar.
-  delegateContent?: string;
-  totalDurationMs?: number;
-  totalTokens?: number;
-  totalToolUseCount?: number;
-  delegateUsage?: Record<string, unknown>;
-  toolStats?: Record<string, unknown>;
-
-  // ── compact ──────────────────────────────────────────────────────
-  boundaryUuid?: string;
-  logicalParentUuid?: string;
-  compactTrigger?: "auto" | "manual" | string;
-  preTokens?: number;
-  preCompactDiscoveredTools?: unknown;
-  summaryText?: string;
-  isCompactSummary?: boolean;
-
-  // ── attachment ───────────────────────────────────────────────────
-  attachmentType?: string;
-  attachmentRaw?: unknown;
-
-  // Errors observed on the underlying record (api_error subtypes etc.).
-  errors?: WorkNodeError[];
-}
-
-export interface NodeTree {
-  // Session-level metadata mirrors the legacy ChatFlow header.
-  id: string;
-  mainJsonlPath: string;
-  sidecarDir: string;
-  cwd?: string;
-  gitBranch?: string;
-  createdAt?: string;
-  lastUpdatedAt?: string;
-  trigger: ChatFlowTrigger;
-  triggerSource?: {
-    sessionId: string;
-    jsonlPath: string;
-    sourceWorkNodeId: string;
-  };
-  // The forest. ``rootNodeIds`` are top-level (parentId = null);
-  // typically there's exactly one (the first turn) but multi-root
-  // sessions exist.
-  rootNodeIds: string[];
-  // All nodes, keyed by id for O(1) parent / child resolution. The
-  // store consumes this directly and adds fold-state sets on top.
-  nodes: Map<string, Node>;
-  // Children index: parentId → sorted child ids. Built once at parse
-  // time so layout / canvas don't have to walk ``nodes`` to enumerate
-  // children. Sort key = timestamp (ascending), uuid as tiebreaker.
-  childrenByParent: Map<string, string[]>;
-  // Records that couldn't be placed into the tree (no promptId, not a
-  // known flow event). Same semantics as legacy ChatFlow.orphans.
-  orphans: OrphanRecord[];
-  // Top-level events not bound to any single Node (ScheduleWakeup
-  // fires, standalone permission-mode flips, etc.).
-  flowEvents: FlowEvent[];
 }

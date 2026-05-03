@@ -6,6 +6,7 @@ import type { ChatFlow, ChatNode } from "@/data/types";
 function makeChatNode(overrides: Partial<ChatNode>): ChatNode {
   const id = overrides.id ?? "p-1";
   return {
+    kind: "chat",
     id,
     parentChatNodeId: null,
     rootUserUuid: `${id}-u`,

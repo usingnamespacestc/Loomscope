@@ -32,26 +32,3 @@ export function useIsWorkNodeSelected(id: string): boolean {
     return s.sessions.get(sid)?.workflowSelectedNodeId === id;
   });
 }
-
-/**
- * v0.6 unified selection hook — returns true iff `id` is selected at
- * EITHER the ChatFlow layer (legacy ``selectedNodeId``) or the
- * WorkFlow layer (legacy ``workflowSelectedNodeId``). During the
- * v0.6 transition (M2 → M5) both writers coexist; once M5 collapses
- * selection per抉择 3 the WorkFlow check becomes a no-op and this
- * hook becomes the canonical selector.
- *
- * Per-card subscription model is preserved exactly: each card
- * subscribes to one boolean, and identity-equal returns short-circuit
- * Zustand's render diff so 1498 cards still skip re-render on a
- * single-node selection change.
- */
-export function useIsNodeSelected(id: string): boolean {
-  return useStore((s) => {
-    const sid = s.activeSessionId;
-    if (!sid) return false;
-    const sess = s.sessions.get(sid);
-    if (!sess) return false;
-    return sess.selectedNodeId === id || sess.workflowSelectedNodeId === id;
-  });
-}

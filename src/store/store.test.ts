@@ -155,20 +155,16 @@ describe("Session slice", () => {
     expect(useStore.getState().activeSessionId).toBe("abc");
   });
 
-  it("toggleFold (no nodeTree loaded) flips expandedNodeIds membership symmetrically", () => {
-    // v0.6 transitional: with no nodeTree the action falls back to
-    // ``defaultFolded=true`` (same as a fresh tool_call would use),
-    // so the first toggle EXPANDS the node and the second toggle
-    // returns it to default. Pre-v0.6 callers that wrote into
-    // foldedNodeIds with no tree should switch to expandedNodeIds —
-    // membership semantics are equivalent for the no-tree path.
+  it("toggleFold flips foldedNodeIds membership symmetrically", () => {
+    // v0.5 simple membership semantics — first toggle adds the id,
+    // second toggle removes it. v0.6 redo deliberately keeps this
+    // shape; the v0.6 first-attempt expandedNodeIds + per-kind default
+    // model was reverted (see hard constraint #4 in the redo handoff).
     useStore.getState().toggleFold("sid", "node-1");
     let s = useStore.getState().sessions.get("sid");
-    expect(s?.expandedNodeIds.has("node-1")).toBe(true);
-    expect(s?.foldedNodeIds.has("node-1")).toBe(false);
+    expect(s?.foldedNodeIds.has("node-1")).toBe(true);
     useStore.getState().toggleFold("sid", "node-1");
     s = useStore.getState().sessions.get("sid");
-    expect(s?.expandedNodeIds.has("node-1")).toBe(false);
     expect(s?.foldedNodeIds.has("node-1")).toBe(false);
   });
 

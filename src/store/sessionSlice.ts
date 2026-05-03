@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
 
-import type { ChatFlow, DelegateNode, NodeTree } from "@/data/types";
+import type { ChatFlow, DelegateNode } from "@/data/types";
 import type { AgentMetadata } from "@/parse/sidecar";
 import type {
   DrillFrame,
@@ -9,7 +9,6 @@ import type {
   SessionState,
   SubAgentCacheEntry,
 } from "@/store/types";
-import { chatFlowToNodeTree } from "@/parse/chatFlowAdapter";
 
 const EMPTY_VIEWPORT = { x: 0, y: 0, zoom: 1 };
 
@@ -21,9 +20,6 @@ function blankSessionState(): SessionState {
     selectedNodeId: null,
     workflowSelectedNodeId: null,
     drillStack: [],
-    nodeTree: null,
-    expandedNodeIds: new Set<string>(),
-    focusedSubtreeRootId: null,
     subAgentCache: new Map<string, SubAgentCacheEntry>(),
     isLoading: false,
     error: null,
@@ -57,17 +53,11 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
 
     try {
       const cf = await fetchJson<ChatFlow>(`/api/sessions/${id}`);
-      // M2 transitional: derive the unified Node tree from the legacy
-      // ChatFlow client-side. Avoids double-parse on the server (~5s
-      // for 256MB) and doubled JSON payload. Equivalence with a direct
-      // M1 parse is pinned by ``chatFlowAdapter.test.ts``.
-      const nodeTree = chatFlowToNodeTree(cf);
       const updated = new Map(get().sessions);
       const cur = updated.get(id) ?? blankSessionState();
       updated.set(id, {
         ...cur,
         chatFlow: cf,
-        nodeTree,
         isLoading: false,
         error: null,
         lastUpdated: Date.now(),
@@ -107,11 +97,17 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     set({ activeSessionId: id });
   },
 
-  // (Legacy v0.5 toggleFold removed; the v0.6 implementation below
-  // handles both the foldedNodeIds and expandedNodeIds overlay sets,
-  // and falls back to defaultFolded=true when no nodeTree is loaded
-  // — preserving the membership-set behavior that v0.5 callers
-  // depended on.)
+  // Toggle a node's membership in ``foldedNodeIds``. v0.5 ChatFlow-
+  // layer fold UX (currently dormant). Symmetrical: re-toggle removes.
+  toggleFold: (sessionId, nodeId) => {
+    const updated = new Map(get().sessions);
+    const cur = updated.get(sessionId) ?? blankSessionState();
+    const folded = new Set(cur.foldedNodeIds);
+    if (folded.has(nodeId)) folded.delete(nodeId);
+    else folded.add(nodeId);
+    updated.set(sessionId, { ...cur, foldedNodeIds: folded });
+    set({ sessions: updated });
+  },
 
   setSelected: (sessionId, nodeId) => {
     const updated = new Map(get().sessions);
@@ -203,7 +199,6 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     const loadingEntry: SubAgentCacheEntry = {
       status: "loading",
       chatFlow: null,
-      nodeTree: null,
       meta: null,
       error: null,
       lastAccess: Date.now(),
@@ -221,13 +216,9 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
           chatFlow: ChatFlow;
           meta: AgentMetadata | null;
         };
-        // Same M2 transitional adapter — sub-agent cache surfaces
-        // both shapes so M5/M6 can swap consumers independently.
-        const nodeTree: NodeTree = chatFlowToNodeTree(body.chatFlow);
         const entry: SubAgentCacheEntry = {
           status: "ready",
           chatFlow: body.chatFlow,
-          nodeTree,
           meta: body.meta,
           error: null,
           lastAccess: Date.now(),
@@ -238,7 +229,6 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         const entry: SubAgentCacheEntry = {
           status: "error",
           chatFlow: null,
-          nodeTree: null,
           meta: null,
           error: e instanceof Error ? e.message : String(e),
           lastAccess: Date.now(),
@@ -251,66 +241,6 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     })();
     loadInFlight.set(dedupeKey, promise);
     return promise;
-  },
-
-  // ── v0.6 unified-tree actions ──────────────────────────────────────
-  // Toggle a node's fold state. The new model has two override sets
-  // on top of each Node's defaultFolded flag:
-  //   - expandedNodeIds: forces visible (overriding defaultFolded=true)
-  //   - foldedNodeIds:   forces collapsed (overriding defaultFolded=false)
-  // toggleFold flips the override membership; if the node was already
-  // overridden in either direction, removing the override returns to
-  // its default state. Symmetric and idempotent (one toggle per click).
-  toggleFold: (sessionId, nodeId) => {
-    const updated = new Map(get().sessions);
-    const cur = updated.get(sessionId) ?? blankSessionState();
-    const node = cur.nodeTree?.nodes.get(nodeId);
-    // Treat unknown-id (no tree, or id not yet in tree) as
-    // ``defaultFolded=true`` so the action behaves like the legacy
-    // v0.5 ``toggleFold`` membership flip — first call adds to
-    // expandedNodeIds, second call removes. Tests / callers that
-    // pre-date the unified tree continue to see usable semantics.
-    const defaultFolded = node?.defaultFolded ?? true;
-    const expanded = new Set(cur.expandedNodeIds);
-    const folded = new Set(cur.foldedNodeIds);
-    if (defaultFolded) {
-      // Default: folded. toggleFold means "expand it" (or undo expand).
-      if (expanded.has(nodeId)) {
-        expanded.delete(nodeId);
-      } else {
-        expanded.add(nodeId);
-        folded.delete(nodeId); // mutually exclusive
-      }
-    } else {
-      // Default: unfolded. toggleFold means "collapse it" (or undo collapse).
-      if (folded.has(nodeId)) {
-        folded.delete(nodeId);
-      } else {
-        folded.add(nodeId);
-        expanded.delete(nodeId);
-      }
-    }
-    updated.set(sessionId, { ...cur, expandedNodeIds: expanded, foldedNodeIds: folded });
-    set({ sessions: updated });
-  },
-
-  // Right-click context menu → "Focus on this subtree". Layout
-  // re-roots at this node; siblings and unrelated subtrees disappear
-  // until exitFocus.
-  enterFocus: (sessionId, nodeId) => {
-    const updated = new Map(get().sessions);
-    const cur = updated.get(sessionId) ?? blankSessionState();
-    if (cur.focusedSubtreeRootId === nodeId) return; // idempotent
-    updated.set(sessionId, { ...cur, focusedSubtreeRootId: nodeId });
-    set({ sessions: updated });
-  },
-
-  exitFocus: (sessionId) => {
-    const updated = new Map(get().sessions);
-    const cur = updated.get(sessionId) ?? blankSessionState();
-    if (cur.focusedSubtreeRootId === null) return;
-    updated.set(sessionId, { ...cur, focusedSubtreeRootId: null });
-    set({ sessions: updated });
   },
 
   enterSubWorkflow: (sessionId, parentWorkNodeId) => {
