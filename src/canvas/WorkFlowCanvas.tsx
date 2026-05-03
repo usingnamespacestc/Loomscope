@@ -17,7 +17,6 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Background,
   Controls,
-  MarkerType,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
@@ -88,23 +87,16 @@ function CanvasInner({ chatNode, sessionId }: WorkFlowCanvasProps) {
     [nodes, selectedNodeId],
   );
 
-  // Decorate edges with React Flow's built-in marker so the arrow
-  // auto-rescales with zoom (CSS-native), matching ContinuationEdge's
-  // SVG marker but on the unified ReactFlow MarkerType path. Order:
-  // markerEnd takes precedence over the per-edge component's marker
-  // when both set — we leave the component to draw the edge body and
-  // let MarkerType drive the arrow head visibility consistency.
-  const decoratedEdges = useMemo(
-    () =>
-      edges.map((e) => ({
-        ...e,
-        markerEnd:
-          e.type === "spawn"
-            ? { type: MarkerType.ArrowClosed, color: "#f59e0b", width: 12, height: 12 }
-            : { type: MarkerType.ArrowClosed, color: "#94a3b8", width: 12, height: 12 },
-      })),
-    [edges],
-  );
+  // Edges carry their own markers via the per-kind components
+  // (ContinuationEdge → `arrow-continuation` filled, SpawnEdge →
+  // `arrow-spawn` hollow triangle). Don't override `markerEnd` here:
+  // doing so via MarkerType.ArrowClosed forces every arrow to be
+  // filled, which violates the spawn = hollow-triangle rule in
+  // design-visual-language.md (`A ──▷ B` for spawn vs `A ──▶ B` for
+  // continuation). Custom SVG markers scale with the viewport
+  // transform just fine — we get filled / hollow distinction without
+  // sacrificing zoom rescaling.
+  const decoratedEdges = edges;
 
   // Auto fitView on drill-in. Sized so the largest WorkFlow renders
   // visibly; React Flow's fitView rescales to fit all measured nodes.
