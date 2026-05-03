@@ -10,6 +10,7 @@ import { useEffect, useMemo } from "react";
 
 import { ChatFlowCanvas } from "@/canvas/ChatFlowCanvas";
 import { WorkFlowCanvas } from "@/canvas/WorkFlowCanvas";
+import { DrillPanel } from "@/components/drill/DrillPanel";
 import { Header } from "@/components/Header";
 import { Sidebar } from "@/components/Sidebar";
 import { useStore } from "@/store/index";
@@ -56,6 +57,14 @@ export default function App() {
             </>
           )}
         </main>
+        {activeId && session?.chatFlow && (
+          <DrillPanel
+            sessionId={activeId}
+            chatFlow={session.chatFlow}
+            viewMode={view.mode}
+            drilledChatNode={view.mode === "workflow" ? view.chatNode : null}
+          />
+        )}
       </div>
     </div>
   );

@@ -25,6 +25,8 @@ export const useStore = create<LoomscopeStore>()(
       partialize: (state) => ({
         sidebarWidth: state.sidebarWidth,
         sidebarCollapsed: state.sidebarCollapsed,
+        drillPanelWidth: state.drillPanelWidth,
+        drillPanelCollapsed: state.drillPanelCollapsed,
         pinnedWorkspaces: state.pinnedWorkspaces,
         hiddenWorkspaces: state.hiddenWorkspaces,
         focusedWorkspace: state.focusedWorkspace,

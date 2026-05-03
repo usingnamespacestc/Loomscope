@@ -9,12 +9,17 @@ import type { ChatFlow } from "@/data/types";
 export interface UISlice {
   sidebarWidth: number;
   sidebarCollapsed: boolean;
+  // v0.4 drill panel width (right-side resizable). 0 = collapsed.
+  drillPanelWidth: number;
+  drillPanelCollapsed: boolean;
   pinnedWorkspaces: string[];
   hiddenWorkspaces: string[];
   focusedWorkspace: string | null;
 
   setSidebarWidth: (w: number) => void;
   toggleSidebar: () => void;
+  setDrillPanelWidth: (w: number) => void;
+  toggleDrillPanel: () => void;
   pinWorkspace: (cwd: string) => void;
   unpinWorkspace: (cwd: string) => void;
   hideWorkspace: (cwd: string) => void;

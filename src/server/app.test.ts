@@ -122,6 +122,107 @@ describe("GET /api/sessions/:id", () => {
   });
 });
 
+describe("GET /api/sessions/:id/tool-results/:refId", () => {
+  // Minimum overflow file used across cases. We pick a size > the
+  // 200 KB chunk threshold so tests can exercise both first-chunk +
+  // continuation reads.
+  const SID = "22222222-2222-4000-8000-000000000001";
+  const PROJECT = "-home-user-Foo";
+  const REF_ID = "abc_DEF-123";
+  const PAYLOAD_BYTES = 250 * 1024; // > 200 KB chunk
+  const PAYLOAD = Buffer.alloc(PAYLOAD_BYTES, "x");
+  // Stamp a recognizable boundary marker at byte 200_000 so we can
+  // verify the chunk start parameter actually advances the read.
+  PAYLOAD.write("BOUNDARY", 200_000);
+
+  beforeEach(async () => {
+    const projectDir = path.join(tmpRoot, PROJECT);
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, `${SID}.jsonl`),
+      JSON.stringify({ type: "user", uuid: "u1", sessionId: SID }) + "\n",
+    );
+    const sidecarDir = path.join(projectDir, SID, "tool-results");
+    await fs.mkdir(sidecarDir, { recursive: true });
+    await fs.writeFile(path.join(sidecarDir, `${REF_ID}.txt`), PAYLOAD);
+  });
+
+  it("returns the first 200 KB chunk by default with totalSize + hasMore", async () => {
+    const res = await app.request(`/api/sessions/${SID}/tool-results/${REF_ID}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      refId: string;
+      content: string;
+      start: number;
+      end: number;
+      totalSize: number;
+      hasMore: boolean;
+    };
+    expect(body.refId).toBe(REF_ID);
+    expect(body.start).toBe(0);
+    expect(body.end).toBe(200 * 1024);
+    expect(body.totalSize).toBe(PAYLOAD_BYTES);
+    expect(body.hasMore).toBe(true);
+    expect(Buffer.byteLength(body.content, "utf8")).toBe(200 * 1024);
+  });
+
+  it("?start advances the read so subsequent chunks pick up where the first ended", async () => {
+    const res = await app.request(
+      `/api/sessions/${SID}/tool-results/${REF_ID}?start=200000`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      content: string;
+      start: number;
+      end: number;
+      hasMore: boolean;
+    };
+    expect(body.start).toBe(200_000);
+    expect(body.end).toBe(PAYLOAD_BYTES);
+    expect(body.hasMore).toBe(false);
+    // The boundary marker we stamped at byte 200_000 must be at the
+    // very front of this chunk's content.
+    expect(body.content.startsWith("BOUNDARY")).toBe(true);
+  });
+
+  it("404s when the refId doesn't exist on disk", async () => {
+    const res = await app.request(
+      `/api/sessions/${SID}/tool-results/no_such_ref`,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when the session itself doesn't exist", async () => {
+    const res = await app.request(
+      `/api/sessions/00000000-0000-4000-8000-deadbeef0000/tool-results/${REF_ID}`,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("400s on a refId that contains path-traversal characters (rejected by zod)", async () => {
+    // ``..`` and ``/`` and dots are not in [A-Za-z0-9_-]. Hono's
+    // zValidator returns 400 on schema violation.
+    const res = await app.request(
+      `/api/sessions/${SID}/tool-results/${encodeURIComponent("../../etc/passwd")}`,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("416s when ?start exceeds the file size", async () => {
+    const res = await app.request(
+      `/api/sessions/${SID}/tool-results/${REF_ID}?start=999999999`,
+    );
+    expect(res.status).toBe(416);
+  });
+
+  it("400s on malformed ?start", async () => {
+    const res = await app.request(
+      `/api/sessions/${SID}/tool-results/${REF_ID}?start=oops`,
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("CSRF middleware", () => {
   it("rejects POST without X-Loomscope-Token", async () => {
     const res = await app.request("/api/health", { method: "POST" });
