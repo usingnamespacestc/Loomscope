@@ -13,7 +13,9 @@
 | **v0.4** | drill panel | 右侧 resizable sidebar + 5 类 WorkNode detail + chunked tool-result lazy-load + MarkdownView/JsonView/DiffView | ✅ commit `36f02b7`（195/195 tests；256MB selection round-trip 458ms avg → 已提前在 commit `df65051` 解决）|
 | **v0.4 +** | selection perf fix | per-card Zustand 订阅，去掉 wrapper 重 prop 注入 | ✅ commit `df65051`（202/202；1522-ChatNode 458→78.9ms / 5.8×） |
 | **v0.5** | sub-agent 双态 | drill 替换主视图（选项 A）+ 双击 delegate → push subworkflow 帧 + lazy load + cache + auto-compact badge + breadcrumb 多级 | ✅ commit `74d49d9`（227/227；cache hit 22ms / cold drill 1830ms / 实测嵌套深度 max 2）|
-| **v0.6** | **数据模型统一**（Node 树重构）| 取消 ChatFlow/WorkFlow 二分，统一为递归 Node 树 + 默认折叠规则 + 按 kind 切 chrome；吸收原 v0.5.1 (sub-agent 多 ChatNode) + 原 v0.5.2 (WorkNode token bar + id) + 原 v2.0 (data model unification) | |
+| **v0.6** | **数据模型统一**（Node 树重构）| 取消 ChatFlow/WorkFlow 二分，统一为递归 Node 树 + 默认折叠 + 按 kind 切 chrome；吸收 v0.5.1 / v0.5.2 / v2.0 | ✅ M1-M7 commits `01c3bcf` → `cfe9026`（324/324，+97 测试；selection 78.9 → **21.2ms** 4×；多 ChatNode banner 消失）|
+| **v0.6.1** | legacy cleanup | 删掉旧 ChatFlowCanvas / WorkFlowCanvas / 5 类 WorkNode card / ChatNodeCard / ChatNode/WorkNode types / chatFlowAdapter / parse/jsonl.ts + workflow-builder.ts；同步重写 design-data-model.md 全文 | |
+| **v0.6.2** | ExpandHint 全 kind | 当前只 user_message 有"展开工作流"按钮；assistant_call / tool_call / delegate 也有 children 但只能 dblclick 触发（受 RF 限制）。给所有 hasFoldedChildren=true 的卡片加 ExpandHint | |
 | **v0.7** | compact handling | 处理 isCompactSummary 节点 + logicalParentUuid 边 + file-history-snapshot 时间窗绑定（基于 v0.6 统一 Node）| |
 | **v0.8** | fork 浏览 | parser 读 `forkedFrom` + `custom-title` / server merge fork 树 / ConversationView + branchMemory / canvas fork badge | |
 | **v0.9** | file-tail mode | 监听 jsonl mtime 增量更新 canvas | |
@@ -188,14 +190,63 @@ delegate WorkNode 不再是 dead-end 折叠卡，双击展开 lazy 加载 sideca
 - v0.7 compact 完整交互
 - v0.10 sub-agent cache LRU eviction（目前 session 切换全清，单 session 内不淘汰；对当前 session 大小 OK，未来跨 session 持久化时再做）
 
-## v0.6 — Data Model Unification（递归 Node 树重构）
+## v0.6 — Data Model Unification（已 ship 2026-05-03 commits `01c3bcf` → `cfe9026`）
 
 **触发原因**：v0.5 sub-agent 真嵌套实测暴露架构缺陷——sub-agent jsonl 是完整 ChatFlow（含多个 ChatNode），但 Loomscope 当前 ChatFlow/WorkFlow 二分把它塌缩成单 WorkFlow 渲染（27% sub-agent 信息丢失）。根问题不是"多渲染几个 ChatNode"，是 **Loomscope 沿用 Agentloom 的 ChatFlow/WorkFlow 二分硬套到 CC 的扁平 record tree 上**——CC jsonl 自己就是 unified parentUuid 树，二分是 Loomscope 解析时硬塞的。
 
 v0.6 取消二分，统一为递归 `Node` 树 + 默认折叠规则 + 按 kind 切 chrome。**吸收**原计划：
-- v0.5.1（sub-agent 多 ChatNode 渲染）—— 统一模型下天然消失
-- v0.5.2（WorkNode token bar + id line）—— 所有 Node 共享同套 chrome 模板
-- v2.0（data model unification）—— 提前到 v0.6 完成
+- v0.5.1（sub-agent 多 ChatNode 渲染）—— ✅ 统一模型下天然消失，DelegateDetail amber banner 已删
+- v0.5.2（WorkNode token bar + id line）—— ✅ 所有 Node 共享同套 chrome 模板，token bar 出现在 user_message / delegate / compact，id line 全 kind
+- v2.0（data model unification）—— ✅ 提前到 v0.6 完成
+
+四个开放问题最终落地：
+
+- **抉择 1 折叠默认**：选 **A 保留 v0.5 视觉密度**（每 turn 一聚合卡，内部全 fold）。M3 实施时发现 `defaultFolded` 字段语义需精确定义为"我的 children 是否默认隐藏"而非"我自己是否默认隐藏"
+- **抉择 2 drill / focus**：选 **B 保留 focus + 右键菜单**（作者修订：alt+click → 右键，跨平台冲突更少）。`focusedSubtreeRootId` + 顶部 🎯 breadcrumb + ESC 退出
+- **抉择 3 Selection**：选 **A 单一 `selectedNodeId` + `useIsNodeSelected`**（transitional 期 hook 同时读 selectedNodeId + workflowSelectedNodeId 兼容 M5 dual-write）
+- **抉择 4 Migration**：选 **C 按 milestone 串行（M1-M7）**。每 M 独立 commit + 测试全绿，可单独 revert
+
+### Milestone commits
+
+| M | commit | 改动 | 累计测试 |
+|---|---|---|---|
+| M1 数据类型 + 解析器 | `01c3bcf` | +1726 / -1 | 257 |
+| M2 store 切片重写 | `e28b28f` | +902 / -19 | 280 |
+| M3 layout 合并 | `6c198d1` | +626 / -42 | 296 |
+| M4 单一 NodeCard | `4b7c364` | +1117 / -0 | 311 |
+| M5 Canvas 合并 + focus mode | `ff259f3` | +536 / -42 | 316 |
+| M6 DrillPanel 适配 | `4558fff` | +738 / -81 | 324 |
+| M7 ship + doc banner | `cfe9026` | +1 / -1 | 324 |
+| **总** | 7 commits | **+5646 / -186** / 31 文件次 | **324** (+97) |
+
+### 性能对比表
+
+| 指标 | v0.5 baseline | v0.6 实测 | Δ |
+|---|---|---|---|
+| 256MB jsonl 解析（server） | 2479ms（legacy）| 2816ms（nodeTree） | +14%（Map alloc 成本，可接受）|
+| Selection round-trip avg | 78.9ms | **21.2ms** | **−73%**（4×）|
+| Selection round-trip max p95 | 86ms | 27.3ms | −68% |
+| Sub-agent cache 命中 | 22ms | 22ms | 不变 |
+| 多 ChatNode amber banner | 27% sub-agent 显示 | **GONE** | ✅ |
+
+Selection 4× 加速来由：v0.4 fix 让每张卡 per-card 订阅，但 1500 卡 + 内部展开节点都要跑订阅回调；v0.6 默认状态只有 1522 turn root 可见（内部全 fold），React Flow reconcile 量减半 + per-card short-circuit 乘起来就是 4×。
+
+### 实测发现的 5 个 bug / surprise
+
+1. **默认折叠语义混淆**：`defaultFolded` 字段精确定义为"children 是否默认隐藏"，不是"我是否默认隐藏"——M3 实施时改正
+2. **Cross-bucket linking 让 focus 走错**：`collectSubtreeIds` 遇到 descendant turn root 必须 stop，否则一 focus 拖全图
+3. **解析器 cross-bucket linking O(N²)**：M1 第一版 4083ms，加 `terminalAssistantByPromptId` Map 后 2816ms
+4. **Legacy llm_call ID 重复 3915 个 + attachment 重复 318 个**：legacy 用 array push 没去重，多 ChatNode 同 uuid record 被重复引用——v0.5 没爆是因为 drill 一次只渲一个；v0.6 Map dedup 自动修
+5. **Playwright dispatchEvent('dblclick') 仍然不触发 RF 12 onNodeDoubleClick**（v0.5 已知再确认）——测试走 ExpandHint 按钮路径
+
+详细见 v0.6 ship 报告（context-handoff.md 历史更新区）。
+
+### 留给后续版本
+
+- **v0.6.1（建议立即 cleanup）**：删 legacy code（ChatFlowCanvas / WorkFlowCanvas / 5 类 WorkNode card / ChatNodeCard / ChatNode/WorkNode types / chatFlowAdapter / parse/jsonl.ts + workflow-builder.ts）+ 同步重写 design-data-model.md 全文（10 章节清单见 ship 报告）
+- **v0.6.2**：assistant_call / tool_call / delegate 也加 ExpandHint affordance（当前只 user_message 有；其他只能 dblclick 触发，但 RF dblclick 在 Playwright 不工作）
+- **v0.7 compact 完整交互**（基于 unified Node 模型）
+- **v0.10**：256MB 解析 ≤ 2.19s（当前 2816ms；profile 后看是 dagre 还是 Map alloc 主导）+ 其他 polish
 
 ### 设计要点
 
