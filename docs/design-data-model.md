@@ -758,6 +758,58 @@ const RawRecordSchema = z.object({
 
 ⇒ v0 不渲染 = "ChatFlow 数据结构里跳过 unknown type / 走 fallback raw display"，但**底层 record 永远完整保留**——后续版本要加渲染时直接用现成数据。
 
+## Fork 机制（v0.7 浏览 + v∞.3 写入）
+
+CC 自身有两套独立的 fork 机制，Loomscope 的解析层和浏览层都要兼容这两种产物。源码参考 `~/claude-code-source-code/src/commands/branch/branch.ts` + `src/components/MessageSelector.tsx`。
+
+### 机制 1 · `/branch` 命令 → 跨 session（独立 jsonl）
+
+CC 的 `/branch` slash command（aliases：`/fork`，描述：`Create a branch of the current conversation at this point`，`argumentHint: [name]`）做的事：
+
+1. 生成新的 `sessionId`（randomUUID），新建独立 jsonl 文件
+2. 流式读源 jsonl，过滤掉 `isSidechain` 和非 message 类型记录（`mainConversationEntries`）
+3. 每条复制时改 `sessionId` 为新 id，串新 `parentUuid`，**保留原 `uuid`**，并加：
+   ```ts
+   forkedFrom: { sessionId: 原 sessionId, messageUuid: 该 record 原 uuid }
+   ```
+4. 末尾 append 一条 `{ type: 'custom-title', customTitle: "<原 firstPrompt> (Branch)" / "(Branch N)", sessionId: 新 id }`（`getUniqueForkName` 自动防撞）
+5. （可能 append 一条带新 sessionId 的 `content-replacement` 记录，用于 prompt cache 连续性）
+6. 调 `context.resume(forkSessionId, forkLog, 'fork')` 把用户切到新 session，stdout 提示 `"To resume the original: claude -r {originalSessionId}"`
+
+**关键事实**：
+
+- fork 起点**只能是当前 leaf**——`mainConversationEntries` 没有任何"挑某条 message 起"的过滤，是把整个文件全复制
+- 同一条 turn 在原 jsonl 和 fork jsonl 里 `uuid` 一致（`...entry` 全字段 spread 没覆盖 uuid）→ **可以 by uuid 跨文件 dedup**
+- `forkedFrom` 字段只被 `/branch` 写入，**CC 自己从不读它**（grep 整个源码只有 branch.ts 写、没有读路径）—— 跨 session fork 关系在 CC UI 里完全不可见，Loomscope 把它显式化是清晰的产品价值
+- sidechain 不复制 → fork session 的 sub-agent sidecar 目录初始为空
+
+### 机制 2 · MessageSelector + restore → 同 session 内 sibling
+
+`components/MessageSelector.tsx` 提供一个面板让用户挑过去某条 user message，然后 `rewindConversationTo(message)` 把活跃链截断到那点，用户 resubmit 后产生 in-session sibling。
+
+**关键限制**：
+
+- 只能选 **user message**（assistant / sidechain / synthetic / tool_result / isMeta 都不可选，过滤逻辑在 `selectableUserMessagesFilter`）
+- 只能选**当前活跃路径上的**——`messages` 数组只含活跃链路，旁支已存在的 sibling 看不到也选不了
+- 是 **truncate 而非 fork**：活跃状态退回到那点；旁支的旧 records 留在 jsonl 里没动，下次解析能看到
+
+**实测**：用户 jsonl 里同 session sibling fork 数量从 1 到 6500+ 不等，全部都是这条路径的产物（边操作边重发），形态固定 `{assistant, user}` 一对孩子共享一个 `parentUuid`。
+
+### Loomscope 的统一处理
+
+数据模型层面把两种 fork **合并成一种**：sibling ChatNode（`parentChatNodeId` 指向同一节点的多个 ChatNode）。具体：
+
+- **解析时**：parser 读 `forkedFrom` 字段挂到 `ChatNode.forkedFrom`，读 `{type: "custom-title"}` 挂到 `ChatFlow.customTitle`
+- **server load 时**：按 `forkedFrom` 闭包遍历 fork 树（沿 `forkedFrom.sessionId` 往回 + 反向扫所有 jsonl 找指向当前的子 fork），多 jsonl 的 records 按 `uuid` 去重 merge 后喂给 parser pass 4，自然落到 `parentChatNodeId` 链路
+- **输出**：单一 merged ChatFlow，多 sessionId 的不同分支都变成 ChatNode 的 sibling
+- **`ChatFlow.linkedSessions` 字段**：merged ChatFlow 顶层记录由哪些 sessionId 拼成，方便 UI 显示
+
+UUID 冲突时（理论上 CC 不会产生但要 robust）：保留**最早写入版本**（按 fork 树的根方向）。
+
+### 跟 v∞.3 编辑侧的关系
+
+v0.7 是浏览侧（merged ChatFlow + ConversationView + branchMemory）；v∞.3 是编辑侧（点节点起 fork、写 in-session sibling、可选导出独立 session）。两者共享同一套数据模型 —— v∞.3 写入产生的新 sibling 自动被 v0.7 浏览路径渲染。详细 step-by-step 实施 → `plan.md` 同名章节。
+
 ## 开放问题（待 v0.1 实现时回答）
 
 [TODO 你/作者回答]

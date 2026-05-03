@@ -102,10 +102,11 @@ Loomscope 不是单一形态，至少要支持两种使用方式：
 - 选定一个 session 后，渲染整个 session 为 ChatFlow + WorkFlow DAG
 - 支持点击 drill：看任一 user/assistant message 全文、任一 tool call 的 args + result、任一 compact 的完整 summary、任一大型 tool_result（自动 lazy 拉 `tool-results/*.txt`）
 - **支持 sub-agent 真嵌套展开**（点 delegate WorkNode → lazy 加载 `subagents/agent-<agentId>.jsonl` → 渲染子 WorkFlow，递归套娃）
+- **支持 fork 浏览**（v0.7）：把 in-session sibling（CC 的 edit-and-resubmit 产物）和 cross-session `/branch` 产物（独立 jsonl + `forkedFrom` 反向指针）合并到同一个 ChatFlow 里；canvas 上 fork 点显式标记；右栏 ConversationView 提供 root → 选中节点的线性阅读 + 分支切换 + branchMemory
 - 支持 file-tail：监听主 jsonl + sidecar 目录的 mtime，appended 内容增量入图
-- **跨 session 搜索 + 定位**（v0.8+ 后档）：在所有 session 或某 workspace 下的 sessions 内搜索内容，点结果跳转到对应 ChatNode
+- **跨 session 搜索 + 定位**（v0.9+ 后档）：在所有 session 或某 workspace 下的 sessions 内搜索内容，点结果跳转到对应 ChatNode
 
-**v∞ = 在线 client**（详细机制见 `design-architecture.md` "v∞ 交互机制"），分 3 档：
+**v∞ = 在线 client**（详细机制见 `design-architecture.md` "v∞ 交互机制"），分 4 档：
 
 **v∞.0 read-only 远程观察**（最先做）：
 - 用户终端跑着 CC，Loomscope 浏览器实时画面
@@ -117,10 +118,16 @@ Loomscope 不是单一形态，至少要支持两种使用方式：
 - 从 Loomscope 左面板 "新建 session" 按钮 → spawn CC（subprocess 或 Agent SDK）
 - 启动后用 v∞.0 机制观察
 
-**v∞.2 接管已有 session 续接 prompt**（最后做）：
-- canvas 输入框发 prompt 继续已存 session
+**v∞.2 接管已有 session 续接 prompt（leaf）**：
+- canvas 输入框发 prompt 继续已存 session（**仅 leaf-continuation**，任意起点 fork 是 v∞.3）
 - Agent SDK + `resume:sessionId`
 - ⚠ 要求用户先关闭终端 CC——同 session 不能两个 CC 进程同时写
+
+**v∞.3 任意节点 fork（"120% of CC"）**（最后做）：
+- 点 canvas 任意 ChatNode（含 assistant 节点、旁支 sibling）→ composer 提交新 turn 直接从该点 fork
+- 默认写当前 jsonl 的 in-session sibling（`parentUuid = 选中节点末 assistant uuid`），跟 CC 自己的 restore-then-resubmit 产物字节兼容
+- "导出为独立 session" 等价 CC `/branch` 但起点任意（CC 仅 leaf）
+- **CC 的 terminal UI 受限做不到的能力，是 Loomscope canvas 形态的核心价值之一**
 
 边界要点：
 - **v0 所有功能 v∞ 都继承**——v∞ 是叠加，不是重写
@@ -131,7 +138,7 @@ Loomscope 不是单一形态，至少要支持两种使用方式：
 
 - ❌ **Loomscope 直接编辑 jsonl 内容**：数据模型只读。v∞ 阶段允许"在 canvas 里发 prompt 继续对话"——但这条 prompt 仍由 Claude Code 写入 jsonl，**Loomscope 自己不直接修改**。
 - ❌ **多 session 对比 / batch 分析**：没找到清晰用例（"同时打开 5 个 session 看 diff" 不是真需求）。
-- ✅ **跨 session 搜索 + 定位**（**翻盘 yes**）：让用户能搜索全部 session（或某个 workspace 下的 sessions）的内容，并定位到具体 ChatNode / WorkNode。这是 Claude Code 自身缺失的能力，Loomscope 作为第三方交互界面正好补这个洞。优先级：**v0 后档**（v0.1-0.7 不做，v0.8+ / v1.0 做）。
+- ✅ **跨 session 搜索 + 定位**（**翻盘 yes**）：让用户能搜索全部 session（或某个 workspace 下的 sessions）的内容，并定位到具体 ChatNode / WorkNode。这是 Claude Code 自身缺失的能力，Loomscope 作为第三方交互界面正好补这个洞。优先级：**v0 后档**（v0.1-0.8 不做，v0.9+ / v1.0 做）。
 - ❌ **多 session 对比**（同上一条）：维持不做。
 - ❌ **Loomscope 改变 Claude Code 自身运行机制**：Loomscope 是第三方交互界面 + visualizer，**不重写 / 不 fork CC、不注入修改 CC 行为的 hook**。
 - ❌ **Loomscope 自己直接调 Claude API**（含 Anthropic SDK）：v0 通过文件读取数据，v∞ 通过 hook 进 CC 进程。
@@ -143,7 +150,7 @@ Loomscope 不是单一形态，至少要支持两种使用方式：
 - ❌ **L3 共指（Figma 多人鼠标 / 共同选中）**：v∞ 共读（L1）+ 共写（L2）支持；但不做"实时同步对方鼠标 / 折叠状态"那种 multiplayer UI。视频会议口头协调即可。
 - ❌ **公网暴露**（v0/v∞ 范围内）：不内置 TLS / 不做用户系统 / 不打 Docker image。**远端访问推荐 Tailscale / Cloudflare Tunnel / SSH tunnel**——overlay 网络层解决，Loomscope 仍然 localhost 监听。
   - 未来 backlog：基础功能开发完后，**可考虑做 Tier 1 + Tier 2 公网安全**（详见 `design-architecture.md` "未来 backlog · 公网暴露"）。即使做完，仍优先推荐 overlay 方案，公网直连作 last resort。
-- ❌ **不暴露 CC 全部 86 个 slash commands**：只 surface "第 2 类配置命令"对应的设置 UI（如 `/model` `/agents` `/mcp` `/permissions` 等）+ "第 1 类导航命令"在 Loomscope 自己的 UI 里有对应（`/resume` → 左侧 session 面板 等）。第 3 类会话内动作（`/compact` `/summary` `/branch` 等）用户在 v∞.2 canvas 输入框直接打——CC 自己处理。第 4 类（终端 / 鉴权 / 调试 / CCR / 外部集成）**完全不实现**。详细分类见 `design-architecture.md` "Settings 面板"章节。
+- ❌ **不暴露 CC 全部 86 个 slash commands**：只 surface "第 2 类配置命令"对应的设置 UI（如 `/model` `/agents` `/mcp` `/permissions` 等）+ "第 1 类导航命令"在 Loomscope 自己的 UI 里有对应（`/resume` → 左侧 session 面板；**`/branch` → v∞.3 点节点 fork（任意起点，比 CC 强）**等）。第 3 类会话内动作（`/compact` `/summary` 等其它）用户在 v∞.2 canvas 输入框直接打——CC 自己处理。第 4 类（终端 / 鉴权 / 调试 / CCR / 外部集成）**完全不实现**。详细分类见 `design-architecture.md` "Settings 面板"章节。
 
 ## 性能目标
 
