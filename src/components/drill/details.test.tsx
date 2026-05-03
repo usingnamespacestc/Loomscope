@@ -466,15 +466,55 @@ describe("WorkNodeDetail — attachment", () => {
     expect(screen.getByTestId("json-view")).toBeTruthy();
   });
 
-  it("flags compact_file_reference with content-compacted note", () => {
+  it("compact_file_reference renders dashed-gray card with filename + ⊠ marker (v0.7 M5 4A 精装)", () => {
     const node: AttachmentNode = {
       id: "a2",
       kind: "attachment",
       parentUuid: null,
       attachmentType: "compact_file_reference",
-      raw: { attachment: { filename: "x.ts" } },
+      raw: {
+        attachment: {
+          type: "compact_file_reference",
+          filename: "src/parse/jsonl.ts",
+          displayPath: "/home/u/Loomscope/src/parse/jsonl.ts",
+        },
+      },
     };
-    const { container } = render(<WorkNodeDetail workNode={node} sessionId="sid" />);
-    expect(container.textContent).toMatch(/compacted out of jsonl/);
+    render(<WorkNodeDetail workNode={node} sessionId="sid" />);
+    const card = screen.getByTestId("compact-file-reference-card");
+    expect(card.className).toMatch(/border-dashed/);
+    expect(card.className).toMatch(/gray/);
+    // Filename surfaced as bold heading.
+    expect(card.textContent).toContain("src/parse/jsonl.ts");
+    // displayPath surfaced as mono path.
+    expect(card.textContent).toContain("/home/u/Loomscope/src/parse/jsonl.ts");
+    // ⊠ badge + "原文不在 jsonl 中" subtitle.
+    expect(card.textContent).toMatch(/content compacted/);
+    expect(card.textContent).toMatch(/原文不在 jsonl 中/);
+  });
+
+  it("compact_file_reference card surfaces (filename 缺失) when filename absent", () => {
+    const node: AttachmentNode = {
+      id: "a3",
+      kind: "attachment",
+      parentUuid: null,
+      attachmentType: "compact_file_reference",
+      raw: { attachment: { type: "compact_file_reference" } },
+    };
+    render(<WorkNodeDetail workNode={node} sessionId="sid" />);
+    const card = screen.getByTestId("compact-file-reference-card");
+    expect(card.textContent).toMatch(/filename 缺失/);
+  });
+
+  it("non-compact attachment kinds keep the legacy type-label rendering (no compact card)", () => {
+    const node: AttachmentNode = {
+      id: "a-norm",
+      kind: "attachment",
+      parentUuid: null,
+      attachmentType: "queued_command",
+      raw: { attachment: { prompt: "x" } },
+    };
+    render(<WorkNodeDetail workNode={node} sessionId="sid" />);
+    expect(screen.queryByTestId("compact-file-reference-card")).toBeNull();
   });
 });

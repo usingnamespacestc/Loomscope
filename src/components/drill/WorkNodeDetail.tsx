@@ -500,21 +500,81 @@ function CompactDetail({ node }: { node: CompactNode }) {
 // ── attachment ────────────────────────────────────────────────────────
 
 function AttachmentDetail({ node }: { node: AttachmentNode }) {
+  // v0.7 M5 (design choice 4A 精装): compact_file_reference gets a
+  // dedicated dashed-gray fold-marker box that mirrors compact
+  // ChatNode's chrome convention. CC's compact_file_reference is the
+  // compressed form of a regular file attachment within a compact段 —
+  // {filename, displayPath} kept, content discarded. Surfacing both
+  // paths + an unambiguous ⊠ marker is the signal users need to know
+  // "this attachment is here as a placeholder; read the file from disk
+  // for the real content."
+  if (node.attachmentType === "compact_file_reference") {
+    return (
+      <>
+        <Section title="Attachment">
+          <CompactFileReferenceCard raw={node.raw} />
+        </Section>
+        <Section title="Raw">
+          <JsonView value={node.raw} />
+        </Section>
+      </>
+    );
+  }
   return (
     <>
       <Section title="Attachment">
         <ul className="text-[11px] text-gray-700 font-mono space-y-0.5">
           <li>type: {node.attachmentType}</li>
         </ul>
-        {node.attachmentType === "compact_file_reference" && (
-          <div className="mt-1.5 text-[10px] text-gray-500">
-            ⊠ original content compacted out of jsonl
-          </div>
-        )}
       </Section>
       <Section title="Raw">
         <JsonView value={node.raw} />
       </Section>
     </>
+  );
+}
+
+function CompactFileReferenceCard({ raw }: { raw: unknown }) {
+  // CC's compact_file_reference attachment shape:
+  //   { attachment: { type: "compact_file_reference", filename, displayPath } }
+  // displayPath is usually the absolute path; filename is the basename.
+  // Either may be missing on edge-case CC versions.
+  const att =
+    raw && typeof raw === "object" && raw !== null
+      ? ((raw as { attachment?: unknown }).attachment as
+          | { filename?: unknown; displayPath?: unknown }
+          | undefined)
+      : undefined;
+  const filename = typeof att?.filename === "string" ? att.filename : null;
+  const displayPath = typeof att?.displayPath === "string" ? att.displayPath : null;
+  return (
+    <div
+      data-testid="compact-file-reference-card"
+      className="rounded border border-dashed border-gray-300 bg-gray-50 p-2.5"
+    >
+      <div className="flex items-center gap-1.5 mb-1">
+        <span aria-hidden>📄</span>
+        <span className="text-[12px] font-semibold text-gray-900 break-all">
+          {filename || (
+            <span className="italic text-gray-400 font-normal">(filename 缺失)</span>
+          )}
+        </span>
+      </div>
+      {displayPath && (
+        <div
+          className="font-mono text-[10px] text-gray-500 break-all"
+          title={displayPath}
+        >
+          {displayPath}
+        </div>
+      )}
+      <div className="mt-1.5 inline-flex items-center gap-1 rounded bg-gray-200/80 px-1.5 py-0.5 text-[10px] text-gray-700">
+        <span aria-hidden>⊠</span>
+        <span>content compacted</span>
+      </div>
+      <div className="mt-1 text-[10px] text-gray-400">
+        原文不在 jsonl 中——需要从 disk 读取
+      </div>
+    </div>
   );
 }
