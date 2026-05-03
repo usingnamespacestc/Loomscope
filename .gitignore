@@ -12,3 +12,8 @@ coverage/
 src/**/*.js
 vite.config.js
 
+# Playwright e2e — see e2e/README.md
+test-results/
+playwright-report/
+.playwright/
+
