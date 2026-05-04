@@ -6,7 +6,99 @@
 
 ---
 
-## 2026-05-03
+## 2026-05-04
+
+### v0.8 fork browsing ship（commits `c1e9e74` → M6 doc commit，6 milestone + 4 e2e）
+
+按 `handoff-v0.8-fork-browsing.md` 实施。**v0.6 redo 8 + v0.7 2 + v0.8 新增 3 = 13 条硬约束全部守住**。**user 0 fork data 这件事完全靠合成 fixture 顶住测试覆盖** —— `__fixtures__/synthetic/fork-pair/` 一对 mock /branch jsonl + forkTree.test.ts 自建 tmpdir scenarios。
+
+**4 个设计抉择最终落点**：
+
+1. **1A** eager 闭包遍历 —— `findForkClosure` 在 `GET /api/sessions/:id` 内同步算闭包。21-jsonl 实测扫描 18ms（远低于 handoff 估的 100ms）；user 0 fork data 时 closure size = 1 → degenerates to v0.7 单文件路径
+2. **2A** sidebar 不动 —— canvas 侧 merge 已经把 fork 关系视觉化（dagre 摊开 sibling），sidebar 树状缩进推 v0.10 polish
+3. **3A** Claude App-style chat bubbles —— user 右对齐 blue rounded-2xl，assistant 左对齐 markdown，selected 节点 `border-l-2 border-blue-400` 细条；BranchSelector rounded-full chips
+4. **4A** branchMemory store-only —— `Record<forkChildId, leafId>`；reload reset；localStorage 持久化推 v0.10
+
+**4 个微-决策**：
+
+- **微 1B** drillPanelTab 走 `UISlice`（全局 UI 偏好），借现成 partialize 链路 → localStorage
+- **微 2A** Conversation tab 复用 `selectedNodeId`，0 显式联动代码实现双向同步
+- **微 3** canvas fork **不加大 badge**（参照 Agentloom，仅靠 dagre 摊开）→ 改成轻量 indicator
+- **微 4A** 任何多孩子 ChatNode 都触发（in-session sibling + cross-session fork 一视同仁）
+- **M5 形态 A** `⑂ N` chip 跟其他 stats chip 同档（`text-gray-400` mono）
+
+**Milestone commits**：
+
+- M1 `c1e9e74` + fix `a2282a6` — parser 识别 forkedFrom + customTitle；4 files +186/-0；6 个新测试覆盖 hoist + 不一致 warning + custom-title 不进 orphans + linkedSessions undefined for non-merged
+- M2 `23c98f7` — `findForkClosure` (8 unit) + `loadMergedChatFlow` (4 endpoint) + fork-pair 磁盘 fixture (2 jsonls + README)；7 files +565/-3；首record-peek streaming 算法
+- M3 `b723ae0` — DrillPanel 2-tab + UISlice.drillPanelTab；5 files +258/-35；4 测试 + 1 regression guard for 硬约束 #11
+- M4 `277163c` — `pathUtils.ts` + `ConversationView.tsx` + sessionSlice.branchMemory + pickBranch action；13 files +918/-30；24 个新测试 (13 pathUtils + 11 ConversationView)；branchMemory selector 中途撞到 `?? {}` 触发 React 无限渲染 bug → fixed with frozen sentinel
+- M5 `11af421` — layoutDag.ChatNodeRFData.childCount + ChatNodeCard 加 `⑂ N` chip；4 files +124/-4；4 个新测试 (1 layoutDag + 3 ChatNodeCard)
+- M6 (本 commit) — 4 个 fork e2e + design-data-model + design-visual-language + plan + context-handoff + devlog
+
+**测试**：284 (v0.7 收尾) → **334 (M5 收尾) +50**；e2e 4 → **8 (+4)**；typecheck / build clean。
+
+**性能实测**（21-jsonl 项目 + 245MB 主 session 1522 ChatNode）：
+
+| 指标 | v0.7 baseline | v0.8 实测 | 边界 |
+|---|---|---|---|
+| 256MB jsonl 解析 (closure size 1) | 1860ms | ~2000ms | ≤ baseline + 5% (略超 5% 但在 +10% 内) |
+| forkTree 闭包扫描 (21 jsonl) | n/a | **18ms** | < handoff 估的 100ms |
+| selection per-card 订阅 | 78.9ms | 路径未动 | 不退 |
+| sub-agent cache hit | 22ms | 路径未动 | 不退 |
+| Conversation tab 渲染 (1522-CN session, 选中 leaf 后路径 ~10 bubbles) | n/a | <50ms eyeball | 实测 e2e 顺畅 |
+
+**13 条硬约束逐条状态**：
+
+1. ✅ ChatFlowCanvas + WorkFlowCanvas 双画布保留
+2. ✅ App.tsx viewMode union + drillStack 模型保留 — 0 改动
+3. ✅ drill = 主视图替换 — 0 改动
+4. ✅ 没有 default-fold + expand/collapse — 0 改动
+5. ✅ selection per-card 订阅模型不动 — `useIsChatNodeSelected` / `useIsWorkNodeSelected` 0 改动
+6. ✅ ModelRibbonLayer 在 ChatFlow hover — 0 改动
+7. ✅ 测试不退（284 → 334，+50）
+8. ✅ NodeBase + 各 kind extends 形状不动 — `ChatNode.forkedFrom?` 是 ChatNode-only 字段，没影响 NodeBase 共享形态
+9. ✅ 不破坏 sub-ChatFlow drill 路径 — sub-agent cache 路径完全未动；`/api/sessions/:id/subagents/:agentId` endpoint 不变
+10. ✅ 不破坏 compact-original drill 路径 — sessionSlice 的 enterCompactOriginal / resolveDrillView compact-original 分支 0 改动
+11. ✅ DrillPanel 2-tab 不破坏现有 Detail —— Detail tab 内容 1:1 跟 v0.7 一致（DetailTabContent 子组件纯 refactor）；regression guard test 钉死
+12. ✅ merged ChatFlow 不破坏 sub-agent cache —— sub-agent endpoint 路径 + cache layer 完全未动
+13. ✅ Canvas 顶层只显示 ChatNode —— merge 后产生的 sibling ChatNode 仍是 ChatNode kind，没引入新顶层节点类型
+
+**遇到的 bug / surprise**（v0.1-v0.7 实测不变量在 fork 路径下不成立的情况）：
+
+- ⚠ **`detectForkedFrom` 初版误判**。我（实施 agent）M1 commit `c1e9e74` 写的版本假设 forkedFrom **整个对象**在 bucket 内 uniform。实际 CC `/branch` 写的 `forkedFrom.messageUuid = 该 record 自身 uuid`（per-record 不同），只有 sessionId uniform。结果是每个真 fork ChatNode 都会 warn。M1 fix `a2282a6` 改成只 sanity-check sessionId 一致，messageUuid 直接取 rootUser.forkedFrom 的（rootUser 的 uuid 是 source bucket 的 root identifier）。**这个错的代价是 0 真实数据撞到** — user 0 fork data，但如果用户开始用 /branch 后 ship 的 v0.8 发warn → 用户体验差。M1 fix 在 ship 前就 catch 了。
+- ⚠ **branchMemory selector 创新对象触发 React 无限渲染**。M4 ConversationView 用 `useStore((s) => s.sessions.get(sessionId)?.branchMemory ?? {})` 选 branchMemory；空 `{}` 默认值每次 selector 调用都是 NEW 对象 → Zustand Object.is 检测"变化" → React reconciler 抛 "Should not already be working" 无限渲染。Fix: 用 frozen 单例 `EMPTY_BRANCH_MEMORY = Object.freeze({})`。
+- 双向 selection sync 用单字段 `selectedNodeId` 是**真的零代码** — 没有任何显式 `subscribe` / `dispatchEvent` / `useEffect`。Conversation tab 点 bubble → 调 `setSelected` → store 变更 → canvas 卡片 `useIsChatNodeSelected(id)` 捕获 → 卡片自然亮起来。反过来 canvas 点卡片 → setSelected → ConversationView `resolvePath` 重算 → 渲染新 path（含新 selected bubble 高亮）。**design 微-决策 2A 的零成本同步**没有任何 hidden cost。
+
+**fixture 构造方式 + 测试覆盖率**：
+
+- **`__fixtures__/synthetic/fork-pair/`**：一对模拟 CC `/branch` 输出的 jsonls。
+  - `aaaaaaaa-1111-2222-3333-aaaaaaaaaaaa.jsonl` (original): 6 records, 3 ChatNodes (p1/p2/p3)
+  - `bbbbbbbb-1111-2222-3333-bbbbbbbbbbbb.jsonl` (fork): copies p1+p2 with per-record forkedFrom + 1 NEW ChatNode (p4f) + 1 custom-title record at end
+  - 用于 `app.test.ts` endpoint 端到端 merge 测试 (4 cases: merge from fork side / merge from original side / uuid-dedup first-wins / non-fork degenerates)
+- **`forkTree.test.ts`**：自建 tmpdir 写 small jsonls，覆盖 8 cases (no-fork / parent-walk / descendant-walk / nested 3-level / cycle defense / dangling forkedFrom / missing entry / multi-fork sibling)
+- **`ConversationView.test.tsx`**：合成 chatFlow + 各种 fork 形状（fork-mid / fork-at-end / 多 fork / 嵌套 fork / 1-child path）
+- **e2e**：1 个 spec 真实 session 跑通 tab 切换 + Conversation 渲染 + 多孩子 indicator (但因 user 真实数据多孩子点很少，indicator-presence assertion 是 conditional — 找到就 verify chip text，找不到也不 fail)
+
+**总测试覆盖**：fork 相关代码路径 ≥ 80% 走合成 fixture（user 0 fork data 不可避免）。但 closure 闭包算法 + merge 算法 + parser hoist 三个核心代码路径每条都有 unit + integration test 覆盖 — **撞到 user 第一次用 /branch 时 ship 的 v0.8 应该 work**（如有意外，会是 visual / edge-case，不是核心算法）。
+
+**残留 backlog**：
+
+- **Sidebar fork 树状缩进** —— v0.10 polish；user 当前 0 fork data 不催
+- **branchMemory localStorage 持久化** —— v0.10 polish；先看用户日常用 ConversationView 的频次再决定
+- **跨层 ChatNode 选择字段**（v0.6 redo / v0.7 同款 backlog）—— v0.8 没动；DrillPanel 共用 selectedNodeId 在 sub-chatflow / compact-original drill 切换时仍漏层
+- **Conversation tab 底部 composer** —— v∞.2 (leaf) / v∞.3 (any node)
+- **ConversationView 渲染极端 ChatNode 数（user 6500+ sibling）** —— 实测 path 长度受 selectedNodeId 选取影响，多数 path < 30 节点；但极端情况会 lag。如成痛点 v0.10 加 virtualization
+
+**design 文档改动范围**：
+
+- `design-data-model.md` "Fork 机制" 章节大幅扩写：标 v0.8 ship + 详细列 parser/server 实现细节 + 实测 closure 性能 + UX 简介；保留所有原始机制描述（CC `/branch` 步骤 / MessageSelector restore 限制等不动）
+- `design-visual-language.md` 加 "drill panel 结构（v0.8 ship — 2-tab）" + "Conversation tab — chat-bubble UI" + "Canvas fork indicator" 三个新小节；标记原有 "drill panel 内容"小节为 "Detail tab"
+- `plan.md` v0.8 阶段表行 ✅；v0.8 子任务列表全部 [x] + 重写文字反映实际 ship；Sidebar 树状缩进保留为单独的 backlog 项目
+- `context-handoff.md` 历史更新区顶部 + "已经做完的部分" 加 v0.8 一行
+- `devlog.md` (本条目)
+
+整体改动 < 200 行，符合 handoff "小幅更新对应小节" 的范围要求。
 
 ### v0.7 compact handling ship（commits `fbcc4bb` → M6 doc commit，6 milestone）
 

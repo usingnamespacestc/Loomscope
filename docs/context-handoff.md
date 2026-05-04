@@ -31,9 +31,9 @@
 - **v0.6 redo ship**（commits `a48f990` → `121aa4b`，5 milestone）：NodeBase + ChatNode/WorkNode `extends`；递归 ChatFlowCanvas 走 sub-ChatFlow drill（amber banner 消失）；TokenBar/NodeIdLine 抽 shared atoms 给 5 类 WorkNode。235/235 tests；解析 2500 → 1960ms。8 硬约束全过
 - **`<synthetic>` 假 llm_call 过滤 fix**（`a13da49`）：429 / API error / "No response requested" / 用户中断 4 类 placeholder 共用 sentinel；filter `model="<synthetic>"` + `errors[]` 后所有 last-llm_call 派生（TokenBar / ribbon / tooltip）回归正常
 - **v0.7 compact handling**（commits `fbcc4bb` → `2e2033f`，6 milestone + e2e）：file-history-snapshot 走 messageId 直接绑定（**v0.1 时间窗假设推翻，100% 命中**）+ ChatNodeCard 📁 N 角标 + DrillPanel snapshot vs tool_use 副作用并排揭示 + compact ChatNode 三色 dashed chrome + compact-original drill 沿 logicalParentUuid 反追 + logical 弱边（131/131 ship）+ compact_file_reference 精装 card。**实测发现**：compact ChatNode inner workflow 不是空的（128/131 含 llm_call，是 post-compact 续接被 promptId bucket 进同一节点），抉择 1C 中途纠错为 1C' 双按钮。235 → **284 (+49)** + 4 个 e2e；解析 1860ms
+- **v0.8 fork browsing**（commits `c1e9e74` → M6 doc commit，6 milestone + 4 e2e）：parser 识别 forkedFrom + customTitle + server forkTree 闭包 + multi-jsonl merge + DrillPanel 2-tab + ConversationView Claude-App-style chat bubbles + BranchSelector + branchMemory + 双向 selection + ChatNodeCard `⑂ N` fork indicator。**user 0 fork data → 完全靠合成 fixture 顶住测试覆盖**（fork-pair / forkTree synthetic case）。**实测中途纠错**：detectForkedFrom 初版假设 bucket 内 messageUuid 也 uniform，结果会对每个真 fork ChatNode 都 warn；fix 改成只校验 sessionId uniform、messageUuid 取 rootUser.forkedFrom（per-record uuid 是正常的）。284 → **334 (+50)** + 4 e2e；21-jsonl 项目闭包扫描 18ms（handoff 估 100ms 内）；13 硬约束全过
 
-## 还没做的部分（v0.8 起）
-- v0.8 fork 浏览（`forkedFrom` + `custom-title` parser / server merge / **DrillPanel 2-tab（Detail + Conversation）** / ConversationView + branchMemory / canvas fork badge）
+## 还没做的部分（v0.9 起）
 - v0.9 file-tail 实时增量
 - v0.10 性能优化 / WorkFlow viewport 持久化 / 跨 session 搜索 (SQLite FTS5)
 - v∞.0 read-only 远程观察 / v∞.1 启动新 session / v∞.2 leaf-continuation 续接 prompt / **v∞.3 任意节点 fork composer（"120% of CC"）**
@@ -133,6 +133,7 @@ npm run build
 
 > 简版（一行一条 milestone）。每条详情 + 决策 + 实测发现见 `devlog.md`。
 
+- **2026-05-04 v0.8 fork browsing ship**（`c1e9e74` → M6，6 milestone + 4 e2e）—— parser 识别 forkedFrom + customTitle (M1) + server forkTree 闭包 + multi-jsonl uuid-dedup merge endpoint (M2) + DrillPanel 2-tab Detail/Conversation (M3) + ConversationView Claude-App-style chat bubbles + BranchSelector + branchMemory + 双向 selection (M4) + ChatNodeCard `⑂ N` fork indicator (M5) + design docs sync (M6)；user 0 fork data → 完全靠 fork-pair 合成 fixture 顶住测试覆盖；284 → **334 (+50)** + 4 个新 e2e；21-jsonl 项目闭包扫描 18ms。13 硬约束 (10 继承 + 3 v0.8 新增) 全过
 - **2026-05-03 v0.7 compact handling ship**（`fbcc4bb` → M6，6 milestone）—— file-history-snapshot 通过 messageId 直接绑定（v0.1 时间窗假设被推翻，100% 命中）+ ChatNodeCard 📁 N 角标 + DrillPanel snapshot vs tool_use 并排副作用揭示 + compact ChatNode 三色 dashed chrome + compact-original drill (沿 logicalParentUuid 链反向追溯) + logical 弱边 (dashed 反向弧，131/131 ship) + compact_file_reference 精装 card；235 → 284 (+49)；解析 1860ms (v0.6 baseline 1960ms 内)。8+2 硬约束全过
 - **2026-05-03 `<synthetic>` 假 llm_call 过滤 fix**（`a13da49`）—— 429 rate-limit 注入的 `model: "<synthetic>"` 假记录污染 last-llm_call 派生（TokenBar 归 0 / ribbon 染色错），跳过后 last real call 重新生效；282/282
 - **2026-05-03 v0.6 redo ship**（`a48f990` → `121aa4b`，5 milestone）—— NodeBase + ChatNode/WorkNode `extends`；递归 ChatFlowCanvas 走 sub-ChatFlow drill（amber banner 消失）；TokenBar/NodeIdLine 抽 shared atoms 给 5 类 WorkNode；235/235；解析 2500 → 1960ms。8 条硬约束全过

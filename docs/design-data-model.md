@@ -844,7 +844,7 @@ const RawRecordSchema = z.object({
 
 ⇒ v0 不渲染 = "ChatFlow 数据结构里跳过 unknown type / 走 fallback raw display"，但**底层 record 永远完整保留**——后续版本要加渲染时直接用现成数据。
 
-## Fork 机制（v0.7 浏览 + v∞.3 写入）
+## Fork 机制（v0.8 浏览 ✅ + v∞.3 写入）
 
 CC 自身有两套独立的 fork 机制，Loomscope 的解析层和浏览层都要兼容这两种产物。源码参考 `~/claude-code-source-code/src/commands/branch/branch.ts` + `src/components/MessageSelector.tsx`。
 
@@ -881,20 +881,34 @@ CC 的 `/branch` slash command（aliases：`/fork`，描述：`Create a branch o
 
 **实测**：用户 jsonl 里同 session sibling fork 数量从 1 到 6500+ 不等，全部都是这条路径的产物（边操作边重发），形态固定 `{assistant, user}` 一对孩子共享一个 `parentUuid`。
 
-### Loomscope 的统一处理
+### Loomscope 的统一处理（v0.8 ship 实测确认）
 
 数据模型层面把两种 fork **合并成一种**：sibling ChatNode（`parentChatNodeId` 指向同一节点的多个 ChatNode）。具体：
 
-- **解析时**：parser 读 `forkedFrom` 字段挂到 `ChatNode.forkedFrom`，读 `{type: "custom-title"}` 挂到 `ChatFlow.customTitle`
-- **server load 时**：按 `forkedFrom` 闭包遍历 fork 树（沿 `forkedFrom.sessionId` 往回 + 反向扫所有 jsonl 找指向当前的子 fork），多 jsonl 的 records 按 `uuid` 去重 merge 后喂给 parser pass 4，自然落到 `parentChatNodeId` 链路
+- **解析时**（`src/parse/jsonl.ts`）：
+  - 在 first-pass scan 里捕获 `{type: "custom-title"}` 顶层 record → 挂到 `ChatFlow.customTitle`（first-write wins；`custom-title` 加进 SKIP_TYPES，不进 orphans）
+  - `detectForkedFrom(rootUser, bucket)` 从 rootUser 的 `forkedFrom` 字段提取 `{sessionId, messageUuid}`（**关键**：CC `/branch` 写每条 record 的 `forkedFrom.messageUuid = 该 record 自身 uuid`，所以一个 bucket 内 messageUuid 不一致是正常的；只有 sessionId 在 bucket 内 uniform）→ 挂到 `ChatNode.forkedFrom`
+  - 实测警告路径：bucket 内多 record 的 `forkedFrom.sessionId` 不一致才 warn（CC `/branch` 不会产生这种数据；hand-edited / 非 /branch 来源会触发）
+- **server load 时**（`src/server/services/forkTree.ts` + `routes/sessions.ts`）：
+  - `findForkClosure(projectDir, entrySessionId)`：单次扫 projectDir 下所有 .jsonl 第一条 record 提取 `{sessionId, forkedFrom.sessionId}` → 建 sid → forkedFromSid + 反向 children map → BFS 闭包（双向：父链 + 子 fork）
+  - `loadMergedChatFlow`：按闭包 BFS order 读 records → 按 uuid 去重（first-occurrence wins）→ `buildChatFlow` → `chatFlow.id = entrySessionId, chatFlow.linkedSessions = [BFS order]`
 - **输出**：单一 merged ChatFlow，多 sessionId 的不同分支都变成 ChatNode 的 sibling
-- **`ChatFlow.linkedSessions` 字段**：merged ChatFlow 顶层记录由哪些 sessionId 拼成，方便 UI 显示
+- **`ChatFlow.linkedSessions` 字段**：merged ChatFlow 顶层记录由哪些 sessionId 拼成（BFS order，entry first）；非 merged session 留 `undefined`
 
-UUID 冲突时（理论上 CC 不会产生但要 robust）：保留**最早写入版本**（按 fork 树的根方向）。
+UUID 冲突时：保留**最早写入版本**（BFS order 决定 — 进入闭包时 entry session 排前，记录先 push 到 records[]，被 dedup 时 first-wins）。
+
+实测性能：21-jsonl 项目目录闭包扫描 18ms（首-record peek 走 readline streaming）。无 fork 数据时 closure size = 1，merge step 直接 fall through 到 v0.7 单文件路径，0 额外开销。
+
+### v0.8 浏览侧 UX
+
+- **canvas**：merged ChatFlow 的 sibling ChatNodes 自然在 dagre LR 上摊开；多孩子 ChatNode 卡片右侧 stats 行加 `⑂ N` indicator chip（`ChatNodeCard` 渲染，layoutDag 里 `childCount` 字段驱动）
+- **DrillPanel**：2-tab 结构（Detail | Conversation），全局 UI 偏好 `UISlice.drillPanelTab` 持久化到 localStorage
+- **Conversation tab**：root → focused 线性链 chat-bubble UI（user 右对齐蓝底，assistant 左对齐 markdown），fork 点出现 `BranchSelector` chip 行（`#1 preview… #2 preview…` rounded-full chips），active 分支高亮
+- **branchMemory**：`SessionState.branchMemory: Record<forkChildId, leafId>`（store-only，reload reset）；切换分支时 `pickBranch` action 同步 selectedNodeId + 持久化分支 leaf；再次回到 fork 点时 BranchSelector 自动 restore 上次去过的 leaf
 
 ### 跟 v∞.3 编辑侧的关系
 
-v0.7 是浏览侧（merged ChatFlow + ConversationView + branchMemory）；v∞.3 是编辑侧（点节点起 fork、写 in-session sibling、可选导出独立 session）。两者共享同一套数据模型 —— v∞.3 写入产生的新 sibling 自动被 v0.7 浏览路径渲染。详细 step-by-step 实施 → `plan.md` 同名章节。
+v0.8 是浏览侧（merged ChatFlow + ConversationView + branchMemory）；v∞.3 是编辑侧（点节点起 fork、写 in-session sibling、可选导出独立 session）。两者共享同一套数据模型 —— v∞.3 写入产生的新 sibling 自动被 v0.8 浏览路径渲染。详细 step-by-step 实施 → `plan.md` 同名章节。
 
 ## 开放问题（待 v0.1 实现时回答）
 
