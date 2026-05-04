@@ -158,7 +158,7 @@ describe("ChatNodeCard — compact branch", () => {
       workflow: { nodes: [makeCompactMeta()], edges: [] },
     });
     render(withRF(<ChatNodeCard {...nodeProps(cn)} />));
-    const btn = screen.getByTestId(`compact-pre-${cn.id}`) as HTMLButtonElement;
+    const btn = screen.getByTestId(`compact-foldtoggle-${cn.id}`) as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
     expect(btn.textContent).toMatch(/展开 pre-compact/);
   });
@@ -169,7 +169,7 @@ describe("ChatNodeCard — compact branch", () => {
       workflow: { nodes: [makeCompactMeta()], edges: [] },
     });
     render(withRF(<ChatNodeCard {...nodeProps(cn)} />));
-    const btn = screen.getByTestId(`compact-pre-${cn.id}`) as HTMLButtonElement;
+    const btn = screen.getByTestId(`compact-foldtoggle-${cn.id}`) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
     expect(btn.title).toMatch(/logicalParentUuid/);
   });
@@ -191,7 +191,7 @@ describe("ChatNodeCard — compact branch", () => {
     render(withRF(<ChatNodeCard {...nodeProps(cn)} />));
     expect(screen.queryByTestId(`enter-workflow-${cn.id}`)).toBeNull();
     // pre-compact button is independent of llm_call presence.
-    expect(screen.getByTestId(`compact-pre-${cn.id}`)).toBeTruthy();
+    expect(screen.getByTestId(`compact-foldtoggle-${cn.id}`)).toBeTruthy();
   });
 });
 

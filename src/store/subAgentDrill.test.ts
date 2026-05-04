@@ -106,6 +106,7 @@ function seedSession(cf: ChatFlow = makeChatFlow()) {
     sessions.set(SID, {
       chatFlow: cf,
       foldedNodeIds: new Set(),
+      foldedCompactIds: new Set(),
       viewport: { x: 0, y: 0, zoom: 1 },
       selectedNodeId: null,
       workflowSelectedNodeId: null,

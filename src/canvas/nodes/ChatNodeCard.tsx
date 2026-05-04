@@ -318,23 +318,20 @@ function CompactCard({
         </div>
       </div>
 
-      {/* Two drill entries (design choice 1C', revised after实测 found
-          that compact ChatNodes' inner workflow is NOT empty — 128/131
-          carry post-compact assistant continuation with llm_call/tool_call
-          chains; "进入工作流" still has plenty to show):
+      {/* Two action buttons:
             1. "进入工作流" (= existing enterWorkflow flow) — drills
                into the post-compact continuation. Hidden when this
                ChatNode's inner workflow has no llm_call (3/131 edge
                case where there's nothing to look at).
-            2. "⤢ 展开 pre-compact" — drills into the pre-compact
-               original turn sequence. Disabled in M2 (placeholder
-               only); v0.7 M3 wires the real action via
-               enterCompactOriginal + the new compact-original drill
-               frame. */}
+            2. "⤢ 展开 pre-compact" / "折叠 pre-compact" toggle —
+               flips this compact's id in foldedCompactIds. M1 ships
+               the slice + action wiring; M4 turns the label into a
+               two-state toggle so users can re-fold from the canvas
+               without right-clicking. */}
       {cn.workflow.nodes.some((n) => n.kind === "llm_call") && (
         <DrillButton chatNodeId={cn.id} />
       )}
-      <CompactPreCompactButton
+      <CompactFoldToggleButton
         chatNodeId={cn.id}
         accent={palette.kind}
         hasPreCompactRange={Boolean(cn.compactMetadata?.logicalParentChatNodeId)}
@@ -405,13 +402,16 @@ function formatTokensCompact(n: number): string {
   return String(n);
 }
 
-// Pre-compact drill button — wires to enterCompactOriginal (v0.7 M3).
-// Disabled when the compact ChatNode has no resolvable
-// logicalParentChatNodeId (rare; logicalParentUuid missing on the
-// underlying boundary OR the pre-resolution failed at parse time).
-// Tone matches the compact card's trigger palette so the chrome reads
-// as a continuation of the card body.
-function CompactPreCompactButton({
+// Pre-compact fold toggle — wires to toggleCompactFold. When this
+// compact's id is in foldedCompactIds (default state at session
+// load, see hydrateFoldedCompactIds), the button reads "展开
+// pre-compact" → click unfolds. When NOT in the set, reads "折叠
+// pre-compact" → click re-folds. Disabled when the compact has no
+// resolvable logicalParentChatNodeId (rare; logicalParentUuid missing
+// on the underlying boundary OR the pre-resolution failed at parse
+// time).  Tone matches the compact card's trigger palette so the
+// chrome reads as a continuation of the card body.
+function CompactFoldToggleButton({
   chatNodeId,
   accent,
   hasPreCompactRange,
@@ -420,8 +420,14 @@ function CompactPreCompactButton({
   accent: "auto" | "manual" | "failed";
   hasPreCompactRange: boolean;
 }) {
-  const enter = useStore((s) => s.enterCompactOriginal);
+  const toggle = useStore((s) => s.toggleCompactFold);
   const activeId = useStore((s) => s.activeSessionId);
+  const isFolded = useStore((s) => {
+    const sid = s.activeSessionId;
+    if (!sid) return true;
+    const sess = s.sessions.get(sid);
+    return sess?.foldedCompactIds.has(chatNodeId) ?? true;
+  });
   const baseTone =
     accent === "manual"
       ? "border-purple-200 bg-purple-50/40 text-purple-700 hover:border-purple-400 hover:bg-purple-50 hover:text-purple-800"
@@ -434,6 +440,8 @@ function CompactPreCompactButton({
       : accent === "failed"
         ? "border-rose-200 bg-rose-50/40 text-rose-400"
         : "border-teal-200 bg-teal-50/40 text-teal-400";
+  const label = isFolded ? "展开 pre-compact" : "折叠 pre-compact";
+  const glyph = isFolded ? "⤢" : "⤡";
   return (
     <button
       type="button"
@@ -446,17 +454,19 @@ function CompactPreCompactButton({
       onClick={(e) => {
         e.stopPropagation();
         if (!activeId || !hasPreCompactRange) return;
-        enter(activeId, chatNodeId);
+        toggle(activeId, chatNodeId);
       }}
-      data-testid={`compact-pre-${chatNodeId}`}
+      data-testid={`compact-foldtoggle-${chatNodeId}`}
       title={
         hasPreCompactRange
-          ? "drill into the pre-compact original turn sequence"
+          ? isFolded
+            ? "unfold the pre-compact range into the canvas"
+            : "fold the pre-compact range out of the canvas"
           : "compact_boundary 缺 logicalParentUuid — 无法定位 pre-compact 段"
       }
     >
-      <span>⤢</span>
-      <span>展开 pre-compact</span>
+      <span>{glyph}</span>
+      <span>{label}</span>
     </button>
   );
 }

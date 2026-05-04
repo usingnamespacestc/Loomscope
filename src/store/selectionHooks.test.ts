@@ -19,6 +19,7 @@ function seedSession() {
     sessions: new Map(s.sessions).set(SID, {
       chatFlow: null,
       foldedNodeIds: new Set<string>(),
+      foldedCompactIds: new Set<string>(),
       viewport: { x: 0, y: 0, zoom: 1 },
       selectedNodeId: null,
       workflowSelectedNodeId: null,

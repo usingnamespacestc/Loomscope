@@ -76,14 +76,12 @@ export interface WorkspaceSlice {
 // Drill-stack frame. v0.3 ships only ``chatnode`` frames (one ChatNode →
 // its inner WorkFlow). v0.5 adds ``subworkflow`` frames for sub-agent
 // real-nesting (lazy-loaded sidecar WorkFlow under a delegate WorkNode).
-// v0.7 adds ``compact-original`` frames for drilling into the
-// pre-compact original turn sequence behind a compact ChatNode.
-// Keeping the union open now means future drill kinds slot in without
-// retrofitting all consumers.
+// v0.7 had a `compact-original` frame; v0.x rework replaces it with
+// inline fold (see SessionState.foldedCompactIds) — drill mode for
+// compact's pre-compact range is gone, so the frame is gone too.
 export type DrillFrame =
   | { kind: "chatnode"; chatNodeId: string }
-  | { kind: "subworkflow"; parentWorkNodeId: string }
-  | { kind: "compact-original"; compactChatNodeId: string };
+  | { kind: "subworkflow"; parentWorkNodeId: string };
 
 // Cached sub-agent ChatFlow plus its AgentMetadata. Stored per
 // ``(sessionId, agentId)`` and dropped on session unload — sub-agents
@@ -104,6 +102,15 @@ export interface SessionState {
   // ChatFlow-layer fold state. v0.5 used this for the drill-down
   // ChatFlow→WorkFlow toggle (membership keyed on ChatNode id).
   foldedNodeIds: Set<string>;
+  // Set of compact ChatNode ids whose pre-compact range is currently
+  // folded out of the canvas (replaces v0.7's compact-original drill
+  // mode). Default-populated on session load with ALL compact ChatNode
+  // ids in the chatFlow — i.e. every compact's range starts folded —
+  // unless a localStorage entry under ``loomscope:fold:${sessionId}``
+  // overrides. Mutating actions: ``foldCompact`` / ``unfoldCompact`` /
+  // ``toggleCompactFold``. Persistence is via localStorage on every
+  // mutation; the in-memory ``Set`` is the source of truth at runtime.
+  foldedCompactIds: Set<string>;
   viewport: { x: number; y: number; zoom: number };
   selectedNodeId: string | null;
   // WorkFlow-layer selection — kept independent from ChatFlow's
@@ -161,15 +168,17 @@ export interface SessionSlice {
   // WorkNode in that frame's WorkFlow. Triggers loadSubAgent if the
   // cache is cold. Idempotent on the same parentWorkNodeId.
   enterSubWorkflow: (sessionId: string, parentWorkNodeId: string) => void;
-  // ── v0.7 compact-original drill ──
-  // Push a ``compact-original`` drill frame for the given compact
-  // ChatNode. The current top frame must be ``chatnode`` (i.e. the
-  // user is currently viewing this compact ChatNode's workflow) OR
-  // empty (drill straight from ChatFlow canvas). The compact ChatNode
-  // must have a resolvable ``compactMetadata.logicalParentChatNodeId``
-  // so the resolver can compute the pre-compact range. Idempotent on
-  // the same compactChatNodeId at the top.
-  enterCompactOriginal: (sessionId: string, compactChatNodeId: string) => void;
+  // ── compact pre-compact-range fold (replaces v0.7 drill mode) ──
+  // Mutate the session's ``foldedCompactIds`` and persist to localStorage.
+  // ``compactChatNodeId`` must reference an existing compact ChatNode in
+  // ``chatFlow``; otherwise the action is a no-op (defensive — we don't
+  // want a stale id leaking into the persisted set). Calls are
+  // idempotent (folding an already-folded id, or unfolding an
+  // already-unfolded id, are no-ops that still re-persist for
+  // determinism).
+  foldCompact: (sessionId: string, compactChatNodeId: string) => void;
+  unfoldCompact: (sessionId: string, compactChatNodeId: string) => void;
+  toggleCompactFold: (sessionId: string, compactChatNodeId: string) => void;
   // v0.8 M4: ConversationView BranchSelector picks a branch — record
   // the chosen leaf for the fork point + flip selectedNodeId so the
   // canvas + Conversation tab follow the new path. branchMemory

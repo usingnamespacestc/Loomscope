@@ -16,6 +16,7 @@ function blankSessionState(): SessionState {
   return {
     chatFlow: null,
     foldedNodeIds: new Set<string>(),
+    foldedCompactIds: new Set<string>(),
     viewport: EMPTY_VIEWPORT,
     selectedNodeId: null,
     workflowSelectedNodeId: null,
@@ -26,6 +27,77 @@ function blankSessionState(): SessionState {
     error: null,
     lastUpdated: 0,
   };
+}
+
+// localStorage helpers for compact-fold persistence. Key shape mirrors
+// Agentloom's ``${app}:fold:${id}`` convention (see feedback memory
+// `feedback_localstorage_ui_pattern.md`). Values are JSON arrays of
+// folded compact-ChatNode ids; the in-memory ``Set`` is the source of
+// truth at runtime — localStorage is purely for cross-reload restore.
+//
+// Reconciliation (drop ids that no longer exist as compact ChatNodes
+// in the live chatFlow) is the responsibility of the caller — see
+// ``hydrateFoldedCompactIds``. This separates "did the user fold X
+// last session" from "is X still a thing now". Storage failures are
+// swallowed: SSR / privacy mode / quota will surface as "default-fold
+// behaviour" rather than crashing the app.
+const FOLD_STORAGE_PREFIX = "loomscope:fold:";
+
+function foldStorageKey(sessionId: string): string {
+  return `${FOLD_STORAGE_PREFIX}${sessionId}`;
+}
+
+function readFoldStorage(sessionId: string): string[] | null {
+  try {
+    const raw =
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem(foldStorageKey(sessionId))
+        : null;
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((x): x is string => typeof x === "string");
+  } catch {
+    return null;
+  }
+}
+
+function writeFoldStorage(sessionId: string, ids: Set<string>): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(
+      foldStorageKey(sessionId),
+      JSON.stringify([...ids]),
+    );
+  } catch {
+    // quota exceeded / privacy mode — silently fall through; the
+    // in-memory set still works for the current page lifetime.
+  }
+}
+
+// Compute the initial foldedCompactIds set for a freshly-loaded
+// chatFlow. Hydrate from localStorage when present (intersected with
+// the live compact ids, so deleted / renamed compacts get dropped);
+// otherwise default-fold every compact ChatNode (pre-compact range
+// hidden by default — the v0.x rework's primary UX choice, also a
+// sizeable initial-render perf win for sessions with many compacts).
+export function hydrateFoldedCompactIds(
+  sessionId: string,
+  chatFlow: ChatFlow,
+): Set<string> {
+  const liveCompactIds = new Set<string>();
+  for (const cn of chatFlow.chatNodes) {
+    if (cn.isCompactSummary) liveCompactIds.add(cn.id);
+  }
+  const stored = readFoldStorage(sessionId);
+  if (stored) {
+    const reconciled = new Set<string>();
+    for (const id of stored) {
+      if (liveCompactIds.has(id)) reconciled.add(id);
+    }
+    return reconciled;
+  }
+  return liveCompactIds;
 }
 
 // In-flight loadSubAgent promises, keyed ``sessionId/agentId``. Lives
@@ -59,6 +131,12 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       updated.set(id, {
         ...cur,
         chatFlow: cf,
+        // Hydrate fold state from localStorage (or default-fold all
+        // compacts on first load). Done here rather than at first
+        // subscriber so canvas / fold projection sees a populated set
+        // on the very first render and doesn't flash "fully expanded
+        // → folded" on session open.
+        foldedCompactIds: hydrateFoldedCompactIds(id, cf),
         isLoading: false,
         error: null,
         lastUpdated: Date.now(),
@@ -294,53 +372,48 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     void get().loadSubAgent(sessionId, agentId);
   },
 
-  // v0.7 M3: drill into the pre-compact original turn sequence behind
-  // a compact ChatNode. Push policy:
-  //   top is subworkflow            → PUSH (drilling from inside a sub
-  //                                    ChatFlow into one of its compacts)
-  //   anything else (empty / chatnode / compact-original) → REPLACE
-  //                                    with single compact-original frame
-  //                                    (treats inner-workflow view and
-  //                                    pre-compact view as alternative
-  //                                    views of the same compact ChatNode,
-  //                                    not nested layers)
-  // Idempotent on the same compactChatNodeId at the top.
-  enterCompactOriginal: (sessionId, compactChatNodeId) => {
+  // Compact-fold mutators. Validation is uniform: bail if the session
+  // doesn't exist, bail if the id isn't a compact ChatNode in the
+  // current chatFlow. We don't validate that the compact is "in scope"
+  // (i.e. visible at the current drill depth) — the fold set is global
+  // across drill frames; toggling from a sub-ChatFlow drill view should
+  // affect what shows when the user pops back to top-level too.
+  foldCompact: (sessionId, compactChatNodeId) => {
     const sessions = get().sessions;
     const cur = sessions.get(sessionId);
     if (!cur || !cur.chatFlow) return;
-    const top = cur.drillStack[cur.drillStack.length - 1];
-    if (
-      top?.kind === "compact-original" &&
-      top.compactChatNodeId === compactChatNodeId
-    ) {
-      return;
-    }
-    // Validate: the compact ChatNode must live in the currently
-    // visible scope (top-level if stack is empty / chatnode-only;
-    // sub-agent ChatFlow if a subworkflow frame is in play).
-    const view = resolveDrillView(cur);
-    const scope: ChatFlow =
-      view?.mode === "sub-chatflow"
-        ? view.chatFlow
-        : view?.mode === "workflow"
-          ? view.scopeChatFlow
-          : cur.chatFlow;
-    const compactCn = scope.chatNodes.find((c) => c.id === compactChatNodeId);
-    if (!compactCn?.isCompactSummary) return;
-    if (!compactCn.compactMetadata?.logicalParentChatNodeId) return;
-
-    const drillStack: DrillFrame[] =
-      top?.kind === "subworkflow"
-        ? [...cur.drillStack, { kind: "compact-original", compactChatNodeId }]
-        : [{ kind: "compact-original", compactChatNodeId }];
+    if (!isCompactChatNodeInFlow(cur.chatFlow, compactChatNodeId)) return;
+    const next = new Set(cur.foldedCompactIds);
+    next.add(compactChatNodeId);
     const updated = new Map(sessions);
-    updated.set(sessionId, {
-      ...cur,
-      drillStack,
-      workflowSelectedNodeId: null,
-    });
+    updated.set(sessionId, { ...cur, foldedCompactIds: next });
     set({ sessions: updated });
+    writeFoldStorage(sessionId, next);
+  },
+  unfoldCompact: (sessionId, compactChatNodeId) => {
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur || !cur.chatFlow) return;
+    if (!isCompactChatNodeInFlow(cur.chatFlow, compactChatNodeId)) return;
+    const next = new Set(cur.foldedCompactIds);
+    next.delete(compactChatNodeId);
+    const updated = new Map(sessions);
+    updated.set(sessionId, { ...cur, foldedCompactIds: next });
+    set({ sessions: updated });
+    writeFoldStorage(sessionId, next);
+  },
+  toggleCompactFold: (sessionId, compactChatNodeId) => {
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur || !cur.chatFlow) return;
+    if (!isCompactChatNodeInFlow(cur.chatFlow, compactChatNodeId)) return;
+    const next = new Set(cur.foldedCompactIds);
+    if (next.has(compactChatNodeId)) next.delete(compactChatNodeId);
+    else next.add(compactChatNodeId);
+    const updated = new Map(sessions);
+    updated.set(sessionId, { ...cur, foldedCompactIds: next });
+    set({ sessions: updated });
+    writeFoldStorage(sessionId, next);
   },
 
   // v0.8 M4: ConversationView BranchSelector picks a branch.
@@ -402,25 +475,41 @@ export interface DrillBreadcrumbItem {
   // ``hover`` tooltip — full id / agentId etc.
   title: string;
   // Frame kind for icon selection.
-  kind: "chatnode" | "subworkflow" | "compact-original";
+  kind: "chatnode" | "subworkflow";
   // True when this frame represents an auto-compact sub-agent
   // (agentId starts with ``acompact-``).
   isAutoCompact: boolean;
 }
 
-// v0.7 M3: compute the pre-compact original turn range for a compact
-// ChatNode, walking parentChatNodeId from
-// ``compactMetadata.logicalParentChatNodeId`` (= the tail ChatNode of
-// the段 that was compacted) backward until we hit either:
-//   - the session root (parentChatNodeId === null)
-//   - a previous compact ChatNode (those represent earlier compactions
-//     and are NOT part of this compact's pre-compact range — they're
-//     already a fold marker themselves)
+// True when the given id refers to a compact ChatNode in the live
+// flow. Used by ``foldCompact`` / ``unfoldCompact`` /
+// ``toggleCompactFold`` as a defensive guard so a stale / spoofed id
+// can't leak into ``foldedCompactIds`` and pollute fold projection /
+// localStorage.
+function isCompactChatNodeInFlow(cf: ChatFlow, id: string): boolean {
+  return cf.chatNodes.some((c) => c.id === id && c.isCompactSummary);
+}
+
+// Compute the full pre-compact range for a compact ChatNode: the chain
+// of ChatNodes that this compact's summary distilled from. We walk
+// parentChatNodeId from ``compactMetadata.logicalParentChatNodeId``
+// (= the tail ChatNode the boundary points back at) all the way to
+// the session root, **including any earlier compact ChatNodes on the
+// chain** — because CC's auto-compact summarises the entire current
+// context window, which already has the previous compact summary at
+// its head plus everything since. So compact_2's range strictly
+// contains compact_1 + the segments between them.
+//
+// Strict containment across compacts is what makes largest-range
+// attribution (M2 ``computeFoldProjection``) collapse a 131-deep
+// nested chain into a single visible fold-host node by default.
+//
 // Returns [] when the anchor isn't a compact ChatNode, the
 // logicalParentChatNodeId is missing, or the chain is empty/dangling.
-// Order: time-ascending (root-most first, tail last) so ChatFlowCanvas
-// renders the段 in its natural reading order.
-export function computePreCompactRange(
+// Order: time-ascending (root-most first, tail last) so callers can
+// treat ``range[0]`` as "earliest" / ``range.at(-1)`` as "tail just
+// before the compact host".
+export function computeCompactRange(
   scope: ChatFlow,
   compactChatNodeId: string,
 ): ChatNode[] {
@@ -441,7 +530,6 @@ export function computePreCompactRange(
     if (!cursor.parentChatNodeId) break;
     const next = byId.get(cursor.parentChatNodeId);
     if (!next) break;
-    if (next.isCompactSummary) break; // earlier compact; stop here
     cursor = next;
   }
   return collected.reverse();
@@ -463,37 +551,6 @@ export function resolveDrillView(state: SessionState): ResolvedDrillView | null 
         kind: "chatnode",
         label: `ChatNode (${cn.id.slice(0, 8)})`,
         title: `ChatNode ${cn.id}`,
-        isAutoCompact: false,
-      });
-      continue;
-    }
-    if (frame.kind === "compact-original") {
-      // The compact ChatNode anchor must live in the current scope.
-      // We advance the scope to a synthetic ChatFlow holding only the
-      // pre-compact range; downstream chatnode frames (rare but
-      // possible) would then resolve against that synthetic scope.
-      const anchor = scopeChatFlow.chatNodes.find(
-        (c) => c.id === frame.compactChatNodeId,
-      );
-      if (!anchor?.isCompactSummary) return null;
-      const range = computePreCompactRange(scopeChatFlow, frame.compactChatNodeId);
-      if (range.length === 0) return null;
-      // Synthetic ChatFlow: head ChatNode's parentChatNodeId rewritten
-      // to null so layoutDag doesn't render a dangling edge to a
-      // compacted-out ancestor that isn't in the synthetic node set.
-      const head = range[0];
-      scopeChatFlow = {
-        ...scopeChatFlow,
-        chatNodes: [{ ...head, parentChatNodeId: null }, ...range.slice(1)],
-        orphans: [],
-        flowEvents: [],
-      };
-      chatNode = null;
-      labels.push({
-        depth,
-        kind: "compact-original",
-        label: `⊞ pre-compact (${anchor.id.slice(0, 8)})`,
-        title: `pre-compact original sequence behind compact ChatNode ${anchor.id}`,
         isAutoCompact: false,
       });
       continue;
@@ -529,9 +586,8 @@ export function resolveDrillView(state: SessionState): ResolvedDrillView | null 
     if (!chatNode) return null;
     return { mode: "workflow", chatNode, scopeChatFlow, frameLabels: labels };
   }
-  // subworkflow OR compact-original at the top → render the (possibly
-  // synthetic) scopeChatFlow recursively via ChatFlowCanvas. App.tsx
-  // doesn't need a new viewMode.
+  // subworkflow at the top → render the sub-agent ChatFlow recursively
+  // via ChatFlowCanvas. App.tsx doesn't need a new viewMode.
   return { mode: "sub-chatflow", chatFlow: scopeChatFlow, frameLabels: labels };
 }
 
@@ -549,7 +605,7 @@ function resolveDelegate(
     if (frame.kind === "chatnode") {
       chatNode =
         state.chatFlow?.chatNodes.find((c) => c.id === frame.chatNodeId) ?? null;
-    } else if (frame.kind === "subworkflow") {
+    } else {
       // subworkflow: previous chatNode must contain a delegate w/
       // matching id whose agentId names a cached sub ChatFlow.
       if (!chatNode) return null;
@@ -565,13 +621,6 @@ function resolveDelegate(
       // (see handoff: 73% of sub-agents have only 1 ChatNode). Multi-
       // ChatNode rendering is v0.5.1 backlog.
       chatNode = cached.chatFlow.chatNodes[0] ?? null;
-    } else {
-      // compact-original frames don't expose any delegate WorkNodes
-      // visible to enterSubWorkflow's lookup — bail. (In practice
-      // enterSubWorkflow is never called from a compact-original view
-      // because that view contains no delegate WorkNodes; this branch
-      // exists to satisfy the discriminated-union exhaustiveness check.)
-      return null;
     }
   }
   if (!chatNode) return null;

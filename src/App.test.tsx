@@ -59,6 +59,7 @@ describe("App shell", () => {
       sessions.set("sid", {
         chatFlow: null,
         foldedNodeIds: new Set(),
+        foldedCompactIds: new Set(),
         viewport: { x: 0, y: 0, zoom: 1 },
         selectedNodeId: null,
         workflowSelectedNodeId: null,
@@ -81,6 +82,7 @@ describe("App shell", () => {
       sessions.set("sid", {
         chatFlow: null,
         foldedNodeIds: new Set(),
+        foldedCompactIds: new Set(),
         viewport: { x: 0, y: 0, zoom: 1 },
         selectedNodeId: null,
         workflowSelectedNodeId: null,
