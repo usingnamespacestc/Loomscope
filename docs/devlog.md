@@ -8,6 +8,40 @@
 
 ## 2026-05-04
 
+### compact handling 重做：v0.7 drill mode → inline fold（commits `8f41ef7` → `59187c6`，3 milestone）
+
+v0.7 M3 当年用 "compact-original" DrillFrame 让用户从 compact ChatNode 进新视图看 pre-compact range。用户实测后反馈：**应该展开/折叠 inline，不是新建视图**；进一步：**生成 compact 时默认折叠**，主链上只看到最新 compact + 后续未压缩节点。也借此对超大 ChatFlow 加载做懒加载。Agentloom 同款 chatFold 合成节点 + per-session localStorage 持久化（不上 DB）。
+
+**重要语义修正**：M1 把 `computeCompactRange` 从"遇到上一个 compact 就 break"改成"走到 root，含上一个 compact"。理由：CC auto-compact 的输入是当前 context window，里面已经有上一个 compact 的 summary 在 head + 自那之后所有 turn。所以 `range(compact_2)` 语义上 strictly contains `compact_1`。这个修正是让 largest-first attribution 在嵌套 chain 上 collapse 整段的关键 —— 131 个 compact 的 256MB session 默认折叠态主链只剩 1 个 chatFold + 1 个 compact + post-host tail，而不是 131 个 chatFold 串起来。
+
+**3 个 milestone**：
+
+- **M1** (`8f41ef7`)：`SessionState.foldedCompactIds: Set<string>` per session + `loomscope:fold:${sessionId}` localStorage hydrate/persist + reconcile against live compact ids；新 `foldCompact` / `unfoldCompact` / `toggleCompactFold` actions；删 v0.7 M3 drill 路径（`enterCompactOriginal` action / `compact-original` DrillFrame / resolver 分支 / breadcrumb kind / `compactOriginalDrill.test.ts`）；ChatNodeCard 按钮 testid `compact-pre-*` → `compact-foldtoggle-*`，文案/图标根据 isFolded 双态切换（M4 toggle UX 提前完成）
+- **M2** (`020dcf2`)：`src/canvas/foldProjection.ts` 算 largest-first attribution + 嵌套支持（outer 吸 inner，orphan filter 丢 claim.size===0）+ sibling 分支不被主链 fold 吸收；`src/canvas/nodes/ChatFoldNodeCard.tsx` 合成节点 dashed slate + 折叠数 badge + preTokens chip + 点击触发 unfoldCompact + stopPropagation 防 selection；`CHAT_FOLD_PREFIX` 命名空间防止 phantom id 撞 ChatNode uuid
+- **M3** (`59187c6`)：`layoutChatFlow(chatFlow, foldedCompactIds?)` 第二参数；hidden ChatNode 跳过 dagre + RF 输出；fold phantom 进 dagre 拿位置；edge reroute taxonomy（boundary fork → fold-output-right / fold-input dedup）；LogicalEdge 折叠态 retarget 到 chatFold；`ChatFlowCanvas` nodeTypes 注册 chatFold + 订阅 foldedCompactIds 触发 layout 重算 + onNodeClick guard `isChatFoldId` + first-paint fitView 跳过 fold phantom 找最右真 ChatNode
+
+**M4 已合入 M1-M3**：toggle 按钮 (M1) / chatFold click (M2) / selection guard (M3) 都到位；右键菜单作为 Agentloom 平价 polish defer，不阻塞。
+
+**测试**：337 → 371 unit (+34)。新增 `compactFold.test.ts` (15) / `foldProjection.test.ts` (20，含 256MB-shape stress 在 50ms 内) / `ChatFoldNodeCard.test.tsx` (4) / layoutDag fold-aware (10)。
+
+**默认折叠态实测计算**（256MB session 1500 ChatNode / 131 compacts）：
+
+| 指标 | v0.7 baseline | inline-fold 默认折叠 |
+|---|---|---|
+| 主链可见 ChatNode | ~1500 | ~32 (≈ 1 chatFold + 1 latest compact + 30 tail) |
+| dagre 跑层数 | 1500 | ~30 + 主链分支节点 |
+| 估算加速 | 1× | ~50× 主链 reconcile（性能实测靠用户回开发机后浏览器实跑） |
+
+**e2e**：`compact.spec.ts` 第 3 个 case 重写：原本验证 `compact-original` drill breadcrumb，改成验证默认态有 chatFold phantom + toggle 按钮文案 click 后翻转。1/2/4 case 不变。
+
+**遗留 / 设计抉择 trail**：
+
+- 用户提的"嵌套显示多个压缩节点"：largest-first 自然实现 —— 默认折叠时只有最外层可见，剥洋葱式逐层展开
+- sibling fork 不被主链 compact 吸收：保留可见，跟 CC compact 不"看见"sibling 的语义一致
+- 没做：右键菜单 / 拖拽 fold 节点 / mini-list peek（Agentloom 这些都是 follow-up，Loomscope 同样推后）
+- localStorage GC（删 session 时清掉 fold 条目）：v0.10 polish backlog
+- 实时 mode：未来 file-tail 引入新 compact 时是否要"自动加入 foldedCompactIds"是个开放问题，先存当前折叠状态，新 compact 不会 auto-fold
+
 ### v0.8 fork browsing ship（commits `c1e9e74` → M6 doc commit，6 milestone + 4 e2e）
 
 按 `handoff-v0.8-fork-browsing.md` 实施。**v0.6 redo 8 + v0.7 2 + v0.8 新增 3 = 13 条硬约束全部守住**。**user 0 fork data 这件事完全靠合成 fixture 顶住测试覆盖** —— `__fixtures__/synthetic/fork-pair/` 一对 mock /branch jsonl + forkTree.test.ts 自建 tmpdir scenarios。

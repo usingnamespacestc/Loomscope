@@ -231,6 +231,85 @@ describe("computeFoldProjection — sibling branches off the main chain", () => 
   });
 });
 
+describe("computeFoldProjection — stress / scale", () => {
+  // Build a 1500-ChatNode chain with 131 compacts at regular intervals.
+  // This mirrors the author's 256MB session shape (commit message in
+  // v0.6/v0.7 ship notes). Asserts:
+  //   - largest-first attribution collapses 131 nested folds into ONE
+  //     active host (the rightmost compact)
+  //   - exactly one chatFold phantom would render
+  //   - hidden count = total chain length minus the outermost compact
+  //     and its post-host tail
+  // Also exercises the inner loops at scale to surface accidental
+  // O(N²) regressions; on a typical dev box this completes in <100ms.
+  it("collapses 131 nested compacts into a single active fold host", () => {
+    const N = 1500;
+    const everyK = Math.floor(N / 131); // ~11 turns between compacts
+    const nodes: ChatNode[] = [];
+    let lastId: string | null = null;
+    let compactCount = 0;
+    const compactIds: string[] = [];
+    for (let i = 0; i < N; i += 1) {
+      const id = `n${i}`;
+      const isCompact = i > 0 && compactCount < 131 && i % everyK === 0;
+      if (isCompact) {
+        compactIds.push(id);
+        compactCount += 1;
+      }
+      nodes.push(
+        chatNode(
+          id,
+          lastId,
+          isCompact,
+          isCompact ? lastId : undefined,
+        ),
+      );
+      lastId = id;
+    }
+    expect(compactIds.length).toBe(131);
+
+    const cf = chatFlow(nodes);
+    const proj = computeFoldProjection(cf, new Set(compactIds));
+
+    // Outer = last compact wins. Earlier compacts' claims get absorbed.
+    expect(proj.activeFoldHostIds.size).toBe(1);
+    const winner = [...proj.activeFoldHostIds][0];
+    expect(winner).toBe(compactIds[compactIds.length - 1]);
+
+    // Hidden = everything from root up to (but not including) winner.
+    const winnerIdx = nodes.findIndex((n) => n.id === winner);
+    expect(proj.hidden.size).toBe(winnerIdx); // 0..winnerIdx-1 all hidden
+
+    // Post-host tail (nodes after winner) stays visible.
+    for (let i = winnerIdx + 1; i < N; i += 1) {
+      expect(proj.hidden.has(`n${i}`)).toBe(false);
+    }
+  });
+
+  it("256MB-shape scale: projection completes well under 100ms (regression guard)", () => {
+    const N = 1500;
+    const everyK = Math.floor(N / 131);
+    const nodes: ChatNode[] = [];
+    let lastId: string | null = null;
+    const compactIds: string[] = [];
+    for (let i = 0; i < N; i += 1) {
+      const id = `n${i}`;
+      const isCompact =
+        i > 0 && compactIds.length < 131 && i % everyK === 0;
+      if (isCompact) compactIds.push(id);
+      nodes.push(
+        chatNode(id, lastId, isCompact, isCompact ? lastId : undefined),
+      );
+      lastId = id;
+    }
+    const cf = chatFlow(nodes);
+    const t0 = performance.now();
+    computeFoldProjection(cf, new Set(compactIds));
+    const elapsed = performance.now() - t0;
+    expect(elapsed).toBeLessThan(100);
+  });
+});
+
 describe("computeFoldProjection — defensive guards", () => {
   it("ignores folded compacts whose range is empty (missing logicalParentChatNodeId)", () => {
     const cf = chatFlow([

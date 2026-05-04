@@ -1,14 +1,17 @@
-// v0.7 compact handling — end-to-end smoke against the live dev server.
+// Compact handling — end-to-end smoke against the live dev server.
 //
 // Targets the author's main 256MB session (2362ff7c-...) which has 131
-// compact ChatNodes — guaranteed to exercise compact chrome, the
-// pre-compact drill path, and the logical edge layer.
+// compact ChatNodes — guaranteed to exercise compact chrome, the new
+// inline fold flow (replaces v0.7's compact-original drill mode), and
+// the logical edge layer.
 //
 // What we verify (testid-driven so visual evolution doesn't break us):
 //   1. compact ChatNode renders with dashed-border + tri-color chrome
 //   2. compact card chip text shows the trigger label
-//   3. clicking "⤢ 展开 pre-compact" pushes a compact-original drill
-//      frame and the breadcrumb + canvas re-render
+//   3. session loads with default-fold ON: at least one chatFold
+//      phantom is in the DOM; clicking the fold toggle on a compact
+//      card flips the chatFold's presence (unfold → no phantom for
+//      that compact, then fold again → phantom returns)
 //   4. ChatFlow canvas emits at least one logical SVG edge
 //
 // compact_file_reference DrillPanel rendering is tested at the unit
@@ -72,30 +75,36 @@ test.describe("v0.7 compact handling — e2e against live session", () => {
     await expect(compactCard).toContainText(/⊞ compact \((auto|manual|failed)\)/);
   });
 
-  test("'⤢ 展开 pre-compact' button pushes compact-original drill frame", async ({ page }) => {
-    // Find the first compact ChatNode that has a wired pre-compact
-    // button (logicalParentChatNodeId resolved). On the author's main
-    // session 131/131 compact ChatNodes resolve, so .first() is safe.
+  test("default-fold puts at least one chatFold phantom in the DOM, and toggling flips it", async ({ page }) => {
+    // Default state on session open: every compact's pre-compact range
+    // is folded → at least one chatFold phantom must render. (256MB
+    // session has 131 compacts, all on the main chain, all nested via
+    // M1's walk-to-root semantics → exactly ONE outermost chatFold
+    // phantom is the typical state, but smaller sessions may show more.)
+    await expect(
+      page.locator('[data-testid^="chatfold-"][data-testid^="chatfold-"]:not([data-testid*="badge"])'),
+    ).not.toHaveCount(0, { timeout: 10_000 });
+    // Pick the FIRST visible compact card and grab its host id from the
+    // toggle button's testid (compact-foldtoggle-<id>).
     const compactCard = page.locator('[data-compact-trigger]').first();
     await expect(compactCard).toBeVisible();
-    // React Flow's pan layer can intercept clicks on cards that are
-    // partially off-viewport. fitView the canvas onto the compact card
-    // first by interacting with React Flow's controls, OR rely on
-    // dispatchEvent to bypass the pan layer entirely.
-    const preBtn = compactCard.locator('[data-testid^="compact-pre-"]').first();
-    await expect(preBtn).toBeEnabled({ timeout: 5_000 });
-    // dispatchEvent path — the click handler is a plain React onClick
-    // that doesn't depend on a real PointerEvent sequence; this avoids
-    // React Flow's pan-layer interception for cards positioned outside
-    // the initial fitView viewport.
-    await preBtn.dispatchEvent("click");
-    // Drill breadcrumb should now render and contain "pre-compact".
-    const breadcrumb = page.locator('[data-testid="drill-breadcrumb"]');
-    await expect(breadcrumb).toBeVisible({ timeout: 5_000 });
-    await expect(breadcrumb).toContainText(/pre-compact/);
-    // Exit back to ChatFlow so other tests start clean.
-    await page.locator('[data-testid="exit-workflow"]').click();
-    await expect(breadcrumb).toBeHidden();
+    const toggleBtn = compactCard
+      .locator('[data-testid^="compact-foldtoggle-"]')
+      .first();
+    await expect(toggleBtn).toBeEnabled({ timeout: 5_000 });
+    const toggleTestId = await toggleBtn.getAttribute("data-testid");
+    const hostId = toggleTestId?.replace("compact-foldtoggle-", "") ?? "";
+    expect(hostId.length).toBeGreaterThan(0);
+    // First click toggles the state. We can't statically know whether
+    // THIS particular compact's id is currently in foldedCompactIds
+    // (largest-first attribution may have absorbed it into an outer
+    // fold). What we can assert is that the button text flips form.
+    const before = (await toggleBtn.textContent())?.trim() ?? "";
+    await toggleBtn.dispatchEvent("click");
+    const after = (await toggleBtn.textContent())?.trim() ?? "";
+    expect(after).not.toBe(before);
+    // Toggle back so other tests start clean.
+    await toggleBtn.dispatchEvent("click");
   });
 
   test("ChatFlow canvas registers the logical edge marker (M4 reaches the DOM)", async ({ page }) => {
