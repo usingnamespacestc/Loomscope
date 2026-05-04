@@ -301,17 +301,24 @@ function MessageBubbleImpl({
     >
       {userText && (
         <div className="mb-2 flex items-end justify-end gap-2">
-          {/* "复制" sits to the LEFT of the bubble, bottom-aligned with
-              the bubble's bottom edge. Sits on the white panel
-              background so uses the light/gray tone (not dark/white). */}
+          {/* "复制" sits to the LEFT of the bubble, bottom-aligned. */}
           <CopyButton
             text={userText}
             role="user"
             chatNodeId={chatNode.id}
             tone="light"
           />
-          <div className="max-w-[85%]">
-            <div className="prose prose-sm prose-invert rounded-2xl bg-blue-500 px-3 py-2 text-[13px] text-white break-words">
+          {/* Wrapper cap: 100% minus ~3rem (≈ "复制" text + gap-2 +
+              breathing). Fullscreen would otherwise clip nothing here
+              — the real bottleneck used to be `prose` default
+              `max-width: 65ch` (~540px) on the bubble itself, which
+              capped fullscreen-mode user bubbles to ≈ 1/3 of panel
+              width and made long prompts unreadable. `max-w-none`
+              below releases that. Short messages still hug content
+              because the wrapper is a flex item without flex-grow:
+              its preferred width follows the bubble's max-content. */}
+          <div className="max-w-[calc(100%-3rem)]">
+            <div className="prose prose-sm prose-invert max-w-none rounded-2xl bg-blue-500 px-3 py-2 text-[13px] text-white break-words">
               <MarkdownView>{userText}</MarkdownView>
             </div>
           </div>
