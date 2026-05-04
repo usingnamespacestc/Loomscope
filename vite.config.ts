@@ -1,4 +1,8 @@
-import { defineConfig } from "vite";
+// vitest 4+ split its config typing out of vite's UserConfig — vite 8
+// no longer accepts the `test` key in `defineConfig` from "vite".
+// Importing `defineConfig` from "vitest/config" gives us the merged
+// type that includes both vite + vitest fields.
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 
