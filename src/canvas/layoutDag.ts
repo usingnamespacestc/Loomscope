@@ -33,6 +33,13 @@ export interface ChatNodeRFData extends Record<string, unknown> {
   // 📁 N stats chip on ChatNodeCard. 0 = no snapshots bound (badge
   // hidden).
   fileTouchCount: number;
+  // v0.8 M5: number of immediate children of this ChatNode in the
+  // (possibly merged) ChatFlow. Drives the ⑂ N fork indicator chip
+  // on ChatNodeCard — surfaces when ≥2, signals "this is a fork
+  // point" without forcing a separate fork-only data path (in-session
+  // siblings + cross-session /branch siblings are both just multi-
+  // children at this layer).
+  childCount: number;
   // Token bar inputs — last llm_call's input + cache 表示该轮 context window 占用.
   // maxContextTokens 由 last llm_call 的 model 字段决定（[1m] 后缀 = 1M, 其它 = 200k）.
   contextTokens: number;
@@ -112,12 +119,18 @@ export function layoutChatFlow(chatFlow: ChatFlow): {
   dagre.layout(g);
 
   // Pre-compute which nodes have parents/children — drives Handle visibility.
+  // v0.8 M5: also count children per parent for the ⑂ N fork indicator.
   const parentIds = new Set<string>();
   const childIds = new Set<string>();
+  const childCountOf = new Map<string, number>();
   for (const cn of chatFlow.chatNodes) {
     if (cn.parentChatNodeId) {
       childIds.add(cn.id);
       parentIds.add(cn.parentChatNodeId);
+      childCountOf.set(
+        cn.parentChatNodeId,
+        (childCountOf.get(cn.parentChatNodeId) ?? 0) + 1,
+      );
     }
   }
 
@@ -130,10 +143,14 @@ export function layoutChatFlow(chatFlow: ChatFlow): {
       id: cn.id,
       type: "chatNode",
       position: { x, y },
-      data: deriveCardData(cn, {
-        hasIncomingEdge: childIds.has(cn.id),
-        hasOutgoingEdge: parentIds.has(cn.id),
-      }),
+      data: deriveCardData(
+        cn,
+        {
+          hasIncomingEdge: childIds.has(cn.id),
+          hasOutgoingEdge: parentIds.has(cn.id),
+        },
+        childCountOf.get(cn.id) ?? 0,
+      ),
     };
   });
 
@@ -236,6 +253,7 @@ function deriveContextTokens(cn: ChatNode): {
 function deriveCardData(
   cn: ChatNode,
   edges: { hasIncomingEdge: boolean; hasOutgoingEdge: boolean },
+  childCount: number,
 ): ChatNodeRFData {
   const { contextTokens, maxContextTokens } = deriveContextTokens(cn);
   return {
@@ -252,6 +270,7 @@ function deriveCardData(
     }, 0),
     isCompactSummary: cn.isCompactSummary,
     fileTouchCount: distinctTouchedFiles(cn).size,
+    childCount,
     contextTokens,
     maxContextTokens,
     slashCommand: cn.slashCommand,

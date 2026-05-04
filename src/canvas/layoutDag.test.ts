@@ -482,6 +482,22 @@ describe("distinctTouchedFiles + fileTouchCount RFData (v0.7)", () => {
     ]);
   });
 
+  it("layoutChatFlow counts immediate children of each ChatNode (childCount on RF data, v0.8 M5)", () => {
+    // a → b (fork) → c1, c2; b has 2 children, others have 0.
+    const cf = makeChatFlow([
+      makeChatNode({ id: "a" }),
+      makeChatNode({ id: "b", parentChatNodeId: "a" }),
+      makeChatNode({ id: "c1", parentChatNodeId: "b" }),
+      makeChatNode({ id: "c2", parentChatNodeId: "b" }),
+    ]);
+    const { nodes } = layoutChatFlow(cf);
+    const childCountById = new Map(nodes.map((n) => [n.id, n.data.childCount]));
+    expect(childCountById.get("a")).toBe(1);
+    expect(childCountById.get("b")).toBe(2);
+    expect(childCountById.get("c1")).toBe(0);
+    expect(childCountById.get("c2")).toBe(0);
+  });
+
   it("layoutChatFlow exposes fileTouchCount on RF node data", () => {
     const cf = makeChatFlow([
       makeChatNode({

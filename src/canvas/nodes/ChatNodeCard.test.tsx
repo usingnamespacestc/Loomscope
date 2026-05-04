@@ -66,6 +66,7 @@ function nodeProps(cn: ChatNode) {
       totalThinkingChars: 0,
       isCompactSummary: cn.isCompactSummary,
       fileTouchCount: 0,
+      childCount: 0,
       contextTokens: 0,
       maxContextTokens: 200_000,
       slashCommand: cn.slashCommand,
@@ -191,5 +192,79 @@ describe("ChatNodeCard — compact branch", () => {
     expect(screen.queryByTestId(`enter-workflow-${cn.id}`)).toBeNull();
     // pre-compact button is independent of llm_call presence.
     expect(screen.getByTestId(`compact-pre-${cn.id}`)).toBeTruthy();
+  });
+});
+
+describe("ChatNodeCard — fork indicator chip (v0.8 M5)", () => {
+  // Non-compact ChatNodeCard branch exposes the ⑂ N stats chip when
+  // childCount >= 2. compact branch tests above already use the same
+  // shim but go through CompactCard which has its own chrome.
+  function nonCompactProps(id: string, childCount: number) {
+    const cn: ChatNode = {
+      kind: "chat",
+      id,
+      parentChatNodeId: null,
+      rootUserUuid: `u-${id}`,
+      userMessage: { uuid: `u-${id}`, content: `prompt ${id}`, attachments: [] },
+      workflow: { nodes: [], edges: [] },
+      trigger: "user",
+      isCompactSummary: false,
+      meta: {},
+    };
+    return {
+      id: cn.id,
+      type: "chatNode",
+      data: {
+        chatNode: cn,
+        userPreview: `prompt ${id}`,
+        assistantPreview: "",
+        toolCount: 0,
+        llmCount: 0,
+        totalThinkingChars: 0,
+        isCompactSummary: false,
+        fileTouchCount: 0,
+        childCount,
+        contextTokens: 0,
+        maxContextTokens: 200_000,
+        slashCommand: undefined,
+        hasIncomingEdge: false,
+        hasOutgoingEdge: childCount > 0,
+      },
+      selected: false,
+      dragging: false,
+      isConnectable: false,
+      zIndex: 0,
+      selectable: true,
+      deletable: true,
+      draggable: false,
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      width: 200,
+      height: 100,
+      sourcePosition: undefined,
+      targetPosition: undefined,
+      dragHandle: undefined,
+      parentId: undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+  }
+
+  it("renders ⑂ N chip when childCount >= 2", () => {
+    render(withRF(<ChatNodeCard {...nonCompactProps("p-fork", 3)} />));
+    const chip = screen.getByTestId("chat-node-p-fork-fork-indicator");
+    expect(chip).toBeTruthy();
+    expect(chip.textContent).toContain("⑂");
+    expect(chip.textContent).toContain("3");
+    expect(chip.title).toMatch(/3 branches/);
+  });
+
+  it("hides the chip when childCount < 2", () => {
+    render(withRF(<ChatNodeCard {...nonCompactProps("p-no-fork-0", 0)} />));
+    expect(screen.queryByTestId("chat-node-p-no-fork-0-fork-indicator")).toBeNull();
+  });
+
+  it("hides the chip when childCount === 1 (single child is not a fork)", () => {
+    render(withRF(<ChatNodeCard {...nonCompactProps("p-single", 1)} />));
+    expect(screen.queryByTestId("chat-node-p-single-fork-indicator")).toBeNull();
   });
 });

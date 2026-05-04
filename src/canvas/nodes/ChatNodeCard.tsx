@@ -195,6 +195,16 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
             <span className="font-mono">{data.fileTouchCount}</span>
           </span>
         )}
+        {data.childCount >= 2 && (
+          <span
+            className="inline-flex items-center gap-0.5"
+            title={`fork point — ${data.childCount} branches`}
+            data-testid={`chat-node-${cn.id}-fork-indicator`}
+          >
+            <span className="text-gray-400">⑂</span>
+            <span className="font-mono">{data.childCount}</span>
+          </span>
+        )}
       </div>
 
       {/* Full UUID centered at bottom — Agentloom convention. CSS truncate
