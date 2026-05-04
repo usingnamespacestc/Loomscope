@@ -29,20 +29,23 @@ body,
   display: none;
 }
 
-/* Inline-code wrap belt-and-suspenders. Typography plugin already sets
-   `overflow-wrap: anywhere` + `word-break: break-word` via theme.extend
-   (tailwind.config.js), but that lives in the components layer and the
-   chip's padding can still produce visible overflow if any parent
-   utility nudges the cascade. Force the issue here in the utilities
-   layer with `!important` so long inline tokens like
-   `copy-msg-${role}-${chatNodeId}` always wrap inside narrow
-   DrillPanel widths. Re-verify on @tailwindcss/typography upgrades:
-   if the plugin grows native wrap support this rule becomes
-   redundant and can be dropped. */
-@layer utilities {
-  .prose code,
-  .prose-sm code {
-    overflow-wrap: anywhere !important;
-    word-break: break-all !important;
-  }
+/* Inline-code wrap belt-and-suspenders. Typography plugin tries to
+   set `overflow-wrap: anywhere` via theme.extend (tailwind.config.js),
+   but in user testing — even in fresh incognito sessions — long
+   inline tokens like `copy-msg-${role}-${chatNodeId}` STILL overflow
+   the right edge in narrow DrillPanel widths. Suspected cause: the
+   `.prose-sm :where(code)` selector typography emits has zero
+   specificity from :where() and ends up losing to some other
+   utility / browser default for inline-element wrapping with
+   padding.
+   Use the most direct selector possible — `:not(pre) > code` matches
+   ONLY inline code (skipping code blocks which want x-axis scroll
+   instead) — combined with !important. Specificity 0,0,2 + !important
+   beats any prose-layer cascade. NOT scoped under @layer so cascade
+   priority is even safer.
+   Re-verify on @tailwindcss/typography upgrades: if the plugin grows
+   native wrap support this rule becomes redundant. */
+:not(pre) > code {
+  overflow-wrap: anywhere !important;
+  word-break: break-all !important;
 }
