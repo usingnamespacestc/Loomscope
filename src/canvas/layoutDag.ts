@@ -441,6 +441,64 @@ export function distinctToolUseFiles(cn: ChatNode): Set<string> {
   return out;
 }
 
+// v0.8.1 #9: "this node only" file-changes — strips the cumulative
+// git working-tree dirty set inherited from ancestors, keeping just
+// what THIS turn introduced.
+//
+// Algorithm:
+//   parentSnap = nearest ancestor (via parentChatNodeId) whose
+//                fileHistorySnapshots is non-empty; if none found,
+//                empty set
+//   selfSnap   = unionTrackedFiles(cn.meta.fileHistorySnapshots)
+//   selfDelta  = (selfSnap \ parentSnap) ∪ distinctToolUseFiles(cn)
+//
+// Why the union with tool_use: a Bash / sub-agent write can flip a
+// file already-dirty in the parent's snap. Diff alone would drop it,
+// but the user explicitly told the assistant to write that file —
+// it belongs in "this node's changes". And conversely: tool_use can
+// list a file (e.g. .gitignore'd) that snap never sees.
+export function nodeOwnFileChanges(
+  cn: ChatNode,
+  chatFlow: ChatFlow,
+): Set<string> {
+  const selfSnap = distinctTouchedFiles(cn);
+  const parentSnap = nearestAncestorSnapshotPaths(cn, chatFlow);
+  const out = new Set<string>();
+  for (const p of selfSnap) {
+    if (!parentSnap.has(p)) out.add(p);
+  }
+  for (const p of distinctToolUseFiles(cn)) out.add(p);
+  return out;
+}
+
+// Walk parentChatNodeId until we hit an ancestor with a non-empty
+// fileHistorySnapshots; return the union of its trackedFiles paths.
+// Empty set when no such ancestor exists. Bounded by chatFlow size
+// (cycles are guarded but shouldn't occur in well-formed flows).
+function nearestAncestorSnapshotPaths(
+  cn: ChatNode,
+  chatFlow: ChatFlow,
+): Set<string> {
+  const byId = new Map(chatFlow.chatNodes.map((c) => [c.id, c]));
+  const guard = new Set<string>();
+  let cursor: ChatNode | undefined = cn.parentChatNodeId
+    ? byId.get(cn.parentChatNodeId)
+    : undefined;
+  while (cursor && !guard.has(cursor.id)) {
+    guard.add(cursor.id);
+    const snaps = cursor.meta.fileHistorySnapshots ?? [];
+    if (snaps.length > 0) {
+      const out = new Set<string>();
+      for (const s of snaps) {
+        for (const f of s.trackedFiles) out.add(f);
+      }
+      return out;
+    }
+    cursor = cursor.parentChatNodeId ? byId.get(cursor.parentChatNodeId) : undefined;
+  }
+  return new Set();
+}
+
 export const TOKEN_BAR_DEFAULT_MAX = DEFAULT_MAX_CONTEXT_TOKENS;
 
 export function formatTokensKM(n: number | null | undefined): string {

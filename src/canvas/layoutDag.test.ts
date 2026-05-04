@@ -6,6 +6,7 @@ import {
   layoutChatFlow,
   lastAssistantPreview,
   maxContextForModel,
+  nodeOwnFileChanges,
   previewUserContent,
 } from "@/canvas/layoutDag";
 import type { ChatFlow, ChatNode } from "@/data/types";
@@ -761,5 +762,142 @@ describe("layoutChatFlow — fold integration", () => {
     // Exactly one entry edge (root → chatfold:d), even though hidden
     // members a and b both have root in their ancestry.
     expect(entries.length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("nodeOwnFileChanges (v0.8.1 #9 — selfDelta semantics)", () => {
+  it("returns selfSnap ∪ tool_use when no ancestor has a snapshot (fallback)", () => {
+    const cn = makeChatNode({
+      id: "child",
+      parentChatNodeId: null,
+      meta: {
+        fileHistorySnapshots: [
+          { uuid: "s1", trackedFiles: ["a.ts", "b.ts"], isUpdate: false },
+        ],
+      },
+      workflow: {
+        nodes: [
+          {
+            id: "t1",
+            kind: "tool_call",
+            parentUuid: null,
+            toolName: "Edit",
+            input: { file_path: "c.ts", old_string: "x", new_string: "y" },
+          },
+        ],
+        edges: [],
+      },
+    });
+    const cf = makeChatFlow([cn]);
+    const out = nodeOwnFileChanges(cn, cf);
+    expect(out).toEqual(new Set(["a.ts", "b.ts", "c.ts"]));
+  });
+
+  it("subtracts the nearest ancestor's snapshot from selfSnap", () => {
+    // ancestor snap = {a, b, x}; child snap = {a, b, c}.
+    // selfDelta from snap = {c}; no tool_use → result = {c}.
+    const parent = makeChatNode({
+      id: "parent",
+      parentChatNodeId: null,
+      meta: {
+        fileHistorySnapshots: [
+          {
+            uuid: "p-snap",
+            trackedFiles: ["a.ts", "b.ts", "x.ts"],
+            isUpdate: false,
+          },
+        ],
+      },
+    });
+    const child = makeChatNode({
+      id: "child",
+      parentChatNodeId: "parent",
+      meta: {
+        fileHistorySnapshots: [
+          {
+            uuid: "c-snap",
+            trackedFiles: ["a.ts", "b.ts", "c.ts"],
+            isUpdate: false,
+          },
+        ],
+      },
+    });
+    const cf = makeChatFlow([parent, child]);
+    expect(nodeOwnFileChanges(child, cf)).toEqual(new Set(["c.ts"]));
+  });
+
+  it("walks past empty-snapshot ancestors to find the NEAREST non-empty one", () => {
+    const root = makeChatNode({
+      id: "root",
+      parentChatNodeId: null,
+      meta: {
+        fileHistorySnapshots: [
+          { uuid: "r-snap", trackedFiles: ["root-only.ts"], isUpdate: false },
+        ],
+      },
+    });
+    const middle = makeChatNode({
+      id: "mid",
+      parentChatNodeId: "root",
+      // No snapshots — should be skipped.
+    });
+    const child = makeChatNode({
+      id: "child",
+      parentChatNodeId: "mid",
+      meta: {
+        fileHistorySnapshots: [
+          {
+            uuid: "c-snap",
+            trackedFiles: ["root-only.ts", "new.ts"],
+            isUpdate: false,
+          },
+        ],
+      },
+    });
+    const cf = makeChatFlow([root, middle, child]);
+    // root-only.ts is in ancestor → subtracted; new.ts remains.
+    expect(nodeOwnFileChanges(child, cf)).toEqual(new Set(["new.ts"]));
+  });
+
+  it("tool_use is unioned in even when the path is also in the ancestor snap (rollback case)", () => {
+    // Ancestor snap = {a, b}; child snap = {a, b} (no new dirty files);
+    // child tool_use = {a}.  selfDelta from snap = ∅; ∪ tool_use = {a}.
+    const parent = makeChatNode({
+      id: "parent",
+      parentChatNodeId: null,
+      meta: {
+        fileHistorySnapshots: [
+          { uuid: "p-snap", trackedFiles: ["a.ts", "b.ts"], isUpdate: false },
+        ],
+      },
+    });
+    const child = makeChatNode({
+      id: "child",
+      parentChatNodeId: "parent",
+      meta: {
+        fileHistorySnapshots: [
+          { uuid: "c-snap", trackedFiles: ["a.ts", "b.ts"], isUpdate: false },
+        ],
+      },
+      workflow: {
+        nodes: [
+          {
+            id: "t1",
+            kind: "tool_call",
+            parentUuid: null,
+            toolName: "Edit",
+            input: { file_path: "a.ts", old_string: "x", new_string: "y" },
+          },
+        ],
+        edges: [],
+      },
+    });
+    const cf = makeChatFlow([parent, child]);
+    expect(nodeOwnFileChanges(child, cf)).toEqual(new Set(["a.ts"]));
+  });
+
+  it("returns empty set when ChatNode has neither snapshot nor tool_use", () => {
+    const cn = makeChatNode({ id: "x" });
+    expect(nodeOwnFileChanges(cn, makeChatFlow([cn]))).toEqual(new Set());
   });
 });

@@ -9,19 +9,26 @@ import { memo, useMemo } from "react";
 
 import { MarkdownView } from "@/components/MarkdownView";
 import { JsonView } from "@/components/JsonView";
-import { distinctToolUseFiles } from "@/canvas/layoutDag";
-import type { ChatNode, LlmCallNode } from "@/data/types";
+import { distinctToolUseFiles, nodeOwnFileChanges } from "@/canvas/layoutDag";
+import type { ChatFlow, ChatNode, LlmCallNode } from "@/data/types";
 
 interface Props {
   chatNode: ChatNode;
+  // v0.8.1 #9: needed to walk parentChatNodeId for selfDelta vs
+  // ancestor-snapshot subtraction. Same scope ChatFlow as DrillPanel
+  // resolves (top-level or sub-agent).
+  chatFlow: ChatFlow;
 }
 
 // Memoized — selection switches happen frequently (every canvas
 // click) and the markdown pipeline is the dominant cost. Skip the
 // full re-render when ChatNode identity hasn't changed.
-export const ChatNodeDetail = memo(ChatNodeDetailImpl, (a, b) => a.chatNode === b.chatNode);
+export const ChatNodeDetail = memo(
+  ChatNodeDetailImpl,
+  (a, b) => a.chatNode === b.chatNode && a.chatFlow === b.chatFlow,
+);
 
-function ChatNodeDetailImpl({ chatNode }: Props) {
+function ChatNodeDetailImpl({ chatNode, chatFlow }: Props) {
   const userText = useMemo(() => extractText(chatNode.userMessage.content), [chatNode]);
   const lastLlm = useMemo(() => findLastLlmCall(chatNode), [chatNode]);
   const llmCount = chatNode.workflow.nodes.filter((n) => n.kind === "llm_call").length;
@@ -86,6 +93,7 @@ function ChatNodeDetailImpl({ chatNode }: Props) {
         </Section>
       )}
 
+      <NodeOwnFileChangesSection chatNode={chatNode} chatFlow={chatFlow} />
       <FileHistorySnapshotsSection chatNode={chatNode} />
 
       {chatNode.slashCommand && (
@@ -186,6 +194,55 @@ function findLastLlmCall(cn: ChatNode): LlmCallNode | null {
 //
 // Update-only snapshot paths (CC re-emits the same set when assistant
 // follow-ups land) get de-emphasised on the snapshot side.
+// v0.8.1 #9: "本节点文件改动" — paths attributable to THIS turn only,
+// stripped of the cumulative working-tree dirty set inherited from
+// ancestors. See `nodeOwnFileChanges` for the algorithm.
+function NodeOwnFileChangesSection({
+  chatNode,
+  chatFlow,
+}: {
+  chatNode: ChatNode;
+  chatFlow: ChatFlow;
+}) {
+  const paths = useMemo(
+    () => Array.from(nodeOwnFileChanges(chatNode, chatFlow)).sort(),
+    [chatNode, chatFlow],
+  );
+  const toolUsePaths = useMemo(() => distinctToolUseFiles(chatNode), [chatNode]);
+  if (paths.length === 0) return null;
+  return (
+    <Section title={`本节点文件改动 (${paths.length})`}>
+      <div
+        data-testid="node-own-file-changes"
+        className="text-[11px] font-mono"
+      >
+        {paths.map((path) => {
+          const inTool = toolUsePaths.has(path);
+          return (
+            <div
+              key={path}
+              data-testid={`nofc-row-${path}`}
+              className="flex items-center gap-2 py-0.5 text-gray-800"
+              title={
+                inTool
+                  ? "本轮 tool_use 显式改 (Edit/Write/...)"
+                  : "snapshot 新增（相对父链最近一次 snapshot）— 可能是 Bash / sub-agent / hook 的副作用"
+              }
+            >
+              <span className="text-gray-400">{inTool ? "🔧" : "📸"}</span>
+              <span className="break-all">{path}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-1 text-[10px] text-gray-400">
+        相对祖先节点最近一次 file-history-snapshot 新增的文件 + 本节点
+        tool_use 显式改的文件。剔除了 git 工作区累积 dirty 集合。
+      </div>
+    </Section>
+  );
+}
+
 function FileHistorySnapshotsSection({ chatNode }: { chatNode: ChatNode }) {
   const snapshots = chatNode.meta.fileHistorySnapshots ?? [];
   const seenOnFresh = new Set<string>();
@@ -201,7 +258,7 @@ function FileHistorySnapshotsSection({ chatNode }: { chatNode: ChatNode }) {
   const union = Array.from(new Set([...snapshotPaths, ...toolUsePaths])).sort();
   if (union.length === 0) return null;
   return (
-    <Section title={`本轮文件改动 (${union.length})`}>
+    <Section title={`本轮累积文件改动 (${union.length})`}>
       <div
         data-testid="file-history-snapshot-list"
         className="text-[11px] font-mono"

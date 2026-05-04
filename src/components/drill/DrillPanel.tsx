@@ -258,7 +258,7 @@ function DetailTabContent({
   return (
     <>
       {focused.kind === "chatnode" && focused.chatNode && (
-        <ChatNodeDetail chatNode={focused.chatNode} />
+        <ChatNodeDetail chatNode={focused.chatNode} chatFlow={chatFlow} />
       )}
       {focused.kind === "chatnode" && !focused.chatNode && (
         <EmptyHint label="点 ChatNode 查看详情" />

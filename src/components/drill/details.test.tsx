@@ -11,12 +11,28 @@ import {
 } from "@/components/drill/WorkNodeDetail";
 import type {
   AttachmentNode,
+  ChatFlow,
   ChatNode,
   CompactNode,
   DelegateNode,
   LlmCallNode,
   ToolCallNode,
 } from "@/data/types";
+
+// v0.8.1 #9: ChatNodeDetail now needs `chatFlow` for the "本节点
+// 文件改动" parent-snapshot walk. Tests use a minimal flow that wraps
+// the ChatNode under test, optionally with extra ancestors.
+function flowFor(...chatNodes: ChatNode[]): ChatFlow {
+  return {
+    id: "test-flow",
+    mainJsonlPath: "/x.jsonl",
+    sidecarDir: "/x",
+    chatNodes,
+    orphans: [],
+    flowEvents: [],
+    trigger: "user",
+  };
+}
 
 function makeChatNode(extra: Partial<ChatNode> = {}): ChatNode {
   return {
@@ -38,7 +54,7 @@ describe("ChatNodeDetail", () => {
     const cn = makeChatNode({
       userMessage: { uuid: "u1", content: "hello **world**", attachments: [] },
     });
-    const { container } = render(<ChatNodeDetail chatNode={cn} />);
+    const { container } = render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     expect(container.querySelector("strong")?.textContent).toBe("world");
   });
 
@@ -46,7 +62,7 @@ describe("ChatNodeDetail", () => {
     const cn = makeChatNode({
       userMessage: { uuid: "u1", content: { weird: "shape" }, attachments: [] },
     });
-    render(<ChatNodeDetail chatNode={cn} />);
+    render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     expect(screen.getByTestId("json-view")).toBeTruthy();
   });
 
@@ -72,7 +88,7 @@ describe("ChatNodeDetail", () => {
         edges: [],
       },
     });
-    render(<ChatNodeDetail chatNode={cn} />);
+    render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     expect(screen.getByText("final answer")).toBeTruthy();
   });
 
@@ -87,7 +103,7 @@ describe("ChatNodeDetail", () => {
         edges: [],
       },
     });
-    const { container } = render(<ChatNodeDetail chatNode={cn} />);
+    const { container } = render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     expect(container.textContent).toMatch(/llm_call: 1/);
     expect(container.textContent).toMatch(/tool_call \+ delegate: 2/);
   });
@@ -96,12 +112,78 @@ describe("ChatNodeDetail", () => {
     const cn = makeChatNode({
       slashCommand: { name: "/model", args: undefined, stdout: "Set model to Opus" },
     });
-    const { container } = render(<ChatNodeDetail chatNode={cn} />);
+    const { container } = render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     expect(container.textContent).toMatch(/\/model/);
     expect(container.textContent).toMatch(/Set model to Opus/);
   });
 
-  it("renders 本轮文件改动 section when fileHistorySnapshots are bound (sorted union)", () => {
+  it("v0.8.1 #9: 本轮累积 section title carries the new wording", () => {
+    const cn = makeChatNode({
+      meta: {
+        fileHistorySnapshots: [
+          { uuid: "s1", trackedFiles: ["a.ts"], isUpdate: false },
+        ],
+      },
+    });
+    const { container } = render(
+      <ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />,
+    );
+    expect(container.textContent).toMatch(/本轮累积文件改动/);
+  });
+
+  it("v0.8.1 #9: 本节点文件改动 section subtracts the parent's snapshot from the child's", () => {
+    const parent = makeChatNode({
+      id: "parent",
+      parentChatNodeId: null,
+      meta: {
+        fileHistorySnapshots: [
+          { uuid: "p", trackedFiles: ["a.ts", "b.ts"], isUpdate: false },
+        ],
+      },
+    });
+    const child = makeChatNode({
+      id: "child",
+      parentChatNodeId: "parent",
+      meta: {
+        fileHistorySnapshots: [
+          {
+            uuid: "c",
+            trackedFiles: ["a.ts", "b.ts", "newfile.ts"],
+            isUpdate: false,
+          },
+        ],
+      },
+    });
+    render(<ChatNodeDetail chatNode={child} chatFlow={flowFor(parent, child)} />);
+    // newfile.ts is the only path attributable to THIS node.
+    expect(screen.getByTestId("nofc-row-newfile.ts")).toBeTruthy();
+    expect(screen.queryByTestId("nofc-row-a.ts")).toBeNull();
+    expect(screen.queryByTestId("nofc-row-b.ts")).toBeNull();
+  });
+
+  it("v0.8.1 #9: 本节点 section hides entirely when selfDelta is empty + no tool_use", () => {
+    const parent = makeChatNode({
+      id: "parent",
+      meta: {
+        fileHistorySnapshots: [
+          { uuid: "p", trackedFiles: ["a.ts"], isUpdate: false },
+        ],
+      },
+    });
+    const child = makeChatNode({
+      id: "child",
+      parentChatNodeId: "parent",
+      meta: {
+        fileHistorySnapshots: [
+          { uuid: "c", trackedFiles: ["a.ts"], isUpdate: false },
+        ],
+      },
+    });
+    render(<ChatNodeDetail chatNode={child} chatFlow={flowFor(parent, child)} />);
+    expect(screen.queryByTestId("node-own-file-changes")).toBeNull();
+  });
+
+  it("renders 本轮累积文件改动 section when fileHistorySnapshots are bound (sorted union)", () => {
     const cn = makeChatNode({
       meta: {
         fileHistorySnapshots: [
@@ -120,7 +202,7 @@ describe("ChatNodeDetail", () => {
         ],
       },
     });
-    render(<ChatNodeDetail chatNode={cn} />);
+    render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     expect(screen.getByTestId("fh-row-docs/devlog.md")).toBeTruthy();
     expect(screen.getByTestId("fh-row-src/A.ts")).toBeTruthy();
     expect(screen.getByTestId("fh-row-src/B.ts")).toBeTruthy();
@@ -139,7 +221,7 @@ describe("ChatNodeDetail", () => {
         ],
       },
     });
-    render(<ChatNodeDetail chatNode={cn} />);
+    render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     const fresh = screen.getByTestId("fh-row-src/A.ts");
     const stale = screen.getByTestId("fh-row-stale-only.ts");
     // Path text cell = first child div in the grid row
@@ -149,7 +231,7 @@ describe("ChatNodeDetail", () => {
 
   it("hides the section when neither snapshots nor tool_use file paths exist", () => {
     const cn = makeChatNode({});
-    render(<ChatNodeDetail chatNode={cn} />);
+    render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     expect(screen.queryByTestId("file-history-snapshot-list")).toBeNull();
   });
 
@@ -175,7 +257,7 @@ describe("ChatNodeDetail", () => {
         ],
       },
     });
-    render(<ChatNodeDetail chatNode={cn} />);
+    render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     const row = screen.getByTestId("fh-row-src/A.ts");
     expect(row.className).not.toMatch(/text-amber-700/);
     expect(screen.getByTestId("fh-src/A.ts-snap").textContent).toBe("✓");
@@ -195,7 +277,7 @@ describe("ChatNodeDetail", () => {
         ],
       },
     });
-    render(<ChatNodeDetail chatNode={cn} />);
+    render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     const row = screen.getByTestId("fh-row-docs/devlog.md");
     expect(row.className).toMatch(/text-amber-700/);
     expect(screen.getByTestId("fh-docs/devlog.md-snap").textContent).toBe("📸");
@@ -217,7 +299,7 @@ describe("ChatNodeDetail", () => {
         edges: [],
       },
     });
-    render(<ChatNodeDetail chatNode={cn} />);
+    render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     const row = screen.getByTestId("fh-row-.env.local");
     expect(row.className).toMatch(/text-amber-700/);
     expect(screen.getByTestId("fh-.env.local-snap").textContent).toBe("—");
@@ -267,7 +349,7 @@ describe("ChatNodeDetail", () => {
         edges: [],
       },
     });
-    render(<ChatNodeDetail chatNode={cn} />);
+    render(<ChatNodeDetail chatNode={cn} chatFlow={flowFor(cn)} />);
     expect(screen.getByTestId("fh-row-edit.ts")).toBeTruthy();
     expect(screen.getByTestId("fh-row-write.ts")).toBeTruthy();
     expect(screen.getByTestId("fh-row-multi.ts")).toBeTruthy();
