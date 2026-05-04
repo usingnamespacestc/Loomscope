@@ -9,6 +9,12 @@
 import dagre from "@dagrejs/dagre";
 import type { Edge as RFEdge, Node as RFNode } from "@xyflow/react";
 
+import {
+  chatFoldIdFor,
+  computeFoldProjection,
+  type FoldProjection,
+} from "@/canvas/foldProjection";
+import type { ChatFoldNodeData } from "@/canvas/nodes/ChatFoldNodeCard";
 import type { ChatFlow, ChatNode } from "@/data/types";
 
 // Match Agentloom's w-52 (208px) for visual family resemblance.
@@ -54,12 +60,36 @@ export interface ChatNodeRFData extends Record<string, unknown> {
 }
 
 export type ChatNodeRFNode = RFNode<ChatNodeRFData, "chatNode">;
+type LayoutChatFoldRFNode = RFNode<ChatFoldNodeData, "chatFold">;
+export type LayoutRFNode = ChatNodeRFNode | LayoutChatFoldRFNode;
 
-// Public API: derive React Flow nodes/edges with positions from a ChatFlow.
-export function layoutChatFlow(chatFlow: ChatFlow): {
-  nodes: ChatNodeRFNode[];
+// Approximate height of a ChatFoldNodeCard. Used as a layout hint;
+// dagre also tolerates undersized hints — the actual card auto-grows
+// with content. Slightly shorter than NODE_HEIGHT because the fold
+// card has less chrome.
+const FOLD_NODE_HEIGHT = 92;
+
+// Public API: derive React Flow nodes/edges with positions from a
+// ChatFlow + the set of compact ChatNode ids whose pre-compact range
+// is currently folded. The fold set drives ``computeFoldProjection``;
+// hidden range members are dropped from dagre, replaced upstream of
+// each fold's host compact by a synthetic ``chatFold`` rfNode.
+//
+// When ``foldedCompactIds`` is empty (or nullish) the function
+// degenerates to its v0.7 layout — no chatFold phantoms, no
+// edge reroute.
+export function layoutChatFlow(
+  chatFlow: ChatFlow,
+  foldedCompactIds?: Set<string>,
+): {
+  nodes: LayoutRFNode[];
   edges: RFEdge[];
 } {
+  const projection = computeFoldProjection(
+    chatFlow,
+    foldedCompactIds ?? new Set(),
+  );
+
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({
@@ -70,76 +100,152 @@ export function layoutChatFlow(chatFlow: ChatFlow): {
     marginy: 20,
   });
 
+  // dagre nodes: skip hidden ChatNodes; emit a phantom chatFold for
+  // each active fold host BEFORE walking edges so g.setEdge calls find
+  // both endpoints registered.
   for (const cn of chatFlow.chatNodes) {
+    if (projection.hidden.has(cn.id)) continue;
     g.setNode(cn.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+  }
+  for (const hostId of projection.activeFoldHostIds) {
+    g.setNode(chatFoldIdFor(hostId), {
+      width: NODE_WIDTH,
+      height: FOLD_NODE_HEIGHT,
+    });
   }
 
   const edges: RFEdge[] = [];
+
+  // Edges with fold-aware reroute. For each `cn -> parent` continuation
+  // edge in the original flow we pick exactly one of:
+  //   - drop  (both endpoints absorbed into the same fold)
+  //   - normal cn  ↔  parent (both visible, default v0.7 behaviour)
+  //   - fold(parent) → cn  (visible cn whose parent was hidden)
+  //   - parent → fold(cn)  (hidden cn fed from a visible parent — only
+  //                         emit ONCE per fold to avoid n parallel
+  //                         entry edges when n hidden range members
+  //                         share a visible parent)
+  const emittedFoldEntries = new Set<string>();
   for (const cn of chatFlow.chatNodes) {
-    if (cn.parentChatNodeId) {
-      g.setEdge(cn.parentChatNodeId, cn.id);
-      // targetModel = the model that ran ON this turn (the child of the
-      // edge). Edge tooltip shows this so the user can see "Opus" vs
-      // "Sonnet" mid-session switches at a glance.
+    const p = cn.parentChatNodeId;
+    if (!p) continue;
+    const cnHidden = projection.hidden.has(cn.id);
+    const pHidden = projection.hidden.has(p);
+    if (cnHidden && pHidden) continue; // wholly inside fold(s)
+
+    if (!cnHidden && !pHidden) {
+      g.setEdge(p, cn.id);
       const targetModel = lastModelOf(cn);
       edges.push({
-        id: `e-${cn.parentChatNodeId}->${cn.id}`,
-        source: cn.parentChatNodeId,
+        id: `e-${p}->${cn.id}`,
+        source: p,
         target: cn.id,
         type: "continuation",
         data: { targetModel },
       });
+      continue;
     }
+
+    if (!cnHidden && pHidden) {
+      // fold-output-right → cn (cn might be the host or a sibling
+      // fork that emerged from inside the range). The host case is
+      // the natural continuation (chatFold → host compact); sibling
+      // forks are extra branches off internal range members.
+      const foldHost = projection.foldByHidden.get(p);
+      if (!foldHost) continue;
+      const foldId = chatFoldIdFor(foldHost);
+      g.setEdge(foldId, cn.id);
+      const targetModel = lastModelOf(cn);
+      edges.push({
+        id: `e-${foldId}->${cn.id}`,
+        source: foldId,
+        sourceHandle: "fold-output-right",
+        target: cn.id,
+        type: "continuation",
+        data: { targetModel },
+      });
+      continue;
+    }
+
+    // cnHidden && !pHidden: visible parent feeds into the fold. Dedupe
+    // on (parent, fold) so we don't emit n parallel edges when several
+    // hidden range members share a visible parent (rare but defensive).
+    const foldHost = projection.foldByHidden.get(cn.id);
+    if (!foldHost) continue;
+    const foldId = chatFoldIdFor(foldHost);
+    const key = `${p}->${foldId}`;
+    if (emittedFoldEntries.has(key)) continue;
+    emittedFoldEntries.add(key);
+    g.setEdge(p, foldId);
+    edges.push({
+      id: `e-${p}->${foldId}`,
+      source: p,
+      target: foldId,
+      targetHandle: "fold-input",
+      type: "continuation",
+      // No targetModel — the fold target isn't a real LLM turn, so the
+      // edge tooltip would have nothing meaningful to show.
+    });
   }
 
-  // v0.7 M4: emit logical edges from each compact ChatNode back to the
-  // pre-compact tail ChatNode that its compactMetadata.logicalParentChatNodeId
-  // references. Visually a反向弧 (backward arc) per design-visual-language —
-  // dashed浅灰. These edges deliberately do NOT call g.setEdge so dagre's
-  // LR layout stays driven only by parentChatNodeId continuation chains;
-  // tainting the layout with logical back-pointers would re-rank the
-  // pre-compact tail and visually break the time-ordered horizontal flow.
+  // Logical edges (compact ChatNode → its pre-compact tail). Off the
+  // dagre layout (no g.setEdge) — these are pure visual back-arcs.
+  // When the pre-compact tail is hidden, retarget to its fold phantom
+  // so the arc still lands somewhere meaningful instead of dangling.
   const chatNodeIds = new Set(chatFlow.chatNodes.map((c) => c.id));
   for (const cn of chatFlow.chatNodes) {
     if (!cn.isCompactSummary) continue;
+    if (projection.hidden.has(cn.id)) continue; // compact host itself folded out (rare with strict-containment)
     const lpcn = cn.compactMetadata?.logicalParentChatNodeId;
     if (!lpcn) continue;
-    // Defensive: skip when the target ChatNode isn't in this scope (=
-    // pre-compact tail was outside the synthetic ChatFlow being
-    // rendered, or compactMetadata has a stale id).
     if (!chatNodeIds.has(lpcn)) continue;
+
+    let target = lpcn;
+    if (projection.hidden.has(lpcn)) {
+      const foldHost = projection.foldByHidden.get(lpcn);
+      if (!foldHost) continue;
+      target = chatFoldIdFor(foldHost);
+    }
     edges.push({
-      id: `e-logical-${cn.id}->${lpcn}`,
+      id: `e-logical-${cn.id}->${target}`,
       source: cn.id,
-      target: lpcn,
+      target,
       type: "logical",
     });
   }
 
   dagre.layout(g);
 
-  // Pre-compute which nodes have parents/children — drives Handle visibility.
-  // v0.8 M5: also count children per parent for the ⑂ N fork indicator.
+  // Pre-compute which (visible) nodes have parents/children — drives
+  // Handle visibility on each card. Hidden nodes don't render so we
+  // skip them; chatFold phantoms always have both handles visible
+  // (they're declared statically in ChatFoldNodeCard).
   const parentIds = new Set<string>();
   const childIds = new Set<string>();
   const childCountOf = new Map<string, number>();
   for (const cn of chatFlow.chatNodes) {
-    if (cn.parentChatNodeId) {
+    if (projection.hidden.has(cn.id)) continue;
+    if (cn.parentChatNodeId && !projection.hidden.has(cn.parentChatNodeId)) {
       childIds.add(cn.id);
       parentIds.add(cn.parentChatNodeId);
       childCountOf.set(
         cn.parentChatNodeId,
         (childCountOf.get(cn.parentChatNodeId) ?? 0) + 1,
       );
+    } else if (cn.parentChatNodeId && projection.hidden.has(cn.parentChatNodeId)) {
+      // Parent is hidden — visually the card has an incoming edge from
+      // the chatFold phantom, so flag hasIncoming.
+      childIds.add(cn.id);
     }
   }
 
-  const nodes: ChatNodeRFNode[] = chatFlow.chatNodes.map((cn) => {
+  const chatNodeRfs: ChatNodeRFNode[] = [];
+  for (const cn of chatFlow.chatNodes) {
+    if (projection.hidden.has(cn.id)) continue;
     const pos = g.node(cn.id);
-    // dagre returns the *center*; React Flow expects top-left.
     const x = (pos?.x ?? 0) - NODE_WIDTH / 2;
     const y = (pos?.y ?? 0) - NODE_HEIGHT / 2;
-    return {
+    chatNodeRfs.push({
       id: cn.id,
       type: "chatNode",
       position: { x, y },
@@ -151,11 +257,37 @@ export function layoutChatFlow(chatFlow: ChatFlow): {
         },
         childCountOf.get(cn.id) ?? 0,
       ),
-    };
-  });
+    });
+  }
 
-  return { nodes, edges };
+  const foldRfs: LayoutChatFoldRFNode[] = [];
+  for (const hostId of projection.activeFoldHostIds) {
+    const foldId = chatFoldIdFor(hostId);
+    const pos = g.node(foldId);
+    const x = (pos?.x ?? 0) - NODE_WIDTH / 2;
+    const y = (pos?.y ?? 0) - FOLD_NODE_HEIGHT / 2;
+    const lastMemberId = projection.lastMemberByFold.get(hostId) ?? "";
+    const count = projection.countByFold.get(hostId) ?? 0;
+    const preTokens = projection.preTokensByFold.get(hostId);
+    foldRfs.push({
+      id: foldId,
+      type: "chatFold",
+      position: { x, y },
+      data: {
+        hostCompactId: hostId,
+        count,
+        lastMemberId,
+        preTokens,
+      },
+    });
+  }
+
+  return { nodes: [...chatNodeRfs, ...foldRfs], edges };
 }
+
+// Re-export so consumers (tests, future tooling) can introspect the
+// projection alongside layout output without re-importing the helper.
+export type { FoldProjection };
 
 const DEFAULT_MAX_CONTEXT_TOKENS = 200_000; // fallback for unknown models
 

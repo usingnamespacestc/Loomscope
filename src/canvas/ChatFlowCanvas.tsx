@@ -30,13 +30,18 @@ import "@xyflow/react/dist/style.css";
 
 import { layoutChatFlow } from "@/canvas/layoutDag";
 import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
+import { ChatFoldNodeCard } from "@/canvas/nodes/ChatFoldNodeCard";
 import { ChatNodeCard } from "@/canvas/nodes/ChatNodeCard";
 import { ContinuationArrowDefs, ContinuationEdge } from "@/canvas/edges/ContinuationEdge";
 import { LogicalArrowDefs, LogicalEdge } from "@/canvas/edges/LogicalEdge";
+import { isChatFoldId } from "@/canvas/foldProjection";
 import type { ChatFlow } from "@/data/types";
 import { useStore } from "@/store/index";
 
-const nodeTypes: NodeTypes = { chatNode: ChatNodeCard };
+const nodeTypes: NodeTypes = {
+  chatNode: ChatNodeCard,
+  chatFold: ChatFoldNodeCard,
+};
 const edgeTypes: EdgeTypes = {
   continuation: ContinuationEdge,
   logical: LogicalEdge,
@@ -147,10 +152,31 @@ interface CanvasInnerProps extends ChatFlowCanvasProps {
 }
 
 function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasInnerProps) {
-  const { nodes, edges } = useMemo(() => layoutChatFlow(chatFlow), [chatFlow]);
+  // Subscribe to the active session's foldedCompactIds so layout
+  // recomputes whenever the user folds / unfolds a compact. We
+  // intentionally pass the SAME chatFlow ref through to layout —
+  // recomputing layout while the underlying flow is unchanged is the
+  // intended design (fold projection is a function of fold state).
+  // For sub-ChatFlow drill (sub-agent canvas) the same store id keys
+  // the fold set; the inner ChatFlow has its own compact ids that are
+  // disjoint from the top-level set, so the same hydrated set works
+  // unmodified — non-existent ids are filtered by the projection's
+  // empty-range guard.
+  const foldedCompactIds = useStore(
+    (s) => s.sessions.get(sessionId)?.foldedCompactIds,
+  );
+  const { nodes, edges } = useMemo(
+    () => layoutChatFlow(chatFlow, foldedCompactIds),
+    [chatFlow, foldedCompactIds],
+  );
   const setSelected = useStore((s) => s.setSelected);
   const onNodeClick = useCallback(
     (_e: unknown, node: { id: string }) => {
+      // chatFold phantoms aren't real ChatNodes — skip selection so
+      // DrillPanel doesn't try to look up a non-existent ChatNode by
+      // the phantom id. The card itself stops propagation on click,
+      // but defense-in-depth here covers keyboard activation paths.
+      if (isChatFoldId(node.id)) return;
       setSelected(sessionId, node.id);
     },
     [setSelected, sessionId],
@@ -183,7 +209,16 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
   // ResizeObserver hit, and its boolean result flips false→true the
   // moment our target card is ready — which is exactly the trigger
   // we want.
-  const latestNodeId = nodes.length > 0 ? nodes[nodes.length - 1].id : null;
+  // Pick the latest visible REAL ChatNode (skip chatFold phantoms) so
+  // first-paint fitView centres on the most recent turn the user was
+  // actually conversing in, not on a fold placeholder upstream.
+  const latestNodeId = (() => {
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const n = nodes[i];
+      if (n.type === "chatNode") return n.id;
+    }
+    return null;
+  })();
   const latestNodeMeasured = useReactFlowStore((s: ReactFlowState) => {
     if (!latestNodeId) return false;
     const n = s.nodeLookup.get(latestNodeId);

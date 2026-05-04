@@ -16,7 +16,7 @@
 // real ChatNode (the chatFold is view-only, not a selectable node).
 
 import { Handle, Position } from "@xyflow/react";
-import type { NodeProps } from "@xyflow/react";
+import type { Node as RFNode, NodeProps } from "@xyflow/react";
 
 import { formatTokensKM } from "@/canvas/layoutDag";
 import { useStore } from "@/store/index";
@@ -38,21 +38,9 @@ export interface ChatFoldNodeData extends Record<string, unknown> {
   preTokens?: number;
 }
 
-export type ChatFoldRFNode = {
-  id: string;
-  type: "chatFold";
-  data: ChatFoldNodeData;
-  position: { x: number; y: number };
-};
+export type ChatFoldRFNode = RFNode<ChatFoldNodeData, "chatFold">;
 
-export function ChatFoldNodeCard({
-  data,
-}: NodeProps<{
-  id: string;
-  type: "chatFold";
-  data: ChatFoldNodeData;
-  position: { x: number; y: number };
-}>) {
+export function ChatFoldNodeCard({ data }: NodeProps<ChatFoldRFNode>) {
   const activeId = useStore((s) => s.activeSessionId);
   const unfold = useStore((s) => s.unfoldCompact);
 
