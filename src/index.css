@@ -65,3 +65,13 @@ body,
 :not(pre) > code::after {
   content: "" !important;
 }
+
+/* Chip styling for inline code inside prose-invert (user-message
+   blue bubbles). The light-gray-on-blue default chip from above is
+   too high-contrast and glaring against the bubble background.
+   Replace with a recessed dark overlay (matches the blue tone, just
+   darker) + white text — feels integrated, not slammed-on. */
+.prose-invert :not(pre) > code {
+  background-color: rgb(0 0 0 / 0.2) !important;
+  color: rgb(255 255 255) !important;
+}
