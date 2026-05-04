@@ -69,7 +69,9 @@ afterEach(() => {
 });
 
 describe("DrillPanel viewMode dispatch", () => {
-  it("chatflow mode + selected ChatNode → renders ChatNodeDetail", () => {
+  it("chatflow mode + selected ChatNode → Detail tab renders ChatNodeDetail", () => {
+    // v0.10 polish: chatflow mode auto-defaults to Conversation tab,
+    // so click Detail tab first to exercise the ChatNodeDetail dispatch.
     const cf = chatFlow(SID, [chatNode("p1"), chatNode("p2")]);
     useStore.setState((s) => ({
       sessions: new Map(s.sessions).set(SID, {
@@ -86,17 +88,14 @@ describe("DrillPanel viewMode dispatch", () => {
         drilledChatNode={null}
       />,
     );
+    fireEvent.click(screen.getByTestId("drill-panel-tab-detail"));
     const detail = screen.getByTestId("chat-node-detail");
     expect(detail).toBeTruthy();
-    // ID surfaced in the detail header — confirms chatFlow scope used.
     expect(detail.textContent).toContain("p2");
   });
 
-  it("sub-chatflow mode resolves selectedChatId against the SUB ChatFlow scope", () => {
-    // Top-level scope holds p1 only; the sub-agent ChatFlow holds
-    // sub-p1. With selectedChatId='sub-p1', DrillPanel must look up
-    // against the sub-agent ChatFlow (passed as ``chatFlow`` prop) —
-    // not the top-level one.
+  it("sub-chatflow mode resolves selectedChatId against the SUB ChatFlow scope (Detail tab)", () => {
+    // sub-chatflow auto-defaults to Conversation, so click Detail first.
     const top = chatFlow(SID, [chatNode("p1")]);
     const sub = chatFlow("agent_xyz", [chatNode("sub-p1"), chatNode("sub-p2")]);
     useStore.setState((s) => ({
@@ -114,6 +113,7 @@ describe("DrillPanel viewMode dispatch", () => {
         drilledChatNode={null}
       />,
     );
+    fireEvent.click(screen.getByTestId("drill-panel-tab-detail"));
     const detail = screen.getByTestId("chat-node-detail");
     expect(detail.textContent).toContain("sub-p1");
   });
@@ -136,7 +136,7 @@ describe("DrillPanel viewMode dispatch", () => {
 });
 
 describe("DrillPanel 2-tab strip (v0.8 M3)", () => {
-  it("renders both tab buttons with the active one marked", () => {
+  it("chatflow mode auto-defaults to Conversation tab (v0.10 polish)", () => {
     const cf = chatFlow(SID, [chatNode("p1")]);
     render(
       <DrillPanel
@@ -148,13 +148,27 @@ describe("DrillPanel 2-tab strip (v0.8 M3)", () => {
     );
     const detailTab = screen.getByTestId("drill-panel-tab-detail");
     const convTab = screen.getByTestId("drill-panel-tab-conversation");
-    expect(detailTab).toBeTruthy();
-    expect(convTab).toBeTruthy();
+    expect(detailTab.dataset.active).toBe("false");
+    expect(convTab.dataset.active).toBe("true");
+  });
+
+  it("workflow mode auto-defaults to Detail tab (v0.10 polish)", () => {
+    const cf = chatFlow(SID, [chatNode("p1")]);
+    render(
+      <DrillPanel
+        sessionId={SID}
+        chatFlow={cf}
+        viewMode="workflow"
+        drilledChatNode={cf.chatNodes[0]}
+      />,
+    );
+    const detailTab = screen.getByTestId("drill-panel-tab-detail");
+    const convTab = screen.getByTestId("drill-panel-tab-conversation");
     expect(detailTab.dataset.active).toBe("true");
     expect(convTab.dataset.active).toBe("false");
   });
 
-  it("clicking Conversation tab swaps the body to ConversationView + flips active marker", () => {
+  it("clicking Detail tab in chatflow mode swaps the body to ChatNodeDetail + flips active marker", () => {
     const cf = chatFlow(SID, [chatNode("p1")]);
     useStore.setState((s) => ({
       sessions: new Map(s.sessions).set(SID, {
@@ -171,22 +185,21 @@ describe("DrillPanel 2-tab strip (v0.8 M3)", () => {
         drilledChatNode={null}
       />,
     );
-    // Default Detail tab — ChatNodeDetail visible.
-    expect(screen.getByTestId("chat-node-detail")).toBeTruthy();
-    // Switch to Conversation tab.
-    fireEvent.click(screen.getByTestId("drill-panel-tab-conversation"));
-    expect(useStore.getState().drillPanelTab).toBe("conversation");
-    expect(screen.queryByTestId("chat-node-detail")).toBeNull();
+    // Default Conversation tab — ConversationView visible.
     expect(screen.getByTestId("conversation-view")).toBeTruthy();
+    // Switch to Detail tab.
+    fireEvent.click(screen.getByTestId("drill-panel-tab-detail"));
+    expect(useStore.getState().drillPanelTab).toBe("detail");
+    expect(screen.queryByTestId("conversation-view")).toBeNull();
+    expect(screen.getByTestId("chat-node-detail")).toBeTruthy();
     expect(
-      screen.getByTestId("drill-panel-tab-conversation").dataset.active,
+      screen.getByTestId("drill-panel-tab-detail").dataset.active,
     ).toBe("true");
   });
 
   it("hard constraint #11: Detail tab content matches v0.7 1:1 (chatflow + selected → ChatNodeDetail)", () => {
-    // This is the regression guard. If a future M3 follow-up changes
-    // anything inside ChatNodeDetail / WorkNodeDetail by accident,
-    // this test (and details.test.tsx) catches it.
+    // Regression guard for ChatNodeDetail rendering. Click Detail tab
+    // first since v0.10 auto-defaults to Conversation in chatflow mode.
     const cf = chatFlow(SID, [chatNode("p1"), chatNode("p2")]);
     useStore.setState((s) => ({
       sessions: new Map(s.sessions).set(SID, {
@@ -203,8 +216,7 @@ describe("DrillPanel 2-tab strip (v0.8 M3)", () => {
         drilledChatNode={null}
       />,
     );
-    // Same assertion as the v0.6/v0.7 dispatch test — proves Detail
-    // tab is still the same code path.
+    fireEvent.click(screen.getByTestId("drill-panel-tab-detail"));
     const detail = screen.getByTestId("chat-node-detail");
     expect(detail.textContent).toContain("p2");
   });

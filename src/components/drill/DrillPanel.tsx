@@ -53,6 +53,26 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
   const tab = useStore((s) => s.drillPanelTab);
   const setTab = useStore((s) => s.setDrillPanelTab);
 
+  // v0.10 polish: auto-pick the contextually appropriate tab when
+  // viewMode changes. ChatFlow / sub-ChatFlow → Conversation (the
+  // user is browsing dialogue). WorkFlow → Detail (the user has
+  // drilled into a specific ChatNode and wants to inspect WorkNode
+  // payloads, not re-read the conversation). User can still flip the
+  // tab manually after the auto-set; the override sticks until the
+  // next viewMode transition.
+  const prevViewModeRef = useRef<typeof viewMode | null>(null);
+  useEffect(() => {
+    if (prevViewModeRef.current === viewMode) return;
+    prevViewModeRef.current = viewMode;
+    const desired: DrillPanelTab =
+      viewMode === "workflow" ? "detail" : "conversation";
+    if (tab !== desired) setTab(desired);
+    // Only react to viewMode changes — `tab` and `setTab` are stable
+    // enough that we don't need them in deps; leaving them out keeps
+    // user-initiated tab clicks from triggering this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode]);
+
   if (collapsed) {
     return (
       <CollapsedStrip
