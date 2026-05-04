@@ -20,6 +20,7 @@ function blankSessionState(): SessionState {
     selectedNodeId: null,
     workflowSelectedNodeId: null,
     drillStack: [],
+    branchMemory: {},
     subAgentCache: new Map<string, SubAgentCacheEntry>(),
     isLoading: false,
     error: null,
@@ -338,6 +339,26 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       ...cur,
       drillStack,
       workflowSelectedNodeId: null,
+    });
+    set({ sessions: updated });
+  },
+
+  // v0.8 M4: ConversationView BranchSelector picks a branch.
+  // - flips selectedNodeId to leafChatNodeId so canvas + Conversation
+  //   tab follow the new path immediately
+  // - stores forkChildId → leafChatNodeId in branchMemory so when the
+  //   user re-enters the fork point later, the path resolver (driven
+  //   off selectedNodeId) can use the stored leaf as the default.
+  // The "auto-restore" UX layer is consumed by the ConversationView
+  // when computing the default endpoint for a fork — see M4
+  // ConversationView.tsx.
+  pickBranch: (sessionId, forkChildId, leafChatNodeId) => {
+    const updated = new Map(get().sessions);
+    const cur = updated.get(sessionId) ?? blankSessionState();
+    updated.set(sessionId, {
+      ...cur,
+      selectedNodeId: leafChatNodeId,
+      branchMemory: { ...cur.branchMemory, [forkChildId]: leafChatNodeId },
     });
     set({ sessions: updated });
   },

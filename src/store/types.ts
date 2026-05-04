@@ -116,6 +116,13 @@ export interface SessionState {
   // drill (subworkflow frame → resolves a full sub-agent ChatFlow,
   // not just chatNodes[0]).
   drillStack: DrillFrame[];
+  // v0.8 M4: per-fork-point memory for the ConversationView
+  // BranchSelector. Keyed forkChildId → leafId — when the user
+  // navigates away from a fork point and later returns, we remember
+  // which leaf they last viewed on that branch.
+  // Per design choice 4A this is store-only (reload resets); v0.10
+  // polish可考虑 localStorage 持久化。
+  branchMemory: Record<string, string>;
   // ``agentId → entry`` cache for sub-agent ChatFlows loaded via the
   // ``/api/sessions/:id/subagents/:agentId`` endpoint. v0.5 keeps
   // everything in memory; eviction policy (LRU / max-size) is v0.10
@@ -163,6 +170,15 @@ export interface SessionSlice {
   // so the resolver can compute the pre-compact range. Idempotent on
   // the same compactChatNodeId at the top.
   enterCompactOriginal: (sessionId: string, compactChatNodeId: string) => void;
+  // v0.8 M4: ConversationView BranchSelector picks a branch — record
+  // the chosen leaf for the fork point + flip selectedNodeId so the
+  // canvas + Conversation tab follow the new path. branchMemory
+  // remembers the choice so re-entering the fork point auto-restores.
+  pickBranch: (
+    sessionId: string,
+    forkChildId: string,
+    leafChatNodeId: string,
+  ) => void;
   // Legacy v0.5 fold toggle — keyed on a ChatNode id, manipulates
   // ``foldedNodeIds`` membership. Used by the drill-down chat-flow
   // fold UX (currently dormant in production but kept for future

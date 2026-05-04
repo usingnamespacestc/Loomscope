@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatNodeDetail } from "@/components/drill/ChatNodeDetail";
+import { ConversationView } from "@/components/drill/ConversationView";
 import { WorkNodeDetail } from "@/components/drill/WorkNodeDetail";
 import { useStore } from "@/store/index";
 import type { ChatFlow, ChatNode, WorkNode } from "@/data/types";
@@ -77,7 +78,7 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
           />
         )}
         {tab === "conversation" && (
-          <ConversationTabPlaceholder />
+          <ConversationView sessionId={sessionId} chatFlow={chatFlow} />
         )}
       </div>
     </aside>
@@ -196,19 +197,6 @@ function DetailTabContent({
       )}
       {focused.kind === "empty" && <EmptyHint label="进入工作流后选 WorkNode 查看" />}
     </>
-  );
-}
-
-// M3 placeholder — M4 mounts ConversationView with the Claude App
-// chat-bubble UI + BranchSelector for forks.
-function ConversationTabPlaceholder() {
-  return (
-    <div
-      data-testid="conversation-tab-placeholder"
-      className="flex h-full items-center justify-center text-[12px] text-gray-400 italic"
-    >
-      Conversation view coming in M4
-    </div>
   );
 }
 

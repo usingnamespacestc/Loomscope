@@ -41,6 +41,7 @@ describe("Header", () => {
         selectedNodeId: null,
         workflowSelectedNodeId: null,
         drillStack: [],
+      branchMemory: {},
         subAgentCache: new Map(),
         isLoading: false,
         error: null,

@@ -49,6 +49,7 @@ beforeEach(() => {
       selectedNodeId: null,
       workflowSelectedNodeId: null,
       drillStack: [],
+      branchMemory: {},
       subAgentCache: new Map(),
       isLoading: false,
       error: null,
@@ -152,7 +153,7 @@ describe("DrillPanel 2-tab strip (v0.8 M3)", () => {
     expect(convTab.dataset.active).toBe("false");
   });
 
-  it("clicking Conversation tab swaps the body to the placeholder + flips active marker", () => {
+  it("clicking Conversation tab swaps the body to ConversationView + flips active marker", () => {
     const cf = chatFlow(SID, [chatNode("p1")]);
     useStore.setState((s) => ({
       sessions: new Map(s.sessions).set(SID, {
@@ -175,24 +176,10 @@ describe("DrillPanel 2-tab strip (v0.8 M3)", () => {
     fireEvent.click(screen.getByTestId("drill-panel-tab-conversation"));
     expect(useStore.getState().drillPanelTab).toBe("conversation");
     expect(screen.queryByTestId("chat-node-detail")).toBeNull();
-    expect(screen.getByTestId("conversation-tab-placeholder")).toBeTruthy();
+    expect(screen.getByTestId("conversation-view")).toBeTruthy();
     expect(
       screen.getByTestId("drill-panel-tab-conversation").dataset.active,
     ).toBe("true");
-  });
-
-  it("Conversation tab placeholder includes M4 hint text", () => {
-    useStore.setState({ drillPanelTab: "conversation" });
-    const cf = chatFlow(SID, [chatNode("p1")]);
-    render(
-      <DrillPanel
-        sessionId={SID}
-        chatFlow={cf}
-        viewMode="chatflow"
-        drilledChatNode={null}
-      />,
-    );
-    expect(screen.getByText(/Conversation view coming in M4/i)).toBeTruthy();
   });
 
   it("hard constraint #11: Detail tab content matches v0.7 1:1 (chatflow + selected → ChatNodeDetail)", () => {
