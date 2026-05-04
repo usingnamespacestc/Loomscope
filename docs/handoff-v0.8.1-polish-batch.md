@@ -10,7 +10,7 @@ v0.7.1 compact inline fold 刚 ship（commit `0e1ea63` 含 viewport-anchor patch
 
 工作目录：`/home/usingnamespacestc/Loomscope` —— 已是 main，89+ commits ahead of origin。
 
-## 9 个问题清单
+## 11 个问题清单
 
 ### #1 DrillPanel "DETAIL" 标题冗余 + 收起箭头位置
 
@@ -190,12 +190,60 @@ selfDelta = (selfSnap \ parentSnap)  ∪  distinctToolUseFiles(cn)
 
 ---
 
+### #10 Markdown typography theme.extend 微调
+
+**现状**：`@tailwindcss/typography` 插件已安装并启用（commit `c6adb54`），现有 `prose prose-sm` 类已经生效，markdown 表格 / inline code / 标题层级等基础样式都回来了。但 typography 默认 spacing 是给 spacious blog 用的，跟 Loomscope 整体偏紧凑的卡片密度不太一致 —— 段落间距 / 列表缩进 / 表格 cell padding 都偏大。
+
+**期望**：在 `tailwind.config.js` 的 `theme.extend.typography` 加一套 `prose-sm` 的 override，让 markdown 在 DrillPanel 里看起来跟其他 chrome 同密度。**对照参照** Agentloom（用户截图里 Agentloom 的 typography 视觉是目标）。
+
+**调整建议**（agent 自行 tune，下面是起点）：
+
+- 段落 / 列表 / 标题 margin-y 收紧 30-40%
+- table cell padding 减半
+- inline code 背景从 `prose` 默认的 light gray 调成 `bg-gray-100/60` + 字号 0.85em
+- 行高从 `leading-7` 类 → `leading-6`（保留可读性）
+- 标题 h1/h2/h3 字号 vs 段落 ratio 不动（保持视觉层级）
+- 不要改颜色 palette（保持 prose 默认的 gray-900 / gray-700 文字）
+
+**Code anchor**：`tailwind.config.js`（已有 `extend: {}` 待填）
+
+**验证方法**：用户 256MB session 里 ChatNode `019de2b7-13d6-73c1-a8c1-dd7170ab0dc6`（Agentloom 截图来源）跟 Loomscope 渲染对比，目标 ≥ 90% 视觉相似。
+
+---
+
+### #11 Conversation 消息复制按钮
+
+**现状**：ConversationView 渲染 user 和 assistant message bubble 但没有复制按钮。Agentloom 有，用户实测后觉得没这个不行。
+
+**期望**：每条 message 加一个复制按钮，**只复制纯文本**（去掉 markdown 元字符还是保留，由 agent 拍 —— 我倾向**保留 markdown 原文**，让用户粘到别处仍是可解析格式）。
+
+**位置规范**：
+
+| 角色 | 按钮位置 | 已有锚点 |
+|---|---|---|
+| user | message bubble **左下角**（bubble 内部，跟 bubble 圆角对齐） | bubble 用 `rounded-2xl bg-blue-500`，按钮用半透明白 + hover 加 opacity |
+| assistant | message **底部时间戳前面**（同样左下角，但在 bubble 外部，跟 timestamp 同一行最左） | assistant 没用 bubble，是 markdown body + footer 行；按钮放在 footer 行最左，timestamp / metadata 跟在右边 |
+
+**实现细节**：
+
+- 用 `navigator.clipboard.writeText(text)` ；老浏览器降级到 `document.execCommand('copy')` 不需要做（项目主要面向现代浏览器）
+- 按钮 hover state 才完全显示，非 hover 状态保持 opacity 0.4 左右减少视觉噪音
+- 复制成功后图标短暂切换为 ✓（1.5s）然后回 📋；用 `setTimeout` 触发 state transition
+- icon set: 用 unicode `📋` / `✓` 即可（项目当前没引 icon library）；如果未来引了 lucide，可以换成 `Copy` / `Check`
+- a11y: `<button aria-label="复制消息">` + `data-testid="copy-msg-${role}-${chatNodeId}"` 给测试用
+
+**Code anchor**：`src/components/drill/ConversationView.tsx` 找 `<MarkdownView>` 渲染那两段（user `:148`，assistant `:154`），在 bubble / footer 加按钮。
+
+**测试**：覆盖 click → 调 `navigator.clipboard.writeText`（vitest mock clipboard）+ 状态切换 ✓ → 📋。
+
+---
+
 ## 建议 Milestone 划分（5 段）
 
 依赖图：
 - **M1 quick wins (并行安全)**：#1 + #6 + #8 — 三条都是局部小改、互不干扰，单 commit 也行 / 三个独立 commit 也行
 - **M2 panel 布局**：#2 + #7 — 都是 DrillPanel + App layout 重构；先 #2（修 bug），后 #7（加新功能在干净的 layout 上）
-- **M3 conversation 滚动 + 懒加载**：#3 → #4 — #4 是大头，#3 是 #4 的简化前置；ship 顺序：先 #3（独立小改），再 #4
+- **M3 conversation 滚动 + 懒加载 + 复制 + typography**：#3 → #4 → #11 → #10 — 都集中在 ConversationView 文件，串行做最经济：先 #3（scroll-to-bottom）→ #4（lazy load 切片）→ #11（每条 message 加复制按钮）→ #10（typography theme.extend 微调）。ship 顺序中 #11 不依赖 #10 但落地范围交叠，连着改 commit 干净
 - **M4 hover-to-pan + auto-unfold**：#5 — 跨组件，依赖 M3 already 落地的 path-rendering scaffolding
 - **M5 文件改动语义**：#9 — 独立，可以放在任何位置；建议放最后避免跟 panel 改动 merge 冲突
 
