@@ -35,6 +35,7 @@ import {
   parseLine,
   type RawRecord,
 } from "@/parse/raw-record";
+import { computeWorkflowSummary } from "@/parse/workflow-summary";
 import { buildWorkflow } from "@/parse/workflow-builder";
 
 // Records flagged with these are dropped from the canvas data model entirely.
@@ -525,6 +526,10 @@ function buildChatNode(
     compactRecord: compactUser,
     boundaryRecord: boundaryRec,
   });
+  // v0.10 polish (lazy ChatFlow B1): pre-compute summary stats so the
+  // lite ChatFlow endpoint can ship them inline. ~100-200B per
+  // ChatNode — negligible against the workflow.nodes payload.
+  workflow.summary = computeWorkflowSummary(workflow.nodes, workflow.edges);
 
   // Determine trigger by walking the user record's parentUuid back across
   // system records (away_summary, scheduled_task_fire, turn_duration).

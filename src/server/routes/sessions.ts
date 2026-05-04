@@ -69,26 +69,34 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
   app.get(
     "/:id",
     zValidator("param", z.object({ id: z.string().regex(SESSION_ID_RE) })),
+    zValidator(
+      "query",
+      z.object({
+        // v0.10 polish (lazy ChatFlow B1): `?full=true` opts back into
+        // the historical full-fat response (workflow.nodes inline).
+        // Default is the lite shape — workflow.nodes / workflow.edges
+        // stripped, summary inlined; client lazy-fetches workflow on
+        // demand via /chatnodes/workflows. Escape hatch stays through
+        // v0.10 stabilisation; remove before v1.0.
+        full: z.enum(["true", "false"]).optional(),
+      }),
+    ),
     async (c) => {
       const { id } = c.req.valid("param");
+      const { full } = c.req.valid("query");
+      const wantsFull = full === "true";
       const jsonlPath = await locateSessionJsonl(opts.rootDir, id);
       if (!jsonlPath) return c.json({ error: "session not found" }, 404);
       const projectDir = path.dirname(jsonlPath);
-      // v0.8: compute fork closure (entry + ancestors + descendants
-      // via forkedFrom chain), then merge all closure jsonls' records
-      // into a single ChatFlow. Closure size = 1 (just entry) when the
-      // session has no fork relations — the merge step then degenerates
-      // to identical behavior as v0.7's parseJsonlFile path. See
-      // design-data-model.md "Fork 机制" + handoff-v0.8.
       const closure = await findForkClosure({
         projectDir,
         entrySessionId: id,
       });
-      // v0.10 polish: serve from LRU cache when (sessionId, closure
-      // mtimes) match a recent parse. Cache invalidates the moment any
-      // closure member's jsonl mtime changes — same signal v0.9
-      // file-tail will use, so cache stays correct under live updates
-      // once that lands.
+      // LRU cache stores the FULL ChatFlow internally; both the lite
+      // and full responses are derived views of the same cached
+      // object. Cache key = (sessionId, closure mtimes), invalidating
+      // on any underlying jsonl change (v0.9 file-tail will piggyback
+      // on this same signal).
       const { chatFlow } = await getOrLoadCachedChatFlow({
         sessionId: id,
         closure,
@@ -100,7 +108,63 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
             closure,
           }),
       });
-      return c.json(chatFlow);
+      return c.json(wantsFull ? chatFlow : stripChatFlowToLite(chatFlow));
+    },
+  );
+
+  // v0.10 polish (lazy ChatFlow B1): batch fetch of workflow.nodes /
+  // workflow.edges for a set of ChatNode ids. POST body shape:
+  //   { ids: ["uuid1", "uuid2", ...] }
+  // Response shape:
+  //   { workflows: { "uuid1": { nodes, edges }, ... } }
+  // Missing ids (typo / stale) are simply omitted from the result —
+  // client should treat absence as "not found, don't retry".
+  // Reads from the same LRU cache the lite endpoint uses, so
+  // typically zero parse cost. Only re-parses when the cache evicted
+  // (same key would also miss for the lite endpoint anyway).
+  app.post(
+    "/:id/chatnodes/workflows",
+    zValidator("param", z.object({ id: z.string().regex(SESSION_ID_RE) })),
+    zValidator(
+      "json",
+      z.object({
+        ids: z.array(z.string()).min(1).max(500),
+      }),
+    ),
+    async (c) => {
+      const { id } = c.req.valid("param");
+      const { ids } = c.req.valid("json");
+      const jsonlPath = await locateSessionJsonl(opts.rootDir, id);
+      if (!jsonlPath) return c.json({ error: "session not found" }, 404);
+      const projectDir = path.dirname(jsonlPath);
+      const closure = await findForkClosure({
+        projectDir,
+        entrySessionId: id,
+      });
+      const { chatFlow } = await getOrLoadCachedChatFlow({
+        sessionId: id,
+        closure,
+        fallbackJsonlPath: jsonlPath,
+        loader: () =>
+          loadMergedChatFlow({
+            entryJsonlPath: jsonlPath,
+            entrySessionId: id,
+            closure,
+          }),
+      });
+      const wanted = new Set(ids);
+      const workflows: Record<
+        string,
+        { nodes: ChatFlow["chatNodes"][number]["workflow"]["nodes"]; edges: ChatFlow["chatNodes"][number]["workflow"]["edges"] }
+      > = {};
+      for (const cn of chatFlow.chatNodes) {
+        if (!wanted.has(cn.id)) continue;
+        workflows[cn.id] = {
+          nodes: cn.workflow.nodes,
+          edges: cn.workflow.edges,
+        };
+      }
+      return c.json({ workflows });
     },
   );
 
@@ -365,3 +429,43 @@ async function readAllRecords(jsonlPath: string): Promise<RawRecord[]> {
 // Re-export the chunk byte size so frontend / tests share a single
 // source of truth (avoids drift between server & client).
 export { TOOL_RESULT_CHUNK_BYTES };
+
+// v0.10 polish (lazy ChatFlow B1): clone a parsed ChatFlow with each
+// ChatNode's workflow stripped of nodes / edges. The summary stays
+// inline so canvas card / fold projection still have everything they
+// need; nodes/edges arrive lazily via /chatnodes/workflows. Object
+// identity is preserved for everything except chatNodes (and within
+// each ChatNode, the workflow object) — keeps GC pressure low and
+// lets the LRU cache hand out the original chatNodes without
+// worrying about clients mutating them.
+export function stripChatFlowToLite(chatFlow: ChatFlow): ChatFlow {
+  return {
+    ...chatFlow,
+    chatNodes: chatFlow.chatNodes.map((cn) => ({
+      ...cn,
+      workflow: {
+        // Summary may be undefined for a freshly-parsed ChatFlow whose
+        // computeWorkflowSummary call hasn't run (test fixtures, hand-
+        // built flows, etc.). Default to a zero-shaped summary so the
+        // wire format is always well-formed.
+        summary: cn.workflow.summary ?? {
+          assistantPreview: "",
+          llmCount: 0,
+          toolCount: 0,
+          totalThinkingChars: 0,
+          contextTokens: 0,
+          maxContextTokens: 200_000,
+          toolUseFilePaths: [],
+        },
+        // Empty arrays signal "lite" without introducing a separate
+        // discriminant; client checks `nodes.length === 0` alongside
+        // `summary.llmCount > 0` to detect "needs lazy load." Keeping
+        // them as required arrays avoids cascading optional-types
+        // through every existing consumer in B1; B3 will fully
+        // optional-ize once consumers migrate.
+        nodes: [],
+        edges: [],
+      },
+    })),
+  };
+}

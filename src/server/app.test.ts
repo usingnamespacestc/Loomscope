@@ -122,6 +122,173 @@ describe("GET /api/sessions/:id", () => {
   });
 });
 
+// v0.10 polish (lazy ChatFlow B1): default response strips
+// workflow.nodes / workflow.edges and inlines summary instead.
+// `?full=true` opts back into the legacy full-fat shape.
+describe("GET /api/sessions/:id — lite vs full (v0.10 lazy ChatFlow)", () => {
+  async function seedSession(): Promise<string> {
+    const projectDir = path.join(tmpRoot, "-home-user-LL");
+    const sid = "33333333-3333-4000-8000-000000000003";
+    await writeJsonl(path.join(projectDir, `${sid}.jsonl`), [
+      {
+        type: "user",
+        uuid: "u1",
+        sessionId: sid,
+        promptId: "p1",
+        cwd: "/home/user/LL",
+        message: { role: "user", content: "make a tweak" },
+        timestamp: "2026-05-05T00:00:00.000Z",
+      },
+      {
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u1",
+        sessionId: sid,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done." }],
+          model: "claude-opus-4-7",
+          usage: { input_tokens: 10, cache_read_input_tokens: 1234 },
+        },
+        timestamp: "2026-05-05T00:00:01.000Z",
+      },
+    ]);
+    return sid;
+  }
+
+  it("default (no ?full) returns lite shape: workflow.summary inlined, nodes/edges empty", async () => {
+    const sid = await seedSession();
+    const res = await app.request(`/api/sessions/${sid}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chatNodes: Array<{
+        workflow: {
+          summary: { llmCount: number; lastModel?: string; contextTokens: number };
+          nodes: unknown[];
+          edges: unknown[];
+        };
+      }>;
+    };
+    expect(body.chatNodes.length).toBe(1);
+    const wf = body.chatNodes[0].workflow;
+    expect(wf.nodes).toEqual([]);
+    expect(wf.edges).toEqual([]);
+    expect(wf.summary.llmCount).toBe(1);
+    expect(wf.summary.lastModel).toBe("claude-opus-4-7");
+    expect(wf.summary.contextTokens).toBe(1244); // 10 + 1234
+  });
+
+  it("?full=true returns the legacy shape with workflow.nodes populated", async () => {
+    const sid = await seedSession();
+    const res = await app.request(`/api/sessions/${sid}?full=true`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chatNodes: Array<{
+        workflow: { summary?: unknown; nodes: Array<{ kind: string }> };
+      }>;
+    };
+    const wf = body.chatNodes[0].workflow;
+    expect(wf.nodes.length).toBeGreaterThan(0);
+    // summary still present (parser populated it before strip — the
+    // full path returns the cached object as-is)
+    expect(wf.summary).toBeDefined();
+  });
+});
+
+// Batch workflow fetch — fills lazy clients in a single round-trip.
+describe("POST /api/sessions/:id/chatnodes/workflows (v0.10 lazy ChatFlow)", () => {
+  async function seedTwoTurns(): Promise<{ sid: string; cnIds: string[] }> {
+    const projectDir = path.join(tmpRoot, "-home-user-Batch");
+    const sid = "44444444-4444-4000-8000-000000000004";
+    await writeJsonl(path.join(projectDir, `${sid}.jsonl`), [
+      {
+        type: "user",
+        uuid: "u1",
+        sessionId: sid,
+        promptId: "p1",
+        cwd: "/home/user/Batch",
+        message: { role: "user", content: "first" },
+      },
+      {
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u1",
+        sessionId: sid,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "first reply" }],
+          model: "claude-opus-4-7",
+        },
+      },
+      {
+        type: "user",
+        uuid: "u2",
+        parentUuid: "a1",
+        sessionId: sid,
+        promptId: "p2",
+        message: { role: "user", content: "second" },
+      },
+      {
+        type: "assistant",
+        uuid: "a2",
+        parentUuid: "u2",
+        sessionId: sid,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "second reply" }],
+          model: "claude-opus-4-7",
+        },
+      },
+    ]);
+    // Walk the lite endpoint to learn the ChatNode ids.
+    const liteRes = await app.request(`/api/sessions/${sid}`);
+    const lite = (await liteRes.json()) as { chatNodes: Array<{ id: string }> };
+    return { sid, cnIds: lite.chatNodes.map((c) => c.id) };
+  }
+
+  it("returns nodes/edges keyed by ChatNode id for the requested ids", async () => {
+    const { sid, cnIds } = await seedTwoTurns();
+    expect(cnIds.length).toBe(2);
+    const res = await app.request(`/api/sessions/${sid}/chatnodes/workflows`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN, "x-loomscope-token": TOKEN },
+      body: JSON.stringify({ ids: cnIds }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      workflows: Record<string, { nodes: Array<{ kind: string }>; edges: unknown[] }>;
+    };
+    expect(Object.keys(body.workflows).sort()).toEqual([...cnIds].sort());
+    for (const id of cnIds) {
+      const wf = body.workflows[id];
+      expect(Array.isArray(wf.nodes)).toBe(true);
+      expect(wf.nodes.some((n) => n.kind === "llm_call")).toBe(true);
+    }
+  });
+
+  it("omits unknown ids from the result (no error)", async () => {
+    const { sid, cnIds } = await seedTwoTurns();
+    const res = await app.request(`/api/sessions/${sid}/chatnodes/workflows`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN, "x-loomscope-token": TOKEN },
+      body: JSON.stringify({ ids: [cnIds[0], "ghost-id-not-real"] }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { workflows: Record<string, unknown> };
+    expect(Object.keys(body.workflows)).toEqual([cnIds[0]]);
+  });
+
+  it("400s on empty ids array", async () => {
+    const sid = (await seedTwoTurns()).sid;
+    const res = await app.request(`/api/sessions/${sid}/chatnodes/workflows`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN, "x-loomscope-token": TOKEN },
+      body: JSON.stringify({ ids: [] }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("GET /api/sessions/:id — fork closure merge (v0.8 M2)", () => {
   // Reuse the disk-resident fork-pair fixture so this exercises the
   // exact code paths a real session would hit (file system scan +

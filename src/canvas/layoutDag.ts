@@ -284,40 +284,16 @@ export function layoutChatFlow(
 // projection alongside layout output without re-importing the helper.
 export type { FoldProjection };
 
-const DEFAULT_MAX_CONTEXT_TOKENS = 200_000; // fallback for unknown models
-
-// Default model → context-window table. CC's `getModelCapability()` only
-// works for internal users (USER_TYPE='ant', reads ~/.claude/cache/
-// model-capabilities.json fetched from Anthropic API). External users
-// get undefined — so we ship sensible defaults + let users override in
-// settings panel (v0.4).
-//
-// Defaults reflect Loomscope author's actual usage:
-//   Opus 4.7 (default) → 1M context (selected via /model in CC)
-//   Sonnet 4.6        → 200k
-//   Haiku 4.5         → 200k
-//
-// CC strips the [1m] suffix before writing model field to jsonl
-// (src/utils/model/model.ts:501), so we can't read the user's runtime
-// 1M opt-in directly. The defaults below assume the typical Loomscope
-// user runs Opus on 1M; if an Opus session was actually 200k (rare),
-// the bar will under-state usage — user can override in settings.
-//
-// Order matters: longest-prefix-first (specific over general).
-export const MODEL_CONTEXT_WINDOW: Array<[RegExp, number]> = [
-  [/claude-opus/i, 1_000_000],
-  [/claude-sonnet/i, 200_000],
-  [/claude-haiku/i, 200_000],
-  // Future overrides land in user settings (v0.4) and prepend to this list.
-];
-
-export function maxContextForModel(model?: string): number {
-  if (!model) return DEFAULT_MAX_CONTEXT_TOKENS;
-  for (const [pattern, max] of MODEL_CONTEXT_WINDOW) {
-    if (pattern.test(model)) return max;
-  }
-  return DEFAULT_MAX_CONTEXT_TOKENS;
-}
+// Model→context-window mapping moved to src/data/modelContext.ts so
+// the parser (server side) can read it without crossing the canvas
+// boundary. Re-exported here for tests / external consumers that
+// already imported from this module.
+import {
+  MODEL_CONTEXT_WINDOW,
+  maxContextForModel,
+} from "@/data/modelContext";
+export { MODEL_CONTEXT_WINDOW, maxContextForModel };
+const DEFAULT_MAX_CONTEXT_TOKENS = 200_000;
 
 // Skip llm_call records that aren't real API responses:
 //   - model === "<synthetic>" — CC injects these for rate-limit (429),

@@ -199,8 +199,44 @@ export type WorkNode =
   | AttachmentNode;
 
 export interface WorkFlow {
+  // v0.10 polish (lazy ChatFlow): canvas card / fold projection / etc.
+  // need only summary stats — they don't read individual WorkNodes —
+  // so the server pre-computes this and the lite ChatFlow endpoint
+  // ships it inline. ``nodes`` / ``edges`` will become optional in B3
+  // when client lazy-loading lands; for B1/B2 they stay required and
+  // populated by the parser as before. ``summary`` starts optional so
+  // existing test fixtures (~20 sites) don't all need updating in
+  // one shot — server populates it, clients fall back to a derived
+  // default when absent.
+  summary?: WorkflowSummary;
   nodes: WorkNode[];
   edges: Edge[];
+}
+
+// Summary stats derived once on the server. Carries everything the
+// canvas card reads (so the bulky workflow.nodes can stay on the
+// server). Pre-computing also means the card never has to loop
+// through WorkNodes — a tiny perf win that compounds over 1500-card
+// sessions.
+export interface WorkflowSummary {
+  // Last-llm_call's text (truncated for the card preview).
+  assistantPreview: string;
+  llmCount: number;
+  // tool_call + delegate combined (= 🔧 chip count).
+  toolCount: number;
+  // ▸N.Nk thinking-chars indicator total.
+  totalThinkingChars: number;
+  // TokenBar inputs.
+  contextTokens: number;
+  maxContextTokens: number;
+  // Last llm_call's model — drives the edge-hover model tooltip and
+  // the model ribbon overlay.
+  lastModel?: string;
+  // file_path values from this turn's Edit / Write / MultiEdit /
+  // NotebookEdit tool_uses. Used by ``nodeOwnFileChanges`` to compute
+  // the "本节点文件改动" delta (✏️ N chip) without needing
+  // workflow.nodes loaded.
+  toolUseFilePaths: string[];
 }
 
 // ─── ChatNode layer ──────────────────────────────────────────────────
