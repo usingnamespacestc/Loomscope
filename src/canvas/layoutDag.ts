@@ -188,31 +188,12 @@ export function layoutChatFlow(
     });
   }
 
-  // Logical edges (compact ChatNode → its pre-compact tail). Off the
-  // dagre layout (no g.setEdge) — these are pure visual back-arcs.
-  // When the pre-compact tail is hidden, retarget to its fold phantom
-  // so the arc still lands somewhere meaningful instead of dangling.
-  const chatNodeIds = new Set(chatFlow.chatNodes.map((c) => c.id));
-  for (const cn of chatFlow.chatNodes) {
-    if (!cn.isCompactSummary) continue;
-    if (projection.hidden.has(cn.id)) continue; // compact host itself folded out (rare with strict-containment)
-    const lpcn = cn.compactMetadata?.logicalParentChatNodeId;
-    if (!lpcn) continue;
-    if (!chatNodeIds.has(lpcn)) continue;
-
-    let target = lpcn;
-    if (projection.hidden.has(lpcn)) {
-      const foldHost = projection.foldByHidden.get(lpcn);
-      if (!foldHost) continue;
-      target = chatFoldIdFor(foldHost);
-    }
-    edges.push({
-      id: `e-logical-${cn.id}->${target}`,
-      source: cn.id,
-      target,
-      type: "logical",
-    });
-  }
+  // v0.8.1 #6: logical edges (compact ChatNode → pre-compact tail) are
+  // no longer rendered. Users found the dashed反向弧 visually noisy
+  // and it competed with the model-tooltip path on hover. The
+  // underlying data (compactMetadata.logicalParentChatNodeId) is still
+  // populated by parser/jsonl.ts and consumed by computeCompactRange
+  // for fold projection — only the visual edge path is gone.
 
   dagre.layout(g);
 

@@ -33,7 +33,6 @@ import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
 import { ChatFoldNodeCard } from "@/canvas/nodes/ChatFoldNodeCard";
 import { ChatNodeCard } from "@/canvas/nodes/ChatNodeCard";
 import { ContinuationArrowDefs, ContinuationEdge } from "@/canvas/edges/ContinuationEdge";
-import { LogicalArrowDefs, LogicalEdge } from "@/canvas/edges/LogicalEdge";
 import {
   FoldAnchorContext,
   type FoldAnchorAPI,
@@ -48,7 +47,6 @@ const nodeTypes: NodeTypes = {
 };
 const edgeTypes: EdgeTypes = {
   continuation: ContinuationEdge,
-  logical: LogicalEdge,
 };
 
 export interface ChatFlowCanvasProps {
@@ -87,7 +85,6 @@ export function ChatFlowCanvas({ chatFlow, sessionId }: ChatFlowCanvasProps) {
       <ReactFlowProvider>
         <svg width={0} height={0} style={{ position: "absolute" }}>
           <ContinuationArrowDefs />
-          <LogicalArrowDefs />
         </svg>
         <CanvasInner
           chatFlow={chatFlow}

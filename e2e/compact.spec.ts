@@ -107,15 +107,14 @@ test.describe("v0.7 compact handling — e2e against live session", () => {
     await toggleBtn.dispatchEvent("click");
   });
 
-  test("ChatFlow canvas registers the logical edge marker (M4 reaches the DOM)", async ({ page }) => {
-    // React Flow culls off-viewport edges, so picking a logical edge
-    // by selector requires panning to a compact ChatNode — brittle
-    // across viewport sizes. The arrow-logical SVG marker is mounted
-    // unconditionally by ChatFlowCanvas via <LogicalArrowDefs />, so
-    // its presence proves M4 wiring is in the DOM. Combined with the
-    // unit test that asserts logical edges enter `edges[]` from
-    // layoutDag, this fully covers the M4 surface.
+  test("ChatFlow canvas does NOT render the logical edge marker (v0.8.1 #6)", async ({ page }) => {
+    // v0.7 M4 mounted <marker id="arrow-logical"> via LogicalArrowDefs
+    // for the dashed反向弧 from compact → pre-compact tail. v0.8.1 #6
+    // removed the visual entirely (data preserved on
+    // compactMetadata.logicalParentChatNodeId for fold projection).
+    // Verify the marker is gone — this protects against accidental
+    // re-introduction of LogicalEdge / LogicalArrowDefs imports.
     const marker = page.locator('marker#arrow-logical');
-    await expect(marker).toHaveCount(1, { timeout: 5_000 });
+    await expect(marker).toHaveCount(0);
   });
 });
