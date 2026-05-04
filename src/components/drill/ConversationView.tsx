@@ -301,60 +301,58 @@ function MessageBubbleImpl({
     >
       {userText && (
         <div className="mb-2 flex items-end justify-end gap-1">
-          <div className="group/user relative max-w-[85%]">
+          <div className="max-w-[85%]">
+            {/* User bubble: blue rounded-2xl, "复制" inlined at the
+                bottom-left INSIDE the bubble per user spec. */}
             <div className="prose prose-sm prose-invert rounded-2xl bg-blue-500 px-3 py-2 text-[13px] text-white break-words">
               <MarkdownView>{userText}</MarkdownView>
+              <div className="mt-1.5 flex justify-start">
+                <CopyButton
+                  text={userText}
+                  role="user"
+                  chatNodeId={chatNode.id}
+                  tone="dark"
+                />
+              </div>
             </div>
-            <CopyButton
-              text={userText}
-              role="user"
-              chatNodeId={chatNode.id}
-              tone="dark"
-              parentHover="group-hover/user:opacity-100"
-            />
           </div>
         </div>
       )}
       {assistantText && (
-        <div className="group/asst relative">
-          <div className="prose prose-sm max-w-none text-[13px] leading-relaxed text-gray-800 break-words">
-            <MarkdownView>{assistantText}</MarkdownView>
-          </div>
-          <CopyButton
-            text={assistantText}
-            role="assistant"
-            chatNodeId={chatNode.id}
-            tone="light"
-            parentHover="group-hover/asst:opacity-100"
-          />
+        <div className="prose prose-sm max-w-none text-[13px] leading-relaxed text-gray-800 break-words">
+          <MarkdownView>{assistantText}</MarkdownView>
         </div>
       )}
       {!userText && !assistantText && (
         <div className="text-[12px] italic text-gray-400">—</div>
       )}
-      <MessageMeta chatNode={chatNode} />
+      {/* Assistant "复制" rides in MessageMeta as the leftmost item,
+          before timestamp / model / tokens — per user spec "放在最下面
+          这个消息时间信息的前面". */}
+      <MessageMeta chatNode={chatNode} assistantCopyText={assistantText} />
     </div>
   );
 }
 
 const MessageBubble = memo(MessageBubbleImpl);
 
-// v0.8.1 #11: floating copy button shown on hover of the parent
-// bubble. Copies markdown source as-is (so paste targets that
-// re-render markdown stay correct). Falls back silently if
-// clipboard API is unavailable (older browsers / insecure context).
+// v0.8.1 #11 (refined per user spec): inline "复制" / "✓ 已复制" text
+// label at the bottom-left of each message. NOT a floating icon; user
+// rejected the icon-on-hover layout. Default opacity dimmed so it
+// doesn't scream for attention; full opacity on hover. Copies markdown
+// source as-is so paste targets that re-render markdown stay correct.
+// Falls back silently if clipboard API is unavailable (older browsers
+// / insecure context).
 function CopyButton({
   text,
   role,
   chatNodeId,
   tone,
-  parentHover,
 }: {
   text: string;
   role: "user" | "assistant";
   chatNodeId: string;
   tone: "light" | "dark";
-  parentHover: string;
 }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -372,19 +370,24 @@ function CopyButton({
         window.setTimeout(() => setCopied(false), 1500);
       }}
       className={[
-        "absolute -top-2 right-1 rounded px-1.5 py-0.5 text-[10px] font-mono opacity-0 transition-opacity",
-        parentHover,
+        "text-[10px] font-mono opacity-50 hover:opacity-100 transition-opacity cursor-pointer",
         tone === "dark"
-          ? "bg-blue-600 text-white hover:bg-blue-700"
-          : "bg-white text-gray-500 border border-gray-200 hover:text-gray-700 hover:border-gray-300",
+          ? "text-white"
+          : "text-gray-400 hover:text-gray-700",
       ].join(" ")}
     >
-      {copied ? "✓" : "📋"}
+      {copied ? "✓ 已复制" : "复制"}
     </button>
   );
 }
 
-function MessageMeta({ chatNode }: { chatNode: ChatNode }) {
+function MessageMeta({
+  chatNode,
+  assistantCopyText,
+}: {
+  chatNode: ChatNode;
+  assistantCopyText: string | null;
+}) {
   const lastLlm = useMemo(() => findLastLlmCall(chatNode), [chatNode]);
   const ts = chatNode.userMessage.timestamp;
   const model = lastLlm?.model;
@@ -393,9 +396,17 @@ function MessageMeta({ chatNode }: { chatNode: ChatNode }) {
     typeof usage?.input_tokens === "number" || typeof usage?.output_tokens === "number"
       ? (Number(usage?.input_tokens) || 0) + (Number(usage?.output_tokens) || 0)
       : null;
-  if (!ts && !model && tokens === null) return null;
+  if (!ts && !model && tokens === null && !assistantCopyText) return null;
   return (
     <div className="mt-1 flex items-center gap-2 text-[10px] text-gray-400 font-mono">
+      {assistantCopyText && (
+        <CopyButton
+          text={assistantCopyText}
+          role="assistant"
+          chatNodeId={chatNode.id}
+          tone="light"
+        />
+      )}
       {ts && <span>{ts}</span>}
       {model && <span>{model}</span>}
       {tokens !== null && tokens > 0 && <span>{tokens} tok</span>}
