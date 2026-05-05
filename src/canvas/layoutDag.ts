@@ -32,6 +32,10 @@ export interface ChatNodeRFData extends Record<string, unknown> {
   assistantPreview: string;
   toolCount: number;
   llmCount: number;
+  // Number of disconnected llm_call chains inside this ChatNode's
+  // WorkFlow. >1 = harness gap (auto-compact / retry / interruption);
+  // surfaces as a 🔗 N chip on the card when >1.
+  chainCount: number;
   totalThinkingChars: number;
   isCompactSummary: boolean;
   // Cumulative working-tree-dirty count, derived from
@@ -389,6 +393,12 @@ function deriveCardData(
     llmCount:
       s?.llmCount ??
       cn.workflow.nodes.filter((n) => n.kind === "llm_call").length,
+    // Fall back to llmCount when summary missing (test fixtures): an
+    // unanalysed workflow conservatively reads as "1 chain" since
+    // we can't compute the disjoint-chain check without summary.
+    chainCount:
+      s?.chainCount ??
+      (cn.workflow.nodes.some((n) => n.kind === "llm_call") ? 1 : 0),
     totalThinkingChars:
       s?.totalThinkingChars ??
       cn.workflow.nodes.reduce((acc, n) => {

@@ -196,15 +196,22 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
       <div className="mt-1.5 flex items-center gap-2.5 text-[10px] text-gray-500 border-t border-gray-200/60 pt-1">
         <span
           className="inline-flex items-center gap-0.5"
-          title={`${data.llmCount} 轮 assistant 回合（llm_call 数 = ChatNode 内 chain 数）`}
-          data-testid={`chat-node-${cn.id}-round-count`}
+          title={`${data.llmCount} 次 llm_call（每次模型请求一次）`}
+          data-testid={`chat-node-${cn.id}-llm-count`}
         >
           <span className="text-blue-500">🧠</span>
           <span className="font-mono">{data.llmCount}</span>
-          {data.llmCount > 1 && (
-            <span className="text-gray-400 ml-0.5">轮</span>
-          )}
         </span>
+        {data.chainCount > 1 && (
+          <span
+            className="inline-flex items-center gap-0.5"
+            title={`${data.chainCount} 条独立链（同一 ChatNode 内 llm→tool→llm 链不连续；典型成因：auto-compact 中断、错误重试、harness 干预）`}
+            data-testid={`chat-node-${cn.id}-chain-count`}
+          >
+            <span className="text-purple-500">🔗</span>
+            <span className="font-mono">{data.chainCount}</span>
+          </span>
+        )}
         <span
           className="inline-flex items-center gap-0.5"
           title={`${data.toolCount} 次工具调用（tool_call + delegate）`}

@@ -67,6 +67,7 @@ export function computeWorkflowSummary(
     (n) => n.kind === "tool_call" || n.kind === "delegate",
   ).length;
   const llmCount = nodes.filter((n) => n.kind === "llm_call").length;
+  const chainCount = computeChainCount(nodes);
 
   const totalThinkingChars = nodes.reduce((acc, n) => {
     if (n.kind !== "llm_call") return acc;
@@ -99,6 +100,7 @@ export function computeWorkflowSummary(
   return {
     assistantPreview: truncate(assistantPreviewSource, ASSISTANT_PREVIEW_LEN),
     llmCount,
+    chainCount,
     toolCount,
     totalThinkingChars,
     contextTokens,
@@ -111,4 +113,53 @@ export function computeWorkflowSummary(
 function truncate(s: string, max: number): string {
   const cleaned = s.replace(/\s+/g, " ").trim();
   return cleaned.length <= max ? cleaned : cleaned.slice(0, max - 1) + "…";
+}
+
+// Count connected llm_call chains in the WorkFlow DAG. An llm_call B
+// is a chain ROOT (= starts a new chain) iff its predecessor isn't
+// reachable inside this WorkFlow:
+//   - direct: B.parentUuid points at another llm_call's id
+//   - indirect: B.parentUuid is some tool_call's resultUserUuid, AND
+//     that tool_call's parentUuid points at an llm_call (= the
+//     predecessor)
+// Every llm_call that isn't a root continues an existing chain.
+// Chain count = number of roots.
+//
+// Intuition: chainCount=1 is the typical CC turn (user → llm → tool
+// → llm → tool → llm:end_turn). chainCount>1 happens when CC's
+// harness inserts a gap mid-turn (auto-compact, error-retry,
+// /escape resume) so the assistant's continuation chain breaks and
+// a fresh one starts.
+function computeChainCount(nodes: WorkNode[]): number {
+  const llmIds = new Set<string>();
+  for (const n of nodes) if (n.kind === "llm_call") llmIds.add(n.id);
+  if (llmIds.size === 0) return 0;
+  // resultUserUuid → tool_call.id (the tool_result that bridges
+  // tool_call back to the next llm_call).
+  const toolByResultUuid = new Map<string, string>();
+  // tool_call.id → its parent llm_call id.
+  const toolParentLlm = new Map<string, string>();
+  for (const n of nodes) {
+    if (n.kind !== "tool_call" && n.kind !== "delegate") continue;
+    if (n.resultUserUuid) toolByResultUuid.set(n.resultUserUuid, n.id);
+    if (n.parentUuid && llmIds.has(n.parentUuid)) {
+      toolParentLlm.set(n.id, n.parentUuid);
+    }
+  }
+  let roots = 0;
+  for (const n of nodes) {
+    if (n.kind !== "llm_call") continue;
+    const p = n.parentUuid;
+    if (!p) {
+      roots += 1;
+      continue;
+    }
+    // direct llm → llm continuation (rare but legal)
+    if (llmIds.has(p)) continue;
+    // indirect llm → tool_call → llm continuation via tool_result
+    const toolId = toolByResultUuid.get(p);
+    if (toolId && toolParentLlm.has(toolId)) continue;
+    roots += 1;
+  }
+  return roots;
 }

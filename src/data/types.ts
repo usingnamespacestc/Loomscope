@@ -222,6 +222,15 @@ export interface WorkflowSummary {
   // Last-llm_call's text (truncated for the card preview).
   assistantPreview: string;
   llmCount: number;
+  // Number of CONNECTED llm_call chains in the WorkFlow DAG. A chain
+  // is a maximal run of llm_call nodes linked by continuation
+  // (llm → tool → llm). chainCount=1 is the common case (one prompt
+  // → one continuous back-and-forth ending in end_turn). >1 means
+  // the assistant ran multiple disjoint sequences in the same
+  // ChatNode — typically auto-compact mid-turn, error-retry, or
+  // harness-side interruption. Surfaced on the card as a 🔗 N chip
+  // when >1.
+  chainCount: number;
   // tool_call + delegate combined (= 🔧 chip count).
   toolCount: number;
   // ▸N.Nk thinking-chars indicator total.
