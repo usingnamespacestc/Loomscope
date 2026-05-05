@@ -11,10 +11,23 @@
   },
   "sidebar": {
     "search_placeholder": "Search sessions…",
+    "section_title": "SESSIONS",
     "refresh": "Refresh",
+    "expand": "Expand sidebar",
+    "collapse": "Collapse sidebar",
+    "refresh_workspaces": "Refresh workspaces",
+    "loading_workspaces": "Loading workspaces…",
+    "loading_sessions": "Loading…",
     "no_workspaces": "No workspaces found",
-    "no_sessions": "No sessions found",
+    "no_sessions_in_workspace": "(no sessions)",
+    "no_sessions_root": "No CC sessions found in ~/.claude/projects/.",
+    "error_label": "✗ Error",
+    "session_records_unit": "records",
     "scanning": "Scanning ~/.claude/projects/…"
+  },
+  "chat_node": {
+    "user": "User",
+    "assistant": "Assistant"
   },
   "empty_state": {
     "subtitle": "Claude Code session viewer",

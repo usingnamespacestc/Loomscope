@@ -11,10 +11,23 @@
   },
   "sidebar": {
     "search_placeholder": "搜索 session…",
+    "section_title": "SESSIONS",
     "refresh": "刷新",
+    "expand": "展开侧边栏",
+    "collapse": "收起侧边栏",
+    "refresh_workspaces": "刷新 workspace",
+    "loading_workspaces": "正在加载 workspace…",
+    "loading_sessions": "加载中…",
     "no_workspaces": "未找到 workspace",
-    "no_sessions": "未找到 sessions",
+    "no_sessions_in_workspace": "（无 session）",
+    "no_sessions_root": "未在 ~/.claude/projects/ 找到 CC session。",
+    "error_label": "✗ 错误",
+    "session_records_unit": "条记录",
     "scanning": "扫描 ~/.claude/projects/…"
+  },
+  "chat_node": {
+    "user": "用户",
+    "assistant": "助手"
   },
   "empty_state": {
     "subtitle": "Claude Code session 可视化阅读器",

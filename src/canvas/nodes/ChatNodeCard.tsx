@@ -25,6 +25,7 @@ import { useIsChatNodeRunning } from "@/store/livenessHooks";
 import { useIsChatNodeSelected, useIsConversationHovered } from "@/store/selectionHooks";
 
 export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
+  const { t } = useTranslation();
   const cn = data.chatNode;
   // Selection now subscribes per-card from the store rather than
   // arriving via NodeProps. The canvas wrapper used to recompute
@@ -170,7 +171,7 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
           react-i18next phase lands (key: chatflow.user / chatflow.assistant).
           Future en-US: "User" / "Assistant". */}
       <div className="mb-1.5">
-        <div className="text-[10px] text-gray-500 mb-0.5">用户</div>
+        <div className="text-[10px] text-gray-500 mb-0.5">{t("chat_node.user")}</div>
         <div className="text-[11px] text-gray-900 break-words line-clamp-2">
           {data.userPreview || <span className="italic text-gray-300">(空)</span>}
         </div>
@@ -178,7 +179,7 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
 
       {/* Assistant reply */}
       <div className="mb-1.5">
-        <div className="text-[10px] text-gray-500 mb-0.5">助手</div>
+        <div className="text-[10px] text-gray-500 mb-0.5">{t("chat_node.assistant")}</div>
         <div className="text-[11px] text-gray-900 break-words line-clamp-2">
           {data.assistantPreview || <span className="italic text-gray-300">(无回复)</span>}
         </div>

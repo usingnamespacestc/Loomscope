@@ -38,7 +38,10 @@ describe("Sidebar", () => {
     );
     render(<Sidebar />);
     await waitFor(() => {
-      expect(screen.getByText(/No CC sessions found/i)).toBeTruthy();
+      // v0.9.1 i18n: test setup pins zh-CN, so the empty-state copy
+      // is the Chinese version. Loose match keeps the assertion
+      // resilient to future copy tweaks.
+      expect(screen.getByText(/未在.+CC session/)).toBeTruthy();
     });
   });
 

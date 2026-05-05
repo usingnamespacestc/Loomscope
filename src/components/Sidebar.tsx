@@ -9,10 +9,12 @@
 //   - section header tracking-wide uppercase
 
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useStore } from "@/store/index";
 
 export function Sidebar() {
+  const { t } = useTranslation();
   const workspaces = useStore((s) => s.workspaces);
   const loading = useStore((s) => s.workspacesLoading);
   const error = useStore((s) => s.workspacesError);
@@ -38,7 +40,7 @@ export function Sidebar() {
       >
         <button
           className="flex h-7 w-7 items-center justify-center rounded text-gray-500 hover:bg-gray-200 hover:text-gray-900 transition-colors"
-          title="Expand sidebar"
+          title={t("sidebar.expand")}
           onClick={() => useStore.getState().toggleSidebar()}
         >
           ▶
@@ -56,19 +58,19 @@ export function Sidebar() {
       {/* Section header */}
       <div className="px-3 py-2 border-b border-gray-200 flex items-center justify-between">
         <span className="text-[10px] font-semibold tracking-widest text-gray-500">
-          SESSIONS
+          {t("sidebar.section_title")}
         </span>
         <div className="flex items-center gap-1">
           <button
             className="flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700 transition-colors"
-            title="Refresh workspaces"
+            title={t("sidebar.refresh_workspaces")}
             onClick={() => void refresh()}
           >
             ⟳
           </button>
           <button
             className="flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700 transition-colors"
-            title="Collapse sidebar"
+            title={t("sidebar.collapse")}
             onClick={() => useStore.getState().toggleSidebar()}
           >
             ◀
@@ -80,7 +82,7 @@ export function Sidebar() {
       {loading && (
         <div className="px-3 py-2 text-[11px] text-gray-400 inline-flex items-center gap-1.5">
           <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-teal-400" />
-          Loading workspaces…
+          {t("sidebar.loading_workspaces")}
         </div>
       )}
       {error && (
@@ -88,13 +90,13 @@ export function Sidebar() {
           className="mx-2 my-2 rounded bg-rose-50 border border-rose-200 px-2 py-1.5 text-[11px] text-rose-900 break-words"
           data-testid="sidebar-error"
         >
-          <span className="font-semibold">✗ Error</span>
+          <span className="font-semibold">{t("sidebar.error_label")}</span>
           <div className="mt-0.5 text-rose-700">{error}</div>
         </div>
       )}
       {!loading && !error && workspaces.length === 0 && (
         <div className="px-3 py-2 text-[11px] text-gray-400">
-          No CC sessions found in <code className="font-mono">~/.claude/projects/</code>.
+          {t("sidebar.no_sessions_root")}
         </div>
       )}
 
@@ -127,12 +129,12 @@ export function Sidebar() {
                   <ul className="bg-white" data-testid={`session-list-${ws.cwd}`}>
                     {!sessions && (
                       <li className="px-6 py-1.5 text-[10px] text-gray-400 italic">
-                        Loading…
+                        {t("sidebar.loading_sessions")}
                       </li>
                     )}
                     {sessions?.length === 0 && (
                       <li className="px-6 py-1.5 text-[10px] text-gray-400 italic">
-                        (no sessions)
+                        {t("sidebar.no_sessions_in_workspace")}
                       </li>
                     )}
                     {sessions?.map((s) => {
@@ -148,7 +150,7 @@ export function Sidebar() {
                             ].join(" ")}
                             onClick={() => setActive(s.sessionId)}
                             data-testid={`session-row-${s.sessionId}`}
-                            title={`${s.sessionId} · ${formatBytes(s.fileSize)} · ${s.messageCount} records`}
+                            title={`${s.sessionId} · ${formatBytes(s.fileSize)} · ${s.messageCount} ${t("sidebar.session_records_unit")}`}
                           >
                             <div className="truncate text-[11px]">{s.title}</div>
                             <div className="text-[10px] text-gray-400 flex justify-between mt-0.5">
