@@ -223,6 +223,9 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     );
   }, [rawEdges, sessionLive, latestRunningId]);
   const setSelected = useStore((s) => s.setSelected);
+  const selectedId = useStore(
+    (s) => s.sessions.get(sessionId)?.selectedNodeId ?? null,
+  );
   const conversationScroll = useConversationScrollShim();
   const hoverScrollReleaseRef = useRef<(() => void) | null>(null);
   const onNodeClick = useCallback(
@@ -499,6 +502,36 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     panToNodeCenter(rf, node);
     pendingPanRef.current = null;
   }, [nodes, rf]);
+
+  // EN (v0.9.1): canvas-pan-on-selection-change. selectedNodeId can
+  // flip from sources OUTSIDE the canvas — Conversation bubble click,
+  // follow-on-leaf when a new SSE-delivered ChatNode descends from
+  // current focus, BranchSelector pickBranch, keyboard nav. The
+  // explicit click paths already pan via panCtx (because they call
+  // panToChatNode with mode='click' which both unfolds AND pans).
+  // BUT follow-on-leaf and any future store-driven selection changes
+  // bypass that path and only flip selectedNodeId. Without this
+  // effect, the conversation auto-scrolls to the new bubble (good)
+  // but the canvas viewport stays put (bad — user has to manually
+  // pan to keep up with their own focus).
+  // Skip the very first mount run — first-paint fitView already
+  // handles initial focus (see latestNodeMeasured effect above) and
+  // this would race with it.
+  // 中: selectedNodeId 从 canvas 外部变化时（Conversation 点击 / 新
+  // 消息 follow-on-leaf / 分支切换 / 键盘导航）自动 pan canvas 到
+  // 焦点节点。Conversation auto-scroll 已经做了，canvas 之前漏了。
+  // 跳过首次 mount——首屏 fitView 自己处理初始焦点。
+  const skipFirstSelectionPanRef = useRef(true);
+  useEffect(() => {
+    if (skipFirstSelectionPanRef.current) {
+      skipFirstSelectionPanRef.current = false;
+      return;
+    }
+    if (!selectedId) return;
+    const node = rf.getNode(selectedId);
+    if (!node) return; // hidden behind a fold — let panCtx callers handle unfold
+    panToNodeCenter(rf, node);
+  }, [selectedId, rf]);
 
   // EN (v0.9.1): capture / restore viewport across drill in ⇄ out.
   // ChatFlow canvas is kept-mounted (display:none) when the user
