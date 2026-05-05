@@ -85,6 +85,7 @@ function workflowSummariesEqual(
   if (a === b) return true;
   if (!a || !b) return false;
   if (a.assistantPreview !== b.assistantPreview) return false;
+  if (a.hasInFlightWork !== b.hasInFlightWork) return false;
   if (a.llmCount !== b.llmCount) return false;
   if (a.chainCount !== b.chainCount) return false;
   if (a.toolCount !== b.toolCount) return false;
@@ -97,6 +98,20 @@ function workflowSummariesEqual(
   if (af.length !== bf.length) return false;
   for (let i = 0; i < af.length; i += 1) {
     if (af[i] !== bf[i]) return false;
+  }
+  // assistantText: array equality. Length check fast-path; element-
+  // wise on tie. Without this, refreshSession's diff-merge could
+  // mark a ChatNode as "unchanged" when only mid-round text grew
+  // (last round same → assistantPreview same → all numeric fields
+  // same → equal returns true → old ref reused → bubble shows
+  // stale text).
+  // 中: assistantText 数组比对（长度 + 元素），避免 mid-round 文本
+  // 增长但末轮不变时 diff-merge 误判等价、复用旧 summary。
+  const at = a.assistantText;
+  const bt = b.assistantText;
+  if (at.length !== bt.length) return false;
+  for (let i = 0; i < at.length; i += 1) {
+    if (at[i] !== bt[i]) return false;
   }
   return true;
 }
