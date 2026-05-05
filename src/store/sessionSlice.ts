@@ -375,11 +375,43 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       const foldedChanged =
         nextFolded.size !== cur.foldedCompactIds.size ||
         [...nextFolded].some((id) => !cur.foldedCompactIds.has(id));
+      // EN: follow-on-leaf — when a new ChatNode arrives whose parent
+      // is the user's currently-selected ChatNode, advance focus to
+      // the new one. Repeats forward through any chain of new
+      // children so the user lands on the LEAF of the new turn (not
+      // an intermediate). If the user's selection is mid-history
+      // (the new ChatNode descends from a DIFFERENT path), focus
+      // stays put — they're presumably reading the past, don't yank.
+      // Drives the conversation auto-scroll-to-new-message UX too:
+      // ConversationView's selectedId-driven scroll fires on this
+      // selection change, lands on the new bubble.
+      // 中: 用户 focus 的节点正好是新到达 ChatNode 的父节点 → 自动
+      // 跟随到最新 leaf。focus 在历史中（新节点不从这里延伸）→
+      // 不动。Conversation 的 selectedId 驱动滚动会自动滚到新消息。
+      let nextSelected = cur.selectedNodeId;
+      if (cur.selectedNodeId && oldFlow) {
+        const oldIds = oldById; // already a Map of old ids
+        let cursor = cur.selectedNodeId;
+        // Walk forward while children-of-cursor include new ChatNodes.
+        // Greedy single-chain follow — for parallel forks both new,
+        // we pick the first found (chronological by chatNodes order)
+        // and let the user click to switch siblings if they care.
+        // Cap at chatNodes.length hops as a defensive cycle guard.
+        for (let hops = 0; hops < mergedFlow.chatNodes.length; hops += 1) {
+          const child = mergedFlow.chatNodes.find(
+            (c) => c.parentChatNodeId === cursor && !oldIds.has(c.id),
+          );
+          if (!child) break;
+          cursor = child.id;
+        }
+        if (cursor !== cur.selectedNodeId) nextSelected = cursor;
+      }
       updated.set(id, {
         ...cur,
         chatFlow: mergedFlow,
         foldedCompactIds: foldedChanged ? nextFolded : cur.foldedCompactIds,
         workflowCache: newCache,
+        selectedNodeId: nextSelected,
         // subAgentCache stays — sub-agent ids are sidecar-rooted; the
         // sub-agent SSE invalidate path (kind='subagent') has its own
         // refreshSubAgent action that targets only the affected agent.
