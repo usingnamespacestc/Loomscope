@@ -212,35 +212,41 @@ describe("hydrateFoldedCompactIds", () => {
     expect(hydrateFoldedCompactIds(SID, cf)).toEqual(new Set());
   });
 
-  it("hydrates from localStorage when an entry exists", () => {
-    localStorage.setItem(`loomscope:fold:${SID}`, JSON.stringify(["c"]));
+  it("subtracts the unfolded set from live compacts (storage = explicitly-unfolded ids)", () => {
+    // v0.9.1 storage flip: localStorage now stores the EXPLICITLY-
+    // UNFOLDED ids. With unfolded=['c'], expected folded = {e} since
+    // {c, e} \ {c} = {e}. New compacts not in storage default-fold
+    // for free, which is the whole point of the flip.
+    localStorage.setItem(`loomscope:unfold:${SID}`, JSON.stringify(["c"]));
     expect(hydrateFoldedCompactIds(SID, flowWithTwoCompacts())).toEqual(
-      new Set(["c"]),
+      new Set(["e"]),
     );
   });
 
-  it("reconciles localStorage entry against live compacts (drops stale ids)", () => {
-    // 'zzz' is not in the flow at all; 'a' is a non-compact node;
-    // both must be filtered out so the persisted set never grows
-    // capacity for non-compact ids.
+  it("ignores stale unfolded ids that aren't in the live compact set", () => {
+    // 'zzz' / 'a' aren't compacts; effectively the unfold set has
+    // nothing applicable, so all live compacts default-fold.
     localStorage.setItem(
-      `loomscope:fold:${SID}`,
-      JSON.stringify(["c", "zzz", "a"]),
+      `loomscope:unfold:${SID}`,
+      JSON.stringify(["zzz", "a"]),
     );
     expect(hydrateFoldedCompactIds(SID, flowWithTwoCompacts())).toEqual(
-      new Set(["c"]),
+      new Set(["c", "e"]),
     );
   });
 
   it("falls back to default-fold when localStorage payload is malformed", () => {
-    localStorage.setItem(`loomscope:fold:${SID}`, "not-json{");
+    localStorage.setItem(`loomscope:unfold:${SID}`, "not-json{");
     expect(hydrateFoldedCompactIds(SID, flowWithTwoCompacts())).toEqual(
       new Set(["c", "e"]),
     );
   });
 
   it("falls back to default-fold when localStorage payload isn't an array", () => {
-    localStorage.setItem(`loomscope:fold:${SID}`, JSON.stringify({ c: true }));
+    localStorage.setItem(
+      `loomscope:unfold:${SID}`,
+      JSON.stringify({ c: true }),
+    );
     expect(hydrateFoldedCompactIds(SID, flowWithTwoCompacts())).toEqual(
       new Set(["c", "e"]),
     );
@@ -262,25 +268,29 @@ describe("foldCompact / unfoldCompact / toggleCompactFold", () => {
     ]);
   }
 
-  it("foldCompact adds the id and persists to localStorage", () => {
+  it("foldCompact adds the id and persists complement to localStorage (unfolded set)", () => {
+    // Seed: empty folded set means BOTH compacts (c, e) are unfolded.
+    // After foldCompact('c'), folded={c}, unfolded={e}; storage = ['e'].
     seed(flow(), new Set());
     useStore.getState().foldCompact(SID, "c");
     const sess = useStore.getState().sessions.get(SID)!;
     expect(sess.foldedCompactIds.has("c")).toBe(true);
-    expect(JSON.parse(localStorage.getItem(`loomscope:fold:${SID}`)!)).toEqual([
-      "c",
-    ]);
+    expect(
+      new Set(JSON.parse(localStorage.getItem(`loomscope:unfold:${SID}`)!)),
+    ).toEqual(new Set(["e"]));
   });
 
-  it("unfoldCompact removes the id and persists the new set", () => {
+  it("unfoldCompact removes the id and persists complement to localStorage", () => {
+    // Seed: both compacts folded; storage initially empty / null.
+    // After unfoldCompact('c'), folded={e}, unfolded={c}; storage=['c'].
     seed(flow(), new Set(["c", "e"]));
     useStore.getState().unfoldCompact(SID, "c");
     const sess = useStore.getState().sessions.get(SID)!;
     expect(sess.foldedCompactIds.has("c")).toBe(false);
     expect(sess.foldedCompactIds.has("e")).toBe(true);
     expect(
-      new Set(JSON.parse(localStorage.getItem(`loomscope:fold:${SID}`)!)),
-    ).toEqual(new Set(["e"]));
+      new Set(JSON.parse(localStorage.getItem(`loomscope:unfold:${SID}`)!)),
+    ).toEqual(new Set(["c"]));
   });
 
   it("toggleCompactFold flips state (folded → unfolded → folded)", () => {
@@ -299,7 +309,7 @@ describe("foldCompact / unfoldCompact / toggleCompactFold", () => {
     seed(flow(), new Set());
     useStore.getState().foldCompact(SID, "a"); // a is a normal turn, not compact
     expect(useStore.getState().sessions.get(SID)!.foldedCompactIds.size).toBe(0);
-    expect(localStorage.getItem(`loomscope:fold:${SID}`)).toBeNull();
+    expect(localStorage.getItem(`loomscope:unfold:${SID}`)).toBeNull();
   });
 
   it("ignores ids that don't exist in the flow", () => {

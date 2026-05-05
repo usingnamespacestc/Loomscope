@@ -31,29 +31,35 @@ function blankSessionState(): SessionState {
   };
 }
 
-// localStorage helpers for compact-fold persistence. Key shape mirrors
-// Agentloom's ``${app}:fold:${id}`` convention (see feedback memory
-// `feedback_localstorage_ui_pattern.md`). Values are JSON arrays of
-// folded compact-ChatNode ids; the in-memory ``Set`` is the source of
-// truth at runtime — localStorage is purely for cross-reload restore.
+// localStorage helpers for compact-fold persistence.
 //
-// Reconciliation (drop ids that no longer exist as compact ChatNodes
-// in the live chatFlow) is the responsibility of the caller — see
-// ``hydrateFoldedCompactIds``. This separates "did the user fold X
-// last session" from "is X still a thing now". Storage failures are
-// swallowed: SSR / privacy mode / quota will surface as "default-fold
-// behaviour" rather than crashing the app.
-const FOLD_STORAGE_PREFIX = "loomscope:fold:";
+// Storage stores **explicitly-unfolded compact ids** (NOT folded ones).
+// This makes "default-fold all compacts" the implicit behaviour that
+// new compacts (live-tail append, sessions never visited before) get
+// for free — they're not in the unfold set ⇒ they stay folded.
+//
+// v0.7.1 originally stored the FOLDED set, which broke as soon as new
+// compacts appeared: they weren't in stored ⇒ not folded ⇒ visible by
+// default. Flipping to "unfolded set" makes the semantic match the
+// user's mental model: "default fold; remember which ones I asked to
+// expand". Storage failures are swallowed (SSR / privacy / quota) —
+// the in-memory Set still drives runtime UI for the page lifetime.
+//
+// Old `loomscope:fold:` keys (from v0.7.1) are abandoned — users see
+// fresh "all folded" defaults next reload, which is the correct
+// behaviour anyway. Cleanup happens organically via localStorage
+// quota pressure or manual clear; no migration needed.
+const UNFOLD_STORAGE_PREFIX = "loomscope:unfold:";
 
-function foldStorageKey(sessionId: string): string {
-  return `${FOLD_STORAGE_PREFIX}${sessionId}`;
+function unfoldStorageKey(sessionId: string): string {
+  return `${UNFOLD_STORAGE_PREFIX}${sessionId}`;
 }
 
-function readFoldStorage(sessionId: string): string[] | null {
+function readUnfoldStorage(sessionId: string): string[] | null {
   try {
     const raw =
       typeof localStorage !== "undefined"
-        ? localStorage.getItem(foldStorageKey(sessionId))
+        ? localStorage.getItem(unfoldStorageKey(sessionId))
         : null;
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
@@ -64,25 +70,39 @@ function readFoldStorage(sessionId: string): string[] | null {
   }
 }
 
-function writeFoldStorage(sessionId: string, ids: Set<string>): void {
+function writeUnfoldStorage(sessionId: string, unfoldedIds: Set<string>): void {
   try {
     if (typeof localStorage === "undefined") return;
     localStorage.setItem(
-      foldStorageKey(sessionId),
-      JSON.stringify([...ids]),
+      unfoldStorageKey(sessionId),
+      JSON.stringify([...unfoldedIds]),
     );
   } catch {
-    // quota exceeded / privacy mode — silently fall through; the
-    // in-memory set still works for the current page lifetime.
+    // quota / privacy / SSR — in-memory set still works.
   }
 }
 
+// Persist the explicitly-unfolded ids derived from the in-memory
+// folded set. Computed as liveCompacts \ foldedSet so the storage
+// always reflects the current "user wants this open" state. Called
+// after every fold / unfold / toggle.
+function persistUnfoldFromFolded(
+  sessionId: string,
+  foldedIds: Set<string>,
+  chatFlow: ChatFlow,
+): void {
+  const unfolded = new Set<string>();
+  for (const cn of chatFlow.chatNodes) {
+    if (cn.isCompactSummary && !foldedIds.has(cn.id)) unfolded.add(cn.id);
+  }
+  writeUnfoldStorage(sessionId, unfolded);
+}
+
 // Compute the initial foldedCompactIds set for a freshly-loaded
-// chatFlow. Hydrate from localStorage when present (intersected with
-// the live compact ids, so deleted / renamed compacts get dropped);
-// otherwise default-fold every compact ChatNode (pre-compact range
-// hidden by default — the v0.x rework's primary UX choice, also a
-// sizeable initial-render perf win for sessions with many compacts).
+// chatFlow. Default = all compacts FOLDED; subtract the explicitly-
+// unfolded set from localStorage so user-unfolded ones stay open.
+// Live compacts not mentioned in storage (new compacts via file-tail,
+// fresh sessions) default-fold automatically.
 export function hydrateFoldedCompactIds(
   sessionId: string,
   chatFlow: ChatFlow,
@@ -91,15 +111,12 @@ export function hydrateFoldedCompactIds(
   for (const cn of chatFlow.chatNodes) {
     if (cn.isCompactSummary) liveCompactIds.add(cn.id);
   }
-  const stored = readFoldStorage(sessionId);
-  if (stored) {
-    const reconciled = new Set<string>();
-    for (const id of stored) {
-      if (liveCompactIds.has(id)) reconciled.add(id);
-    }
-    return reconciled;
+  const unfolded = new Set(readUnfoldStorage(sessionId) ?? []);
+  const folded = new Set<string>();
+  for (const id of liveCompactIds) {
+    if (!unfolded.has(id)) folded.add(id);
   }
-  return liveCompactIds;
+  return folded;
 }
 
 // In-flight loadSubAgent promises, keyed ``sessionId/agentId``. Lives
@@ -679,7 +696,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     const updated = new Map(sessions);
     updated.set(sessionId, { ...cur, foldedCompactIds: next });
     set({ sessions: updated });
-    writeFoldStorage(sessionId, next);
+    persistUnfoldFromFolded(sessionId, next, cur.chatFlow);
   },
   unfoldCompact: (sessionId, compactChatNodeId) => {
     const sessions = get().sessions;
@@ -691,7 +708,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     const updated = new Map(sessions);
     updated.set(sessionId, { ...cur, foldedCompactIds: next });
     set({ sessions: updated });
-    writeFoldStorage(sessionId, next);
+    persistUnfoldFromFolded(sessionId, next, cur.chatFlow);
   },
   toggleCompactFold: (sessionId, compactChatNodeId) => {
     const sessions = get().sessions;
@@ -704,7 +721,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     const updated = new Map(sessions);
     updated.set(sessionId, { ...cur, foldedCompactIds: next });
     set({ sessions: updated });
-    writeFoldStorage(sessionId, next);
+    persistUnfoldFromFolded(sessionId, next, cur.chatFlow);
   },
 
   // v0.8 M4: ConversationView BranchSelector picks a branch.
