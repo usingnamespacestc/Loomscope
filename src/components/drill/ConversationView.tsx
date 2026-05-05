@@ -31,7 +31,8 @@ import {
   type ForkInfo,
 } from "@/components/drill/pathUtils";
 import { useStore } from "@/store/index";
-import type { ChatFlow, ChatNode, LlmCallNode } from "@/data/types";
+import { useChatNodeWorkflow } from "@/store/workflowHooks";
+import type { ChatFlow, ChatNode, LlmCallNode, WorkFlow } from "@/data/types";
 
 interface Props {
   sessionId: string;
@@ -147,6 +148,19 @@ export function ConversationView({ sessionId, chatFlow }: Props) {
   );
   const hasMoreAbove = startIdx > 0;
 
+  // v0.10 lazy ChatFlow B5: batch-fetch workflows for the visible
+  // slice in one round-trip. Per-bubble `useChatNodeWorkflow` would
+  // dedupe fetches in the action layer, but each bubble would still
+  // fire its own `loadChatNodeWorkflows([myId])` call → N requests.
+  // Batching at the parent collapses to a single request that fills
+  // every visible-slice cache entry; bubble hooks then see ready /
+  // pending and skip their own fire.
+  const loadWorkflows = useStore((s) => s.loadChatNodeWorkflows);
+  useEffect(() => {
+    if (visiblePath.length === 0) return;
+    void loadWorkflows(sessionId, visiblePath);
+  }, [sessionId, visiblePath, loadWorkflows]);
+
   // Stable callbacks for MessageBubble props. Without these, every
   // re-render of ConversationView creates fresh arrow functions in the
   // map(), defeating React.memo on MessageBubble. Bubble re-renders
@@ -210,6 +224,7 @@ export function ConversationView({ sessionId, chatFlow }: Props) {
           <Fragment key={nid}>
             <MessageBubble
               chatNode={cn}
+              sessionId={sessionId}
               isSelected={nid === selectedId}
               isDimmed={isDimmed}
               onSelect={handleSelect}
@@ -257,6 +272,7 @@ export function ConversationView({ sessionId, chatFlow }: Props) {
 // resize, keeping the markdown pipeline cold.
 function MessageBubbleImpl({
   chatNode,
+  sessionId,
   isSelected,
   isDimmed,
   onSelect,
@@ -264,6 +280,7 @@ function MessageBubbleImpl({
   onHoverEnd,
 }: {
   chatNode: ChatNode;
+  sessionId: string;
   isSelected: boolean;
   isDimmed: boolean;
   onSelect: (chatNodeId: string) => void;
@@ -271,7 +288,22 @@ function MessageBubbleImpl({
   onHoverEnd: () => void;
 }) {
   const userText = useMemo(() => extractText(chatNode.userMessage.content), [chatNode]);
-  const assistantText = useMemo(() => lastAssistantText(chatNode), [chatNode]);
+  // v0.10 lazy ChatFlow B5: full assistant markdown lives on
+  // workflow.nodes which the lite endpoint strips. The hook + the
+  // parent's batch loadWorkflows fire fetch in the background;
+  // bubbles render `summary.assistantPreview` (truncated 80 chars)
+  // as a placeholder until the full text arrives. The swap is
+  // transparent — Markdown re-parses with the real text once cache
+  // flips to ready. Failure → fall back to the preview + show error
+  // chip in the meta row.
+  const access = useChatNodeWorkflow(sessionId, chatNode);
+  const assistantText = useMemo(
+    () => lastAssistantTextFromWorkflow(access.workflow, chatNode),
+    [access.workflow, chatNode],
+  );
+  const isAssistantPlaceholder =
+    access.status === "pending" &&
+    !!chatNode.workflow.summary?.assistantPreview;
   // v0.8.1 #5: 250ms hover dwell timer. mouseenter starts it,
   // mouseleave clears it. Clearing on unmount is automatic via the
   // ref-cleanup pattern (we only carry one timer per bubble).
@@ -341,17 +373,43 @@ function MessageBubbleImpl({
         </div>
       )}
       {assistantText && (
-        <div className="prose prose-sm max-w-none text-[13px] leading-relaxed text-gray-800 break-words">
+        <div
+          className={[
+            "prose prose-sm max-w-none text-[13px] leading-relaxed break-words",
+            // Placeholder uses muted color + italic to telegraph that
+            // the full markdown is still loading. When ready (cache
+            // flips), the same MarkdownView re-renders with the real
+            // text and the className flips back to text-gray-800.
+            isAssistantPlaceholder
+              ? "text-gray-400 italic"
+              : "text-gray-800",
+          ].join(" ")}
+          data-loading={isAssistantPlaceholder ? "true" : "false"}
+        >
           <MarkdownView>{assistantText}</MarkdownView>
         </div>
       )}
-      {!userText && !assistantText && (
+      {access.status === "error" && !assistantText && (
+        <div
+          data-testid={`conversation-bubble-error-${chatNode.id}`}
+          className="text-[12px] italic text-rose-600"
+        >
+          ⚠ workflow 加载失败：{access.error}
+        </div>
+      )}
+      {!userText && !assistantText && access.status !== "error" && (
         <div className="text-[12px] italic text-gray-400">—</div>
       )}
       {/* Assistant "复制" rides in MessageMeta as the leftmost item,
           before timestamp / model / tokens — per user spec "放在最下面
-          这个消息时间信息的前面". */}
-      <MessageMeta chatNode={chatNode} assistantCopyText={assistantText} />
+          这个消息时间信息的前面". Hide the copy when we're still
+          showing only the truncated preview to avoid confusing the
+          user about which text they'd be copying. */}
+      <MessageMeta
+        chatNode={chatNode}
+        workflow={access.workflow}
+        assistantCopyText={isAssistantPlaceholder ? null : assistantText}
+      />
     </div>
   );
 }
@@ -405,14 +463,24 @@ function CopyButton({
 
 function MessageMeta({
   chatNode,
+  workflow,
   assistantCopyText,
 }: {
   chatNode: ChatNode;
+  workflow: WorkFlow | null;
   assistantCopyText: string | null;
 }) {
-  const lastLlm = useMemo(() => findLastLlmCall(chatNode), [chatNode]);
+  // v0.10 lazy ChatFlow B5: model + tokens come from the loaded
+  // workflow's last llm_call. While pending we fall back to
+  // workflow.summary.lastModel (the lite endpoint inlines it) so
+  // the meta row shows model name immediately even if usage tokens
+  // haven't loaded yet.
+  const lastLlm = useMemo(
+    () => (workflow ? findLastLlmCallInWorkflow(workflow) : null),
+    [workflow],
+  );
   const ts = chatNode.userMessage.timestamp;
-  const model = lastLlm?.model;
+  const model = lastLlm?.model ?? chatNode.workflow.summary?.lastModel;
   const usage = lastLlm?.usage;
   const tokens =
     typeof usage?.input_tokens === "number" || typeof usage?.output_tokens === "number"
@@ -507,7 +575,17 @@ export function packStartIdx(
 
 function estimateTokens(cn: ChatNode): number {
   const u = extractText(cn.userMessage.content) ?? "";
-  const a = lastAssistantText(cn) ?? "";
+  // v0.10 lazy ChatFlow B5: estimateTokens runs at packStartIdx time
+  // (when we don't yet have the full workflow). Use the summary
+  // preview for the lite path; once workflow loads the bubble
+  // re-renders with the full markdown but estimate-driven slice
+  // boundaries are stable enough on previews (the truncation cap is
+  // 80 chars; small undercount on edge cases is fine).
+  const summary = cn.workflow.summary;
+  const a =
+    lastAssistantTextFromWorkflow(cn.workflow, cn) ??
+    summary?.assistantPreview ??
+    "";
   return Math.ceil((u.length + a.length) / 4);
 }
 
@@ -529,18 +607,36 @@ function previewFor(cn: ChatNode | undefined): string {
   return trimmed.length > 24 ? `${trimmed.slice(0, 23)}…` : trimmed;
 }
 
-function findLastLlmCall(cn: ChatNode): LlmCallNode | null {
-  const llms = cn.workflow.nodes.filter(
+function findLastLlmCallInWorkflow(workflow: WorkFlow): LlmCallNode | null {
+  const llms = workflow.nodes.filter(
     (n): n is LlmCallNode => n.kind === "llm_call",
   );
   return llms.length > 0 ? llms[llms.length - 1] : null;
 }
 
-function lastAssistantText(cn: ChatNode): string | null {
-  const llm = findLastLlmCall(cn);
-  if (llm?.text) return llm.text;
+// Resolve the assistant text for a ChatNode given an optional
+// already-loaded workflow. Resolution order:
+//   1. Last llm_call's text from the loaded workflow (full markdown)
+//   2. compactMetadata.summaryText (compact ChatNodes — inline on cn)
+//   3. slashCommand.stdout (slash command ChatNodes — inline on cn)
+//   4. summary.assistantPreview (placeholder while lazy-load pending)
+//   5. null (nothing to show)
+function lastAssistantTextFromWorkflow(
+  workflow: WorkFlow | null,
+  cn: ChatNode,
+): string | null {
+  if (workflow) {
+    const llm = findLastLlmCallInWorkflow(workflow);
+    if (llm?.text) return llm.text;
+  }
   if (cn.compactMetadata?.summaryText) return cn.compactMetadata.summaryText;
   if (cn.slashCommand?.stdout) return cn.slashCommand.stdout;
+  // Placeholder: show truncated preview from summary while real text
+  // is loading. When workflow lands, the bubble re-renders with the
+  // llm.text branch above.
+  if (cn.workflow.summary?.assistantPreview) {
+    return cn.workflow.summary.assistantPreview;
+  }
   return null;
 }
 
