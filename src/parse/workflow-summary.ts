@@ -89,20 +89,39 @@ export function computeWorkflowSummary(
   // 最末 llm_call 无 stopReason → 数据上未完成。客户端再结合
   // isLatest + sessionLive 决定是否真画动画（避免历史孤儿误亮）。
   let hasInFlightWork = false;
-  for (const n of nodes) {
-    if (n.kind === "tool_call") {
-      if (n.resultBlock == null) {
-        hasInFlightWork = true;
-        break;
-      }
-    } else if (n.kind === "delegate") {
-      // DelegateNode shape (data/types.ts) doesn't carry resultBlock
-      // directly — completion is signalled by status presence and
-      // toolUseResult / content. Treat undefined status as in-flight
-      // (CC writes status='completed' / 'failed' on resolution).
-      if (n.status == null && n.toolUseResult == null) {
-        hasInFlightWork = true;
-        break;
+  // EN: empty workflow → user message just landed, assistant hasn't
+  // produced anything yet (or only attachments + queue events
+  // filtered out). The ChatNode is logically "in flight" — CC is
+  // calling the model API. Without this case, a brand-new ChatNode
+  // shows no animation until the first llm_call lands ~1-2s later;
+  // if CC takes longer (cold model / high latency) sessionLive
+  // decays at 5s and the user sees a static "stuck" card for the
+  // remaining wait. The compact-only / slash-only ChatNodes don't
+  // hit this branch because their workflow has CompactNode /
+  // AttachmentNode entries → nodes.length > 0.
+  // 中: workflow.nodes 为空 = user 消息刚到、assistant 还没产出
+  // 任何东西 = 在飞。否则刚发消息那几秒动画不亮，超过 5s 后 5s
+  // sessionLive 衰减反而把"等模型响应中"判成静止。
+  if (nodes.length === 0) {
+    hasInFlightWork = true;
+  }
+  if (!hasInFlightWork) {
+    for (const n of nodes) {
+      if (n.kind === "tool_call") {
+        if (n.resultBlock == null) {
+          hasInFlightWork = true;
+          break;
+        }
+      } else if (n.kind === "delegate") {
+        // DelegateNode shape (data/types.ts) doesn't carry
+        // resultBlock directly — completion is signalled by status
+        // presence and toolUseResult / content. Undefined status =
+        // in-flight (CC writes status='completed'/'failed' on
+        // resolution).
+        if (n.status == null && n.toolUseResult == null) {
+          hasInFlightWork = true;
+          break;
+        }
       }
     }
   }
