@@ -816,7 +816,26 @@ export function resolveDrillView(state: SessionState): ResolvedDrillView | null 
     // to that ChatFlow; chatNode resets so the next chatnode frame (if
     // any) picks one out of the sub scope.
     if (!chatNode) return null;
-    const delegate = chatNode.workflow.nodes.find(
+    // v0.10 lazy: top-level chatNode's `workflow.nodes` is empty in
+    // lite mode — must read workflowCache first. Sub-agent ChatNode
+    // workflows (descended via earlier subworkflow frames) come from
+    // /subagents (full-fat) so their inline nodes ARE authoritative.
+    // Distinguish: chatNode is in `state.chatFlow` ⇒ top-level ⇒
+    // prefer cache; otherwise it's in a sub-agent ChatFlow ⇒ inline.
+    const isTopLevelCn = state.chatFlow.chatNodes.some(
+      (c) => c.id === chatNode!.id,
+    );
+    let nodes: import("@/data/types").WorkNode[];
+    if (isTopLevelCn) {
+      const cached = state.workflowCache.get(chatNode.id);
+      nodes =
+        cached?.status === "ready" && cached.workflow
+          ? cached.workflow.nodes
+          : chatNode.workflow.nodes;
+    } else {
+      nodes = chatNode.workflow.nodes;
+    }
+    const delegate = nodes.find(
       (n) => n.id === frame.parentWorkNodeId && n.kind === "delegate",
     ) as DelegateNode | undefined;
     if (!delegate?.agentId) return null;
