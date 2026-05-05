@@ -297,13 +297,18 @@ function MessageBubbleImpl({
   // flips to ready. Failure → fall back to the preview + show error
   // chip in the meta row.
   const access = useChatNodeWorkflow(sessionId, chatNode);
-  const assistantText = useMemo(
-    () => lastAssistantTextFromWorkflow(access.workflow, chatNode),
+  const assistantTexts = useMemo(
+    () => assistantTextsForChatNode(access.workflow, chatNode),
     [access.workflow, chatNode],
   );
   const isAssistantPlaceholder =
     access.status === "pending" &&
     !!chatNode.workflow.summary?.assistantPreview;
+  // For copy / meta resolution we still want the LAST round's text.
+  const lastAssistantText =
+    assistantTexts.length > 0
+      ? assistantTexts[assistantTexts.length - 1]
+      : null;
   // v0.8.1 #5: 250ms hover dwell timer. mouseenter starts it,
   // mouseleave clears it. Clearing on unmount is automatic via the
   // ref-cleanup pattern (we only carry one timer per bubble).
@@ -372,24 +377,30 @@ function MessageBubbleImpl({
           </div>
         </div>
       )}
-      {assistantText && (
-        <div
-          className={[
-            "prose prose-sm max-w-none text-[13px] leading-relaxed break-words",
-            // Placeholder uses muted color + italic to telegraph that
-            // the full markdown is still loading. When ready (cache
-            // flips), the same MarkdownView re-renders with the real
-            // text and the className flips back to text-gray-800.
-            isAssistantPlaceholder
-              ? "text-gray-400 italic"
-              : "text-gray-800",
-          ].join(" ")}
-          data-loading={isAssistantPlaceholder ? "true" : "false"}
-        >
-          <MarkdownView>{assistantText}</MarkdownView>
+      {/* v0.9.1: render EVERY assistant round (each llm_call.text)
+          stacked top-down. One ChatNode often spans multiple rounds
+          when the assistant calls tools mid-turn; previously only the
+          LAST round showed and intermediate reasoning was lost. */}
+      {assistantTexts.length > 0 && (
+        <div className="space-y-2">
+          {assistantTexts.map((text, i) => (
+            <div
+              key={i}
+              className={[
+                "prose prose-sm max-w-none text-[13px] leading-relaxed break-words",
+                isAssistantPlaceholder
+                  ? "text-gray-400 italic"
+                  : "text-gray-800",
+              ].join(" ")}
+              data-loading={isAssistantPlaceholder ? "true" : "false"}
+              data-round-index={i}
+            >
+              <MarkdownView>{text}</MarkdownView>
+            </div>
+          ))}
         </div>
       )}
-      {access.status === "error" && !assistantText && (
+      {access.status === "error" && assistantTexts.length === 0 && (
         <div
           data-testid={`conversation-bubble-error-${chatNode.id}`}
           className="text-[12px] italic text-rose-600"
@@ -397,18 +408,20 @@ function MessageBubbleImpl({
           ⚠ workflow 加载失败：{access.error}
         </div>
       )}
-      {!userText && !assistantText && access.status !== "error" && (
+      {!userText && assistantTexts.length === 0 && access.status !== "error" && (
         <div className="text-[12px] italic text-gray-400">—</div>
       )}
       {/* Assistant "复制" rides in MessageMeta as the leftmost item,
           before timestamp / model / tokens — per user spec "放在最下面
           这个消息时间信息的前面". Hide the copy when we're still
           showing only the truncated preview to avoid confusing the
-          user about which text they'd be copying. */}
+          user about which text they'd be copying. Copy uses the LAST
+          round's text — that's the canonical "final answer" of the
+          turn. */}
       <MessageMeta
         chatNode={chatNode}
         workflow={access.workflow}
-        assistantCopyText={isAssistantPlaceholder ? null : assistantText}
+        assistantCopyText={isAssistantPlaceholder ? null : lastAssistantText}
       />
     </div>
   );
@@ -614,30 +627,62 @@ function findLastLlmCallInWorkflow(workflow: WorkFlow): LlmCallNode | null {
   return llms.length > 0 ? llms[llms.length - 1] : null;
 }
 
-// Resolve the assistant text for a ChatNode given an optional
-// already-loaded workflow. Resolution order:
-//   1. Last llm_call's text from the loaded workflow (full markdown)
-//   2. compactMetadata.summaryText (compact ChatNodes — inline on cn)
-//   3. slashCommand.stdout (slash command ChatNodes — inline on cn)
-//   4. summary.assistantPreview (placeholder while lazy-load pending)
-//   5. null (nothing to show)
+// Return EVERY non-empty llm_call.text from a workflow, in DAG-array
+// order (= turn order, since the parser appends nodes as they appear
+// in the JSONL stream). One ChatNode often contains multiple
+// llm_call rounds — between each round are tool_calls the assistant
+// invoked. v0.10 ConversationView previously rendered just the LAST
+// round; users with multi-tool sessions saw only the final summary
+// and lost intermediate reasoning. Rendering all rounds keeps the
+// bubble in sync with the WorkFlow canvas's `n_chains` indication.
+function allAssistantTextsFromWorkflow(
+  workflow: WorkFlow | null,
+): string[] {
+  if (!workflow) return [];
+  const out: string[] = [];
+  for (const n of workflow.nodes) {
+    if (n.kind !== "llm_call") continue;
+    const t = (n as LlmCallNode).text;
+    if (t && t.trim().length > 0) out.push(t);
+  }
+  return out;
+}
+
+// Resolve the assistant text(s) for a ChatNode given an optional
+// already-loaded workflow. Resolution priority:
+//   1. ALL llm_call.text from the loaded workflow (full markdown,
+//      one element per assistant round)
+//   2. compactMetadata.summaryText (compact ChatNodes — inline)
+//   3. slashCommand.stdout (slash command ChatNodes — inline)
+//   4. [summary.assistantPreview] (single-element fallback while
+//      lazy-load pending; the bubble re-renders multi-round once
+//      cache lands)
+//   5. [] (nothing to show)
+function assistantTextsForChatNode(
+  workflow: WorkFlow | null,
+  cn: ChatNode,
+): string[] {
+  if (workflow) {
+    const all = allAssistantTextsFromWorkflow(workflow);
+    if (all.length > 0) return all;
+  }
+  if (cn.compactMetadata?.summaryText) return [cn.compactMetadata.summaryText];
+  if (cn.slashCommand?.stdout) return [cn.slashCommand.stdout];
+  if (cn.workflow.summary?.assistantPreview) {
+    return [cn.workflow.summary.assistantPreview];
+  }
+  return [];
+}
+
+// Backwards-compat single-text helper for non-bubble call sites that
+// only need a brief preview (search, MessageMeta last-llm resolver).
+// Returns the LAST text — same as v0.10 behaviour.
 function lastAssistantTextFromWorkflow(
   workflow: WorkFlow | null,
   cn: ChatNode,
 ): string | null {
-  if (workflow) {
-    const llm = findLastLlmCallInWorkflow(workflow);
-    if (llm?.text) return llm.text;
-  }
-  if (cn.compactMetadata?.summaryText) return cn.compactMetadata.summaryText;
-  if (cn.slashCommand?.stdout) return cn.slashCommand.stdout;
-  // Placeholder: show truncated preview from summary while real text
-  // is loading. When workflow lands, the bubble re-renders with the
-  // llm.text branch above.
-  if (cn.workflow.summary?.assistantPreview) {
-    return cn.workflow.summary.assistantPreview;
-  }
-  return null;
+  const all = assistantTextsForChatNode(workflow, cn);
+  return all.length > 0 ? all[all.length - 1] : null;
 }
 
 function extractText(content: unknown): string | null {
