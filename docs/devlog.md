@@ -6,6 +6,52 @@
 
 ---
 
+## 2026-05-05 晚 — v0.10 lazy ChatFlow B5 + 三个 perf 修复
+
+B5 完成 ConversationView 懒加载（`8c6b8e3`）后，浏览器实测发现两个性能洞，加上 B5 自身的批量观察，一共 3 个 perf 修复：
+
+### 修复 1：进 WorkFlow 时 50 个独立 fetch（`17197a1`）
+
+**症状**：用户 DevTools Network tab 显示进 WorkFlow drill 时一连串 `workflows?ids=<one-uuid>` 请求，每个 5-245KB，总耗时 ~10s。预期是 1 个 batch 请求。
+
+**根因**：React 生命周期 useEffect children-first → parent-last。50 个 MessageBubble 每个 `useChatNodeWorkflow` hook 各 fire `loadChatNodeWorkflows([myId])`，**先于** ConversationView 父级的 batch effect。父级 batch fire 时，cache 里那 50 个已经 pending → batch dedupe 到空集。
+
+**修法**：action 层加 **microtask 合并** —— 同一 tick 内所有 `loadChatNodeWorkflows` 调用的 ids 累积到 per-session buffer，microtask flush 时一次 fetch。无需 caller 改动；50 个 child + 1 个 parent 的同 tick 调用合并成 1 个 HTTP 请求（>100 ids 时 ceil(N/100) 切分）。
+- 同步 mark pending 保留（让同 tick 后续 caller 看到并跳过）
+- 移除老的 per-id `workflowLoadInFlight` Map（被 per-session buffer 替代）
+
+### 修复 2：退 drill 5s 卡顿 — 第一轮怀疑 ChatFlowCanvas remount（`0ce56ee`）
+
+**症状**：用户实测退 drill 卡 5s，刷新匿名窗口仍存在，纯前端 CPU。
+
+**第一轮诊断**：viewMode 变化导致 `<ChatFlowCanvas>` 整个 unmount + remount。187 ChatNode 卡片重建 + React Flow state 重建 + dagre 重跑。
+
+**修法**：top-level CFC 用 `display: block/none` 始终挂载。WorkFlowCanvas / sub-chatflow CFC 仍 conditional（drill target 不同，复用没意义）。
+
+**结果**：用户报告 **仍然 5s** —— 不是 CFC，下一轮排查。
+
+### 修复 3：退 drill 5s 真正元凶 — DrillPanel tab 切换触发 ConversationView remount（`2ddff9e`）
+
+**根因**：v0.10 polish 引入的 `drillPanelTab` auto-flip（chatflow → conversation / workflow → detail）在 drill 进出时切换 tab。DrillPanel 内部用 `tab === "..."` conditional 渲染 → ConversationView 在 drill out 时 remount → 50 个气泡的 MarkdownView 重新跑 remark-gfm + rehype-raw + rehype-highlight + rehype-sanitize 全套 → ~50-100ms × 50 ≈ **5s 拍上**。
+
+**修法**：DrillPanel 里 Detail + Conversation **两个 tab 内容同时挂载**，切 tab 翻 CSS `display`。markdown pipeline 一次完整解析后保留 React 组件树 + react-markdown 解析结果，跨 tab 切换 0 cost。
+
+**代价**：首次 DrillPanel 挂载时两个 tab body 都渲染（之前只渲染当前 tab）。Detail tab 轻量（header + counts + AssistantReply），相比 5s/exit 的赔率换算合算。
+
+**测试 fix**：DrillPanel.test.tsx "clicking Detail tab swaps the body" 不再 assert ConversationView 被 unmount，改成检查 DOM 存在 + 父级 wrapper `display: none`。
+
+### 通用模式记录
+
+`drillPanelTab` auto-flip + viewMode 各种 conditional mount 在数据流上是对的，但**运行时**让重组件在 viewMode 变化时反复 mount/unmount。
+
+**通用 fix pattern**：始终挂载，CSS 切显隐 —— React 组件树 + React Flow 内部 state + react-markdown 解析结果都保留。代价是首次 mount 时所有 keep-mounted 内容一起渲染，但跨 viewMode 切换 0 cost。
+
+trade-off 公式：**首次额外 mount 成本 < N × 反复 unmount/remount 成本**
+
+未来类似场景（v∞.0 live update / file-tail 触发的频繁 chatFlow 重渲染等）值得用这个 pattern 钉死高频路径。
+
+---
+
 ## 2026-05-05 — v0.10 lazy ChatFlow B1-B4 ship（4 milestone 重构 + vite 8 compat）
 
 把"打开 session 不瞬开"的根因——23MB JSON 全量传输——从架构层面解决：服务端默认返 lite ChatFlow（86% bytes 减负），workflow.nodes 按需 batch lazy fetch。1 GET 端点 → 2 端点（lite + batch workflow）+ 客户端三层迁移。
