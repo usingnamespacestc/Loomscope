@@ -25,6 +25,7 @@ function blankSessionState(): SessionState {
     branchMemory: {},
     subAgentCache: new Map<string, SubAgentCacheEntry>(),
     workflowCache: new Map<string, WorkflowCacheEntry>(),
+    workflowViewports: new Map<string, { x: number; y: number; zoom: number }>(),
     isLoading: false,
     error: null,
     lastUpdated: 0,
@@ -67,6 +68,30 @@ function writeUnfoldStorage(sessionId: string, unfoldedIds: Set<string>): void {
     );
   } catch {
     // quota / privacy / SSR — in-memory set still works.
+  }
+}
+
+// v0.10 收尾: drop every per-session localStorage key for `sessionId`.
+// Keep this list in sync with any future per-session storage we add —
+// the central listing avoids leaving leaked keys behind. Called from
+// `removeSession` when the workspace SSE reports the underlying jsonl
+// was deleted; that's the only signal where we can be confident the
+// key will never serve a future visit. (Sessions in non-loaded
+// workspaces aren't sweepable from a global GC pass — we don't know
+// whether they exist or were already deleted while Loomscope was
+// offline. Stale-from-offline-deletion entries leak by design until a
+// future TTL pass; today the bleed is negligible vs. the engineering
+// cost of timestamping.)
+function gcSessionLocalStorage(sessionId: string): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.removeItem(unfoldStorageKey(sessionId));
+    // Legacy v0.7.1 → v0.9.1 "fold list" storage. Semantics flipped to
+    // an "unfold list" so reads no longer hit it, but writes from old
+    // installs may still be on disk — sweep alongside.
+    localStorage.removeItem(`loomscope:fold:${sessionId}`);
+  } catch {
+    // Same hands-off failure mode as writeUnfoldStorage.
   }
 }
 
@@ -507,6 +532,20 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     set({ activeSessionId: id });
   },
 
+  removeSession: (id) => {
+    const sessions = new Map(get().sessions);
+    if (sessions.has(id)) {
+      sessions.delete(id);
+      set({ sessions });
+    }
+    // If the removed session was active, clear the pointer — App.tsx
+    // shows the empty-state CTA when activeSessionId is null.
+    if (get().activeSessionId === id) {
+      set({ activeSessionId: null });
+    }
+    gcSessionLocalStorage(id);
+  },
+
   // Toggle a node's membership in ``foldedNodeIds``. v0.5 ChatFlow-
   // layer fold UX (currently dormant). Symmetrical: re-toggle removes.
   toggleFold: (sessionId, nodeId) => {
@@ -621,6 +660,29 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     set({ sessions: updated });
   },
 
+  setWorkflowViewport: (sessionId, chatNodeId, viewport) => {
+    const updated = new Map(get().sessions);
+    const cur = updated.get(sessionId) ?? blankSessionState();
+    const next = new Map(cur.workflowViewports);
+    if (viewport == null) {
+      if (!next.has(chatNodeId)) return;
+      next.delete(chatNodeId);
+    } else {
+      const prev = next.get(chatNodeId);
+      if (
+        prev &&
+        prev.x === viewport.x &&
+        prev.y === viewport.y &&
+        prev.zoom === viewport.zoom
+      ) {
+        return; // no-op — avoid an unnecessary store update
+      }
+      next.set(chatNodeId, viewport);
+    }
+    updated.set(sessionId, { ...cur, workflowViewports: next });
+    set({ sessions: updated });
+  },
+
   // ── v0.10 lazy ChatFlow B2 + B5 polish: per-ChatNode workflow lazy load ──
   loadChatNodeWorkflows: async (sessionId, chatNodeIds) => {
     if (chatNodeIds.length === 0) return;
@@ -712,12 +774,42 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
           const cnIndex = new Map(
             (cur.chatFlow?.chatNodes ?? []).map((cn) => [cn.id, cn]),
           );
+          // EN: WorkFlow follow-on-leaf — when a refresh delivers a
+          // newer workflow whose tail differs from the one the user
+          // is currently looking at, advance `workflowSelectedNodeId`
+          // to the new tail. Mirrors the ChatFlow follow-on-leaf in
+          // refreshSession: only triggers when the user was sitting
+          // ON the old tail (= passively watching the leaf), so
+          // historic-inspection focus is never yanked. Drives the
+          // WorkFlow drill's running animation + auto-scroll on the
+          // newest WorkNode without user intervention. Latched in
+          // commit `3ea2248`'s message but missed the v0.9.2 batch
+          // — landing now as part of the v0.10 收尾 sweep.
+          // 中: WorkFlow 层 follow-on-leaf。refresh 拿到新 WorkFlow
+          // 后若用户原本就停在 old tail，把 workflowSelectedNodeId
+          // 跟到 new tail；停在中段不动（用户在审历史，不抢焦点）。
+          let nextWfSelected = cur.workflowSelectedNodeId;
           for (const id of allIds) {
             const wf = map[id];
             if (wf) {
               const existing = cnIndex.get(id);
               const summary =
                 existing?.workflow.summary ?? wf.summary ?? undefined;
+              if (cur.workflowSelectedNodeId) {
+                const oldNodes = cur.workflowCache.get(id)?.workflow?.nodes;
+                if (oldNodes && oldNodes.length > 0) {
+                  const oldTail = oldNodes[oldNodes.length - 1].id;
+                  if (oldTail === cur.workflowSelectedNodeId) {
+                    const newTail =
+                      wf.nodes.length > 0
+                        ? wf.nodes[wf.nodes.length - 1].id
+                        : null;
+                    if (newTail && newTail !== oldTail) {
+                      nextWfSelected = newTail;
+                    }
+                  }
+                }
+              }
               next.set(id, {
                 status: "ready",
                 workflow: { ...wf, summary },
@@ -733,7 +825,11 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
               });
             }
           }
-          sessions.set(sessionId, { ...cur, workflowCache: next });
+          sessions.set(sessionId, {
+            ...cur,
+            workflowCache: next,
+            workflowSelectedNodeId: nextWfSelected,
+          });
           set({ sessions });
         } catch (err) {
           const sessions = new Map(get().sessions);

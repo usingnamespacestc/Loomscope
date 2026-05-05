@@ -220,6 +220,32 @@ describe("Session slice", () => {
       zoom: 1.5,
     });
   });
+
+  it("removeSession drops in-memory state + localStorage entries", () => {
+    const SID = "gc-target-001";
+    // Seed in-memory state via toggleFold (creates blankSessionState).
+    useStore.getState().toggleFold(SID, "node-x");
+    expect(useStore.getState().sessions.has(SID)).toBe(true);
+    // Seed both per-session storage keys (current + legacy).
+    localStorage.setItem(`loomscope:unfold:${SID}`, JSON.stringify(["a"]));
+    localStorage.setItem(`loomscope:fold:${SID}`, JSON.stringify(["legacy"]));
+    // Pretend it's the active session — removeSession should clear that too.
+    useStore.setState({ activeSessionId: SID });
+
+    useStore.getState().removeSession(SID);
+
+    expect(useStore.getState().sessions.has(SID)).toBe(false);
+    expect(useStore.getState().activeSessionId).toBe(null);
+    expect(localStorage.getItem(`loomscope:unfold:${SID}`)).toBe(null);
+    expect(localStorage.getItem(`loomscope:fold:${SID}`)).toBe(null);
+  });
+
+  it("removeSession leaves activeSessionId alone when a different session is removed", () => {
+    useStore.setState({ activeSessionId: "kept-active" });
+    useStore.getState().toggleFold("victim", "n1");
+    useStore.getState().removeSession("victim");
+    expect(useStore.getState().activeSessionId).toBe("kept-active");
+  });
 });
 
 describe("LiveEvent slice (stub)", () => {

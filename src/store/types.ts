@@ -177,6 +177,14 @@ export interface SessionState {
   // session load — components trigger lazy loads as they need
   // workflows.
   workflowCache: Map<string, WorkflowCacheEntry>;
+  // v0.10 收尾: per-ChatNode WorkFlow viewport stash. Populated when
+  // the user pans/zooms inside a WorkFlowCanvas; restored on next
+  // drill-in to that ChatNode. Store-only (lost on page reload —
+  // drillStack also resets, so the user is back at ChatFlow anyway);
+  // localStorage would be too granular for ephemeral exploration
+  // state. Cleared via `setWorkflowViewport(sid, cnId, null)` if we
+  // ever need to wipe.
+  workflowViewports: Map<string, { x: number; y: number; zoom: number }>;
   isLoading: boolean;
   error: string | null;
   lastUpdated: number;
@@ -225,6 +233,13 @@ export interface SessionSlice {
     subdir?: string,
   ) => Promise<void>;
   setActiveSession: (id: string | null) => void;
+  // v0.10 收尾: drop in-memory state + GC localStorage entries scoped
+  // to this session (currently `loomscope:unfold:<sid>` and the legacy
+  // `loomscope:fold:<sid>`). Triggered by the workspace SSE
+  // `workspace-changed` event with `reason: "remove"` — the
+  // underlying jsonl was deleted from disk so retaining its UI
+  // state can never serve a future visit.
+  removeSession: (id: string) => void;
   setSelected: (sessionId: string, nodeId: string | null) => void;
   setViewport: (sessionId: string, vp: { x: number; y: number; zoom: number }) => void;
   // ── Drill-down navigation (v0.3 inner WorkFlow) ──
@@ -232,6 +247,15 @@ export interface SessionSlice {
   exitWorkflow: (sessionId: string) => void;
   truncateDrillStack: (sessionId: string, depth: number) => void;
   setWorkflowSelected: (sessionId: string, nodeId: string | null) => void;
+  // v0.10 收尾: stash WorkFlow viewport keyed by ChatNode id. Pass
+  // null/undefined to clear. WorkFlowCanvas calls this on RF
+  // onMoveEnd; on next mount it reads back to restore zoom/pan
+  // instead of running fitView.
+  setWorkflowViewport: (
+    sessionId: string,
+    chatNodeId: string,
+    viewport: { x: number; y: number; zoom: number } | null,
+  ) => void;
   // ── v0.10 lazy ChatFlow B2: per-ChatNode workflow lazy load ──
   // Batch-fetch workflows for the given ChatNode ids. Dedupes against
   // currently-pending fetches and skips ids whose entry is already

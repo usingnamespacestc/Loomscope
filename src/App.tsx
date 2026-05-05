@@ -127,8 +127,24 @@ export default function App() {
     useStore.getState().setLiveStatus("workspaces", "connecting");
     const es = new EventSource("/api/workspaces/events");
     es.onopen = () => useStore.getState().setLiveStatus("workspaces", "open");
-    es.addEventListener("workspace-changed", () => {
+    es.addEventListener("workspace-changed", (ev) => {
       const store = useStore.getState();
+      // v0.10 收尾: when a session jsonl was unlinked from disk, drop
+      // its in-memory state + GC its per-session localStorage entries.
+      // Payload shape from `workspaceWatcher.ts`:
+      //   { reason: "add" | "remove", sessionId, projectDir, path }
+      // Best-effort parse — old/short payloads just skip the GC.
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data ?? "{}") as {
+          reason?: string;
+          sessionId?: string;
+        };
+        if (payload.reason === "remove" && typeof payload.sessionId === "string") {
+          store.removeSession(payload.sessionId);
+        }
+      } catch {
+        // ignore — the refresh below still keeps the sidebar correct
+      }
       void store.refreshWorkspaces();
       // Also refresh any expanded workspace's session list — the new
       // (or removed) jsonl might belong to one of them, and a fresh
