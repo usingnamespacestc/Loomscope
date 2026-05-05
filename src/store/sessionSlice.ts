@@ -855,17 +855,31 @@ function resolveDelegate(
   state: SessionState,
   parentWorkNodeId: string,
 ): DelegateNode | null {
-  // Walk frames in order, narrowing the resolved chatNode each step.
-  let chatNode: { workflow: { nodes: DelegateNode[] | unknown[] } } | null = null;
+  // Walk frames in order, narrowing the resolved (chatNode, nodes)
+  // pair each step. v0.10 lazy ChatFlow: top-level `chatFlow.chatNodes
+  // [i].workflow.nodes` is EMPTY in lite mode (the per-cn workflow
+  // lives in `workflowCache` instead). We MUST read from workflowCache
+  // first; falling back to the inline list keeps test fixtures and
+  // any pre-lazy paths working. Sub-agent ChatFlows (loaded via
+  // /subagents) come back full-fat so their inline nodes are
+  // authoritative — no cache lookup needed for subworkflow frames.
+  let nodes: unknown[] = [];
   for (const frame of state.drillStack) {
     if (frame.kind === "chatnode") {
-      chatNode =
-        state.chatFlow?.chatNodes.find((c) => c.id === frame.chatNodeId) ?? null;
+      const cached = state.workflowCache.get(frame.chatNodeId);
+      if (cached?.status === "ready" && cached.workflow) {
+        nodes = cached.workflow.nodes;
+      } else {
+        const cn = state.chatFlow?.chatNodes.find(
+          (c) => c.id === frame.chatNodeId,
+        );
+        nodes = cn?.workflow.nodes ?? [];
+      }
     } else {
-      // subworkflow: previous chatNode must contain a delegate w/
-      // matching id whose agentId names a cached sub ChatFlow.
-      if (!chatNode) return null;
-      const delegate = chatNode.workflow.nodes.find(
+      // subworkflow: the previous frame's nodes must contain a
+      // delegate with matching id; descend into its sub-agent's first
+      // ChatNode's workflow.nodes (full-fat, from /subagents).
+      const delegate = nodes.find(
         (n) =>
           (n as { kind?: string }).kind === "delegate" &&
           (n as { id: string }).id === frame.parentWorkNodeId,
@@ -876,14 +890,26 @@ function resolveDelegate(
       // For v0.5 we descend into the FIRST ChatNode of the sub-agent
       // (see handoff: 73% of sub-agents have only 1 ChatNode). Multi-
       // ChatNode rendering is v0.5.1 backlog.
-      chatNode = cached.chatFlow.chatNodes[0] ?? null;
+      const firstCn = cached.chatFlow.chatNodes[0];
+      nodes = firstCn?.workflow.nodes ?? [];
     }
   }
-  if (!chatNode) return null;
-  const wn = chatNode.workflow.nodes.find(
+  const wn = nodes.find(
     (n) => (n as { id: string }).id === parentWorkNodeId,
   );
-  if (!wn) return null;
+  if (!wn) {
+    // Loud-bail in dev so a future "click does nothing" tells us where
+    // it actually died instead of silently returning. Production noise
+    // is acceptable — fires only when the WorkNode tree is unexpectedly
+    // empty (typically: lazy fetch hadn't landed when the user clicked).
+    if (typeof console !== "undefined") {
+      console.warn(
+        "[loomscope] resolveDelegate: WorkNode not found",
+        { parentWorkNodeId, scannedNodes: nodes.length },
+      );
+    }
+    return null;
+  }
   if ((wn as { kind?: string }).kind !== "delegate") return null;
   return wn as DelegateNode;
 }
