@@ -360,10 +360,15 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
         cur.foldedCompactIds,
         targetId,
       );
-      // Apply unfolds via the regular store actions (each one persists
-      // to localStorage in turn). After the loop, target is visible.
+      // Apply unfolds via the regular store action — but pass
+      // persist:false. Hover-pan is a TRANSIENT navigation aid; the
+      // unfold happens because we need the target visible for one
+      // hover, not because the user said "I want this open forever".
+      // Without this guard the user's `loomscope:unfold:` storage
+      // accumulates every compact whose pre-compact range the cursor
+      // ever brushed past.
       for (const host of chain) {
-        unfoldAction(sessionId, host);
+        unfoldAction(sessionId, host, { persist: false });
       }
       pendingPanRef.current = targetId;
       // If no unfold was needed, the next layout commit isn't coming

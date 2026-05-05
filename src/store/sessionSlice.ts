@@ -31,24 +31,11 @@ function blankSessionState(): SessionState {
   };
 }
 
-// localStorage helpers for compact-fold persistence.
-//
-// Storage stores **explicitly-unfolded compact ids** (NOT folded ones).
-// This makes "default-fold all compacts" the implicit behaviour that
-// new compacts (live-tail append, sessions never visited before) get
-// for free — they're not in the unfold set ⇒ they stay folded.
-//
-// v0.7.1 originally stored the FOLDED set, which broke as soon as new
-// compacts appeared: they weren't in stored ⇒ not folded ⇒ visible by
-// default. Flipping to "unfolded set" makes the semantic match the
-// user's mental model: "default fold; remember which ones I asked to
-// expand". Storage failures are swallowed (SSR / privacy / quota) —
-// the in-memory Set still drives runtime UI for the page lifetime.
-//
-// Old `loomscope:fold:` keys (from v0.7.1) are abandoned — users see
-// fresh "all folded" defaults next reload, which is the correct
-// behaviour anyway. Cleanup happens organically via localStorage
-// quota pressure or manual clear; no migration needed.
+// localStorage stores the EXPLICITLY-UNFOLDED compact ids. New
+// compacts (live-tail append, never-visited sessions) default-fold
+// because they're not in the unfold set. v0.7.1's older "fold list"
+// scheme broke for new compacts; the v0.9.1 flip to "unfold list"
+// fixed that.
 const UNFOLD_STORAGE_PREFIX = "loomscope:unfold:";
 
 function unfoldStorageKey(sessionId: string): string {
@@ -83,9 +70,8 @@ function writeUnfoldStorage(sessionId: string, unfoldedIds: Set<string>): void {
 }
 
 // Persist the explicitly-unfolded ids derived from the in-memory
-// folded set. Computed as liveCompacts \ foldedSet so the storage
-// always reflects the current "user wants this open" state. Called
-// after every fold / unfold / toggle.
+// folded set. Computed as liveCompacts \ foldedSet so storage
+// always reflects the current "user wants this open" state.
 function persistUnfoldFromFolded(
   sessionId: string,
   foldedIds: Set<string>,
@@ -101,8 +87,7 @@ function persistUnfoldFromFolded(
 // Compute the initial foldedCompactIds set for a freshly-loaded
 // chatFlow. Default = all compacts FOLDED; subtract the explicitly-
 // unfolded set from localStorage so user-unfolded ones stay open.
-// Live compacts not mentioned in storage (new compacts via file-tail,
-// fresh sessions) default-fold automatically.
+// Live compacts not mentioned in storage default-fold automatically.
 export function hydrateFoldedCompactIds(
   sessionId: string,
   chatFlow: ChatFlow,
@@ -698,7 +683,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     set({ sessions: updated });
     persistUnfoldFromFolded(sessionId, next, cur.chatFlow);
   },
-  unfoldCompact: (sessionId, compactChatNodeId) => {
+  unfoldCompact: (sessionId, compactChatNodeId, opts) => {
     const sessions = get().sessions;
     const cur = sessions.get(sessionId);
     if (!cur || !cur.chatFlow) return;
@@ -708,7 +693,11 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     const updated = new Map(sessions);
     updated.set(sessionId, { ...cur, foldedCompactIds: next });
     set({ sessions: updated });
-    persistUnfoldFromFolded(sessionId, next, cur.chatFlow);
+    // Hover-pan auto-unfold passes persist:false so transient
+    // navigation doesn't leak into the user's explicit-unfold set.
+    if (opts?.persist !== false) {
+      persistUnfoldFromFolded(sessionId, next, cur.chatFlow);
+    }
   },
   toggleCompactFold: (sessionId, compactChatNodeId) => {
     const sessions = get().sessions;

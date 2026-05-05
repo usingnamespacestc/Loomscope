@@ -213,10 +213,6 @@ describe("hydrateFoldedCompactIds", () => {
   });
 
   it("subtracts the unfolded set from live compacts (storage = explicitly-unfolded ids)", () => {
-    // v0.9.1 storage flip: localStorage now stores the EXPLICITLY-
-    // UNFOLDED ids. With unfolded=['c'], expected folded = {e} since
-    // {c, e} \ {c} = {e}. New compacts not in storage default-fold
-    // for free, which is the whole point of the flip.
     localStorage.setItem(`loomscope:unfold:${SID}`, JSON.stringify(["c"]));
     expect(hydrateFoldedCompactIds(SID, flowWithTwoCompacts())).toEqual(
       new Set(["e"]),
@@ -224,8 +220,6 @@ describe("hydrateFoldedCompactIds", () => {
   });
 
   it("ignores stale unfolded ids that aren't in the live compact set", () => {
-    // 'zzz' / 'a' aren't compacts; effectively the unfold set has
-    // nothing applicable, so all live compacts default-fold.
     localStorage.setItem(
       `loomscope:unfold:${SID}`,
       JSON.stringify(["zzz", "a"]),
@@ -269,8 +263,6 @@ describe("foldCompact / unfoldCompact / toggleCompactFold", () => {
   }
 
   it("foldCompact adds the id and persists complement to localStorage (unfolded set)", () => {
-    // Seed: empty folded set means BOTH compacts (c, e) are unfolded.
-    // After foldCompact('c'), folded={c}, unfolded={e}; storage = ['e'].
     seed(flow(), new Set());
     useStore.getState().foldCompact(SID, "c");
     const sess = useStore.getState().sessions.get(SID)!;
@@ -281,8 +273,6 @@ describe("foldCompact / unfoldCompact / toggleCompactFold", () => {
   });
 
   it("unfoldCompact removes the id and persists complement to localStorage", () => {
-    // Seed: both compacts folded; storage initially empty / null.
-    // After unfoldCompact('c'), folded={e}, unfolded={c}; storage=['c'].
     seed(flow(), new Set(["c", "e"]));
     useStore.getState().unfoldCompact(SID, "c");
     const sess = useStore.getState().sessions.get(SID)!;

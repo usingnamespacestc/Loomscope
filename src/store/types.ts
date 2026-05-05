@@ -232,7 +232,16 @@ export interface SessionSlice {
   // already-unfolded id, are no-ops that still re-persist for
   // determinism).
   foldCompact: (sessionId: string, compactChatNodeId: string) => void;
-  unfoldCompact: (sessionId: string, compactChatNodeId: string) => void;
+  // v0.9.1: `opts.persist=false` skips the localStorage write — used by
+  // ConversationView's hover-pan auto-unfold so a transient navigation
+  // gesture doesn't pollute the user's persisted "explicitly opened"
+  // set. User-explicit clicks (the chatFold node card, the compact
+  // node's fold-toggle button) leave persist at default true.
+  unfoldCompact: (
+    sessionId: string,
+    compactChatNodeId: string,
+    opts?: { persist?: boolean },
+  ) => void;
   toggleCompactFold: (sessionId: string, compactChatNodeId: string) => void;
   // v0.8 M4: ConversationView BranchSelector picks a branch — record
   // the chosen leaf for the fork point + flip selectedNodeId so the
