@@ -177,15 +177,20 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
           so the button is hidden for them. We also hide for ChatNodes
           with empty WorkFlow (slash-command paths handled separately
           above; this catches edge cases like compact-summary-only). */}
-      {/* v0.10 lazy ChatFlow B3: read counts from summary instead of
-          workflow.nodes.length. Server populates summary at parse
-          time; lite ChatFlow ships it inline. The condition matches
-          previous behaviour: drill button visible when any WorkNode
-          exists in the turn. */}
-      {!compact &&
-        ((data.llmCount ?? 0) + (data.toolCount ?? 0) > 0) && (
-          <DrillButton chatNodeId={cn.id} />
-        )}
+      {/* v0.9.1: drill button visible on every non-compact ChatNode,
+          even when llmCount + toolCount === 0. Why: a "running" /
+          just-created ChatNode (user prompt arrived, assistant
+          hasn't produced any WorkNodes yet) had its drill button
+          hidden, so users couldn't watch the WorkFlow populate
+          live. The empty WorkFlow state is fine — WorkFlowCanvas
+          shows a placeholder and SSE invalidate adds nodes as
+          they appear.
+          // EN: Always show the drill-in button (except for compact
+          // ChatNodes which have their own fold/unfold UX). Empty
+          // WorkFlows are valid — live-tail will populate them.
+          // 中: 非 compact ChatNode 一律显示进入按钮（即使节点尚未
+          // 产生任何 WorkNode），让用户能 drill 进去看实时填充。 */}
+      {!compact && <DrillButton chatNodeId={cn.id} />}
 
       {/* Token bar */}
       {data.contextTokens > 0 && (
