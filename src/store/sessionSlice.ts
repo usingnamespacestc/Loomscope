@@ -376,35 +376,47 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         nextFolded.size !== cur.foldedCompactIds.size ||
         [...nextFolded].some((id) => !cur.foldedCompactIds.has(id));
       // EN: follow-on-leaf — when a new ChatNode arrives whose parent
-      // is the user's currently-selected ChatNode, advance focus to
+      // is the user's currently-focused ChatNode, advance focus to
       // the new one. Repeats forward through any chain of new
-      // children so the user lands on the LEAF of the new turn (not
-      // an intermediate). If the user's selection is mid-history
-      // (the new ChatNode descends from a DIFFERENT path), focus
-      // stays put — they're presumably reading the past, don't yank.
-      // Drives the conversation auto-scroll-to-new-message UX too:
-      // ConversationView's selectedId-driven scroll fires on this
-      // selection change, lands on the new bubble.
-      // 中: 用户 focus 的节点正好是新到达 ChatNode 的父节点 → 自动
-      // 跟随到最新 leaf。focus 在历史中（新节点不从这里延伸）→
-      // 不动。Conversation 的 selectedId 驱动滚动会自动滚到新消息。
+      // children so the user lands on the LEAF of the new turn.
+      // If focus is mid-history (new ChatNode descends from a
+      // DIFFERENT path), focus stays put — user is reading the
+      // past, don't yank. Drives ConversationView's selectedId-
+      // driven scroll-to-new-message UX too.
+      //
+      // Implicit-focus case: when `cur.selectedNodeId === null` the
+      // user hasn't explicitly clicked anything, but the conversation
+      // panel defaults to showing the latest leaf's path. So we
+      // treat "no explicit selection" as "implicit focus on the
+      // chronologically last ChatNode" and run the same follow-on-
+      // leaf logic. This way passively watching a session live still
+      // auto-advances focus + scrolls to new messages.
+      // 中: 用户 focus 的节点是新 ChatNode 的父节点 → 自动跟随到最新
+      // leaf。focus 在历史中（新节点不从这里延伸）→ 不动。
+      // 隐式焦点：selectedNodeId 为 null 时，把上一份 chatFlow 的最后
+      // 一条 ChatNode 当成隐式焦点（用户在被动观察 leaf），同样跟随。
       let nextSelected = cur.selectedNodeId;
-      if (cur.selectedNodeId && oldFlow) {
-        const oldIds = oldById; // already a Map of old ids
-        let cursor = cur.selectedNodeId;
-        // Walk forward while children-of-cursor include new ChatNodes.
-        // Greedy single-chain follow — for parallel forks both new,
-        // we pick the first found (chronological by chatNodes order)
-        // and let the user click to switch siblings if they care.
-        // Cap at chatNodes.length hops as a defensive cycle guard.
-        for (let hops = 0; hops < mergedFlow.chatNodes.length; hops += 1) {
-          const child = mergedFlow.chatNodes.find(
-            (c) => c.parentChatNodeId === cursor && !oldIds.has(c.id),
-          );
-          if (!child) break;
-          cursor = child.id;
+      if (oldFlow) {
+        const oldIds = oldById; // Map of old ids
+        const implicitLeaf =
+          oldFlow.chatNodes[oldFlow.chatNodes.length - 1]?.id ?? null;
+        const effectiveSelected = cur.selectedNodeId ?? implicitLeaf;
+        if (effectiveSelected) {
+          let cursor = effectiveSelected;
+          // Walk forward while children-of-cursor include new ChatNodes.
+          // Greedy single-chain follow — for parallel forks both new,
+          // we pick the first found (chronological by chatNodes order)
+          // and let the user click to switch siblings.
+          // Cap at chatNodes.length hops as a defensive cycle guard.
+          for (let hops = 0; hops < mergedFlow.chatNodes.length; hops += 1) {
+            const child = mergedFlow.chatNodes.find(
+              (c) => c.parentChatNodeId === cursor && !oldIds.has(c.id),
+            );
+            if (!child) break;
+            cursor = child.id;
+          }
+          if (cursor !== effectiveSelected) nextSelected = cursor;
         }
-        if (cursor !== cur.selectedNodeId) nextSelected = cursor;
       }
       updated.set(id, {
         ...cur,
