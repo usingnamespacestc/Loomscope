@@ -64,6 +64,7 @@ function seed(cf: ChatFlow): void {
       branchMemory: {},
       subAgentCache: new Map(),
       workflowCache: new Map(),
+      workflowViewports: new Map(),
       isLoading: false,
       error: null,
       lastUpdated: Date.now(),
@@ -238,6 +239,110 @@ describe("loadChatNodeWorkflows", () => {
     expect(cache.get("a")?.status).toBe("error");
     expect(cache.get("b")?.status).toBe("error");
     expect(cache.get("a")?.error).toMatch(/500/);
+  });
+
+  it("WorkFlow follow-on-leaf: advances workflowSelectedNodeId when refresh delivers a new tail and user was on the old tail", async () => {
+    seed(chatFlow([chatNode("a")]));
+    // Pre-seed cache with an old workflow whose tail is "tail-old".
+    useStore.setState((s) => {
+      const sessions = new Map(s.sessions);
+      const cur = sessions.get(SID)!;
+      const cache = new Map(cur.workflowCache);
+      cache.set("a", {
+        status: "ready",
+        workflow: {
+          summary: cur.chatFlow!.chatNodes[0].workflow.summary,
+          nodes: [
+            { id: "l1", kind: "llm_call", parentUuid: null, text: "first", thinking: [] },
+            { id: "tail-old", kind: "llm_call", parentUuid: "l1", text: "tail-old", thinking: [] },
+          ],
+          edges: [],
+        },
+        error: null,
+        staleSince: 1,
+      });
+      sessions.set(SID, {
+        ...cur,
+        workflowCache: cache,
+        workflowSelectedNodeId: "tail-old",
+      });
+      return { sessions };
+    });
+    // Server returns a longer workflow ending at "tail-new".
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              workflows: {
+                a: {
+                  nodes: [
+                    { id: "l1", kind: "llm_call", parentUuid: null, text: "first", thinking: [] },
+                    { id: "tail-old", kind: "llm_call", parentUuid: "l1", text: "tail-old", thinking: [] },
+                    { id: "tail-new", kind: "llm_call", parentUuid: "tail-old", text: "tail-new", thinking: [] },
+                  ],
+                  edges: [],
+                },
+              },
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    await useStore.getState().loadChatNodeWorkflows(SID, ["a"]);
+    expect(useStore.getState().sessions.get(SID)!.workflowSelectedNodeId).toBe("tail-new");
+  });
+
+  it("WorkFlow follow-on-leaf: leaves workflowSelectedNodeId alone when user was mid-workflow (not on tail)", async () => {
+    seed(chatFlow([chatNode("a")]));
+    useStore.setState((s) => {
+      const sessions = new Map(s.sessions);
+      const cur = sessions.get(SID)!;
+      const cache = new Map(cur.workflowCache);
+      cache.set("a", {
+        status: "ready",
+        workflow: {
+          summary: cur.chatFlow!.chatNodes[0].workflow.summary,
+          nodes: [
+            { id: "l1", kind: "llm_call", parentUuid: null, text: "first", thinking: [] },
+            { id: "l2", kind: "llm_call", parentUuid: "l1", text: "second", thinking: [] },
+          ],
+          edges: [],
+        },
+        error: null,
+        staleSince: 1,
+      });
+      sessions.set(SID, {
+        ...cur,
+        workflowCache: cache,
+        workflowSelectedNodeId: "l1", // user inspecting an EARLIER WorkNode
+      });
+      return { sessions };
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              workflows: {
+                a: {
+                  nodes: [
+                    { id: "l1", kind: "llm_call", parentUuid: null, text: "first", thinking: [] },
+                    { id: "l2", kind: "llm_call", parentUuid: "l1", text: "second", thinking: [] },
+                    { id: "l3", kind: "llm_call", parentUuid: "l2", text: "third", thinking: [] },
+                  ],
+                  edges: [],
+                },
+              },
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    await useStore.getState().loadChatNodeWorkflows(SID, ["a"]);
+    expect(useStore.getState().sessions.get(SID)!.workflowSelectedNodeId).toBe("l1");
   });
 
   it("no-op when given an empty id array", async () => {

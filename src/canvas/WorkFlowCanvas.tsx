@@ -171,22 +171,57 @@ function CanvasInner({ chatNode, sessionId }: WorkFlowCanvasProps) {
 
   // Auto fitView on drill-in. Sized so the largest WorkFlow renders
   // visibly; React Flow's fitView rescales to fit all measured nodes.
-  // We re-fit only when the ChatNode id changes (= a different drill);
-  // viewport state across drill-out/in isn't persisted in v0.3.
+  // We re-fit only when the ChatNode id changes (= a different drill).
+  //
+  // v0.10 收尾: per-ChatNode viewport stash. If the user previously
+  // panned/zoomed inside this same ChatNode's WorkFlow (this run),
+  // restore that viewport instead of re-fitting; otherwise fall back
+  // to fitView for first-visit framing. Saves on RF onMoveEnd so
+  // exploration state is sticky across drill-out → drill-in inside
+  // the same session.
   const rf = useReactFlow();
+  const stashedViewport = useStore(
+    (s) => s.sessions.get(sessionId)?.workflowViewports.get(chatNode.id) ?? null,
+  );
+  const setWorkflowViewport = useStore((s) => s.setWorkflowViewport);
   const firstNodeId = nodes.length > 0 ? nodes[0].id : null;
   const firstNodeMeasured = useReactFlowStore((s: ReactFlowState) => {
     if (!firstNodeId) return false;
     const n = s.nodeLookup.get(firstNodeId);
     return n?.measured.width !== undefined && n?.measured.height !== undefined;
   });
+  // Per-mount latch: only the first time we satisfy the "ready" gate
+  // do we restore-or-fit. Subsequent renders for the same chatNode.id
+  // leave the user's current pan/zoom untouched. ChatNode id change
+  // (different drill target) resets the latch via the dep array.
   const fittedRef = useRef<string | null>(null);
+  // Stash the latest viewport in a ref so the onMoveEnd handler
+  // doesn't need to be re-bound when viewport changes. RF's
+  // onMoveEnd payload carries (event, viewport) so we use that
+  // directly — but setWorkflowViewport identity also needs to be
+  // stable; useStore selector returns the action which is stable.
+  const stashedRef = useRef(stashedViewport);
+  stashedRef.current = stashedViewport;
   useEffect(() => {
     if (!firstNodeMeasured) return;
     if (fittedRef.current === chatNode.id) return;
-    rf.fitView({ padding: 0.2, maxZoom: 1.1, minZoom: 0.3, duration: 0 });
     fittedRef.current = chatNode.id;
+    if (stashedRef.current) {
+      rf.setViewport(stashedRef.current, { duration: 0 });
+    } else {
+      rf.fitView({ padding: 0.2, maxZoom: 1.1, minZoom: 0.3, duration: 0 });
+    }
   }, [chatNode.id, firstNodeMeasured, rf]);
+  const onMoveEnd = useCallback(
+    (_e: unknown, viewport: { x: number; y: number; zoom: number }) => {
+      // Skip until our restore-or-fit has run; otherwise the very
+      // first move-end from RF's own initial-layout adjustments would
+      // overwrite the stash with a zero-state viewport.
+      if (fittedRef.current !== chatNode.id) return;
+      setWorkflowViewport(sessionId, chatNode.id, viewport);
+    },
+    [sessionId, chatNode.id, setWorkflowViewport],
+  );
 
   // v0.10 lazy ChatFlow B4: pending → loading overlay; error → error
   // hint. Distinguish from "genuinely empty WorkFlow" via `access.status`.
@@ -238,6 +273,7 @@ function CanvasInner({ chatNode, sessionId }: WorkFlowCanvasProps) {
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onNodeClick={onNodeClick}
+      onMoveEnd={onMoveEnd}
       minZoom={0.1}
       maxZoom={2}
       proOptions={{ hideAttribution: true }}

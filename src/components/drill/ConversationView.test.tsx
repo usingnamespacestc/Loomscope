@@ -71,6 +71,7 @@ function seed(cf: ChatFlow, selectedNodeId: string | null = null): void {
       branchMemory: {},
       subAgentCache: new Map(),
       workflowCache: new Map(),
+      workflowViewports: new Map(),
       isLoading: false,
       error: null,
       lastUpdated: 0,

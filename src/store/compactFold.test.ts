@@ -88,6 +88,7 @@ function seed(cf: ChatFlow, foldedCompactIds: Set<string> = new Set()): void {
       branchMemory: {},
       subAgentCache: new Map(),
       workflowCache: new Map(),
+      workflowViewports: new Map(),
       isLoading: false,
       error: null,
       lastUpdated: Date.now(),
