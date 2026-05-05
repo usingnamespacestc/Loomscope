@@ -355,10 +355,39 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     const top = cur.drillStack[cur.drillStack.length - 1];
     // Idempotent on the same chatnode at the top.
     if (top?.kind === "chatnode" && top.chatNodeId === chatNodeId) return;
-    const drillStack: DrillFrame[] =
-      top?.kind === "subworkflow"
-        ? [...cur.drillStack, { kind: "chatnode", chatNodeId }]
-        : [{ kind: "chatnode", chatNodeId }];
+    // Disambiguate "top-level click" vs "sub-agent ChatNode click":
+    //   - top-level ChatNode (lives in state.chatFlow.chatNodes)
+    //     → RESET the stack; the user wants to start over from top
+    //   - sub-agent ChatNode (any other id)
+    //     → APPEND to current stack (must currently top-be-subworkflow)
+    // Without this disambiguation, a top-level click while drillStack
+    // has a subworkflow frame would append [chatnode TOP], creating
+    // an inconsistent stack — frame[0] resolves in top scope, frame[1]
+    // descends to sub-agent, frame[2] tries to find TOP in sub-agent
+    // scope and either fails (resolveDrillView returns null) or, if
+    // the id happens to also be in sub scope, produces a phantom
+    // chain. Either way, broken UX.
+    // chatFlow null = pre-load (tests / before lazy fetch lands) → fall
+    // back to the original "top means reset" semantics; once chatFlow
+    // is loaded the explicit isTopLevel check kicks in and prevents
+    // accumulation.
+    const isTopLevelOrUnknown =
+      !cur.chatFlow ||
+      cur.chatFlow.chatNodes.some((c) => c.id === chatNodeId);
+    let drillStack: DrillFrame[];
+    if (isTopLevelOrUnknown) {
+      drillStack = [{ kind: "chatnode", chatNodeId }];
+    } else if (top?.kind === "subworkflow") {
+      drillStack = [...cur.drillStack, { kind: "chatnode", chatNodeId }];
+    } else {
+      // Foreign id with no subworkflow context — bail rather than
+      // create a stack that resolveDrillView can't walk.
+      console.warn(
+        "[loomscope] enterWorkflow: chatNodeId not found in current scope",
+        { chatNodeId, drillStackDepth: cur.drillStack.length },
+      );
+      return;
+    }
     updated.set(sessionId, {
       ...cur,
       drillStack,
