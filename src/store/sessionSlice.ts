@@ -70,6 +70,37 @@ function writeUnfoldStorage(sessionId: string, unfoldedIds: Set<string>): void {
   }
 }
 
+// EN: Cheap structural equality check on a ChatNode workflow summary.
+// Used by refreshSession's diff-merge to decide whether a ChatNode
+// changed. All fields are primitives or short string arrays — full
+// JSON-stringify would work but field-by-field is faster and
+// avoids allocating a string per ChatNode per refresh.
+// 中: ChatNode summary 的廉价结构相等判定，refreshSession diff-merge
+// 用。字段都是基础类型或短数组，逐字段比对比 JSON.stringify 更快
+// 也不需要每个 ChatNode 都分配字符串。
+function workflowSummariesEqual(
+  a: import("@/data/types").WorkflowSummary | undefined,
+  b: import("@/data/types").WorkflowSummary | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.assistantPreview !== b.assistantPreview) return false;
+  if (a.llmCount !== b.llmCount) return false;
+  if (a.chainCount !== b.chainCount) return false;
+  if (a.toolCount !== b.toolCount) return false;
+  if (a.totalThinkingChars !== b.totalThinkingChars) return false;
+  if (a.contextTokens !== b.contextTokens) return false;
+  if (a.maxContextTokens !== b.maxContextTokens) return false;
+  if (a.lastModel !== b.lastModel) return false;
+  const af = a.toolUseFilePaths;
+  const bf = b.toolUseFilePaths;
+  if (af.length !== bf.length) return false;
+  for (let i = 0; i < af.length; i += 1) {
+    if (af[i] !== bf[i]) return false;
+  }
+  return true;
+}
+
 // Persist the explicitly-unfolded ids derived from the in-memory
 // folded set. Computed as liveCompacts \ foldedSet so storage
 // always reflects the current "user wants this open" state.
@@ -253,16 +284,57 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       const cf = await fetchJson<ChatFlow>(`/api/sessions/${id}`);
       const updated = new Map(get().sessions);
       const cur = updated.get(id) ?? blankSessionState();
+      // EN (v0.9.1 incremental refresh): naive replacement of chatFlow
+      // + clearing the entire workflowCache produced a full-screen
+      // stutter every time CC appended a turn — every ChatNodeCard
+      // saw new prop identities, every useChatNodeWorkflow lost its
+      // cache, all visible WorkFlows triggered re-fetches, React Flow
+      // reconciled the whole graph. Diff-merge instead:
+      //   - For each NEW ChatNode whose `summary` matches the OLD
+      //     entry's, REUSE the old object reference. React.memo skips
+      //     re-render, React Flow keeps the same node identity, no
+      //     graph reconcile.
+      //   - workflowCache entries for unchanged ChatNodes survive
+      //     verbatim. The cache entry for the changed (typically
+      //     latest) ChatNode is dropped so its lazy hook refetches
+      //     fresh nodes — this is the only card that flickers.
+      // Net effect: 200-card session, only the running latest card
+      // re-renders + one targeted fetch. Matches Agentloom's
+      // "append-only" feel for live updates.
+      // 中: 全量替换 chatFlow + 清空 workflowCache 造成新一轮就全屏
+      // 卡顿。改成 diff-merge：summary 不变的 ChatNode 复用旧引用
+      // （React.memo + React Flow 跳过 reconcile）+ 只对改了 summary
+      // 的那张卡（通常是最新一条）清 cache 让它重 fetch。200 卡片
+      // session 只有 running 那一张闪一下，其他静默。
+      const oldFlow = cur.chatFlow;
+      const oldCache = cur.workflowCache;
+      const oldById = oldFlow
+        ? new Map(oldFlow.chatNodes.map((c) => [c.id, c]))
+        : new Map<string, ChatNode>();
+      const newCache = new Map<string, WorkflowCacheEntry>();
+      const mergedChatNodes: ChatNode[] = cf.chatNodes.map((newCn) => {
+        const oldCn = oldById.get(newCn.id);
+        if (!oldCn) return newCn; // genuinely new ChatNode
+        if (workflowSummariesEqual(oldCn.workflow.summary, newCn.workflow.summary)) {
+          // Unchanged — preserve identity for memo/reconcile.
+          const cached = oldCache.get(newCn.id);
+          if (cached) newCache.set(newCn.id, cached);
+          return oldCn;
+        }
+        // Summary shifted (turn count / contextTokens / etc.) — use
+        // new ref but DROP cache so lazy hook refetches the new
+        // workflow.nodes. This is the running-card path.
+        return newCn;
+      });
+      const mergedFlow: ChatFlow = { ...cf, chatNodes: mergedChatNodes };
       updated.set(id, {
         ...cur,
-        chatFlow: cf,
-        foldedCompactIds: hydrateFoldedCompactIds(id, cf),
-        workflowCache: new Map<string, WorkflowCacheEntry>(),
-        // subAgentCache stays — sub-agent ids are sidecar-rooted; if the
-        // user has a sub-agent drill frame open, we'd rather they keep
-        // seeing the cached content than flicker to a loading state on
-        // an unrelated parent-jsonl tick. v0.9.1 will subscribe to
-        // sidecar paths too and only invalidate the specific sub-agent.
+        chatFlow: mergedFlow,
+        foldedCompactIds: hydrateFoldedCompactIds(id, mergedFlow),
+        workflowCache: newCache,
+        // subAgentCache stays — sub-agent ids are sidecar-rooted; the
+        // sub-agent SSE invalidate path (kind='subagent') has its own
+        // refreshSubAgent action that targets only the affected agent.
         isLoading: false,
         error: null,
         lastUpdated: Date.now(),
@@ -270,9 +342,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       set({ sessions: updated });
     } catch (err) {
       // Failure on a refresh is non-fatal — the previous chatFlow is
-      // still valid; we just log and let the next SSE invalidate try
-      // again. Don't surface as session-level error (that's reserved
-      // for initial-load failures).
+      // still valid; log and let the next SSE invalidate retry.
       console.error("[loomscope] refreshSession failed:", err);
     }
   },
