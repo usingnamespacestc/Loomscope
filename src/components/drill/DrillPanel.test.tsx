@@ -191,8 +191,15 @@ describe("DrillPanel 2-tab strip (v0.8 M3)", () => {
     // Switch to Detail tab.
     fireEvent.click(screen.getByTestId("drill-panel-tab-detail"));
     expect(useStore.getState().drillPanelTab).toBe("detail");
-    expect(await screen.findByTestId("chat-node-detail")).toBeTruthy();
-    expect(screen.queryByTestId("conversation-view")).toBeNull();
+    // v0.10 perf: both tab contents stay mounted (avoid 5s remount
+    // markdown re-parse spike). Inactive tab's container has
+    // display:none. Verify DOM existence + display style instead of
+    // asserting unmounted.
+    const detailEl = await screen.findByTestId("chat-node-detail");
+    expect(detailEl).toBeTruthy();
+    expect((detailEl.parentElement as HTMLElement).style.display).toBe("block");
+    const convEl = screen.getByTestId("conversation-view");
+    expect((convEl.parentElement as HTMLElement).style.display).toBe("none");
     expect(
       screen.getByTestId("drill-panel-tab-detail").dataset.active,
     ).toBe("true");

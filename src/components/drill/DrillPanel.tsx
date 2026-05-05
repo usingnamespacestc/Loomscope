@@ -139,20 +139,31 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
           scroll within. */}
       <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-3">
         {/* Suspense fallback covers the first-render fetch of the
-            lazy markdown chunk (~80KB gz). Subsequent tab switches
-            are cached. */}
+            lazy markdown chunk (~80 KB gz). Subsequent tab switches
+            are cached.
+            v0.10 perf: Both Detail + Conversation tabs render
+            simultaneously — only the inactive one's container gets
+            display:none. Otherwise switching tabs (which the
+            viewMode auto-flip does on every drill in/out) would
+            unmount + remount ConversationView, re-running the
+            entire markdown pipeline (remark-gfm + rehype-raw +
+            rehype-highlight + rehype-sanitize) on every visible
+            message. For a 50-bubble visible slice that costs ~5 s
+            on every drill exit. Keeping both mounted means the
+            pipeline runs once per chatNode change, not per tab
+            switch. */}
         <Suspense fallback={<LazyFallback />}>
-          {tab === "detail" && (
+          <div style={{ display: tab === "detail" ? "block" : "none" }}>
             <DetailTabContent
               sessionId={sessionId}
               chatFlow={chatFlow}
               viewMode={viewMode}
               drilledChatNode={drilledChatNode}
             />
-          )}
-          {tab === "conversation" && (
+          </div>
+          <div style={{ display: tab === "conversation" ? "block" : "none" }}>
             <ConversationView sessionId={sessionId} chatFlow={chatFlow} />
-          )}
+          </div>
         </Suspense>
       </div>
     </aside>
