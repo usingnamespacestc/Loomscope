@@ -6,7 +6,64 @@
 
 ---
 
-## 2026-05-06 凌晨 — v0.9.1 sidecar/workspace SSE + sub-agent uuid 共享灾难
+## 2026-05-06 凌晨 — UX 反向同步 + chip 体系 + 持久化 bug 链
+
+晚间一连串浏览器实测推动的修复。
+
+### Conversation ↔ canvas 双向同步收齐
+
+之前只做了 Conversation hover → ChatFlow canvas pan，反向（canvas hover/click → Conversation 滚动到对应 bubble）一直缺。落 `ConversationScrollContext`（mirror `CanvasPanContext` 的 ref 注册模式），ChatFlowCanvas 的 `onNodeClick` / `onNodeMouseEnter`（250ms dwell）调 shim，ConversationView 注册 `scrollToBubble` 实现，按 `data-testid` 找 DOM 然后 `scrollIntoView({block:"center"})`。bubble 不在当前 lazy-pack window 时 fallback 到底部。
+
+selectedId 驱动的 scroll 也从原来的"任何 selectedId 变 → 跳底部"改成"跳到匹配的 bubble"——之前 canvas 点中间 ChatNode 会被一脚踢到对话末端，现在精准定位。
+
+### Hover-pan 侵蚀 fold 持久化（4331bef）
+
+用户报"明明没展开过，storage 里却记着 3 个 unfold id"——根因：ConversationView 的 hover-pan 路径会自动 unfold 一连串折叠 compact 让 canvas 能 pan 到目标节点；这个**自动 unfold** 走的还是 `unfoldCompact` action，每次都写 storage。结果浏览过程中 cursor 经过任意被压缩范围的消息，那条 compact 就被悄悄记成"用户已展开"。
+
+修：`unfoldCompact` 加 `opts.persist`（default true）。hover 路径传 `{ persist: false }`，in-memory 翻状态但不写 storage。用户**显式点**的（chatFold 卡片、compact 节点的 fold 切换钮）保持 default true。
+
+设计原则：**非用户主动操作不应污染持久化偏好**。hover-pan / auto-unfold 都属于"navigation aid"，不是"用户偏好"。
+
+### 多轮 conversation + 内联工具 pill（998065d / 2689a0f）
+
+之前 ConversationView 只显示**最后一个 llm_call 的 text**——多轮 turn（assistant 文本 → tool → 文本 → tool → 文本）只看到最后一段，中间推理消失。改成 `buildConversationRounds(workflow)` 返回 round 数组，每 round = `{ text, tools[] }`。渲染：每个 assistant 文本块 + 下方缩进 + 左竖线的工具 pill 列表。
+
+工具 pill：默认折起 `▸ 📖 Read src/foo.ts`，点击展开 Input + Output blocks（max-h-60 内部滚动）。每种工具有图标+短摘要映射（Read/Edit/Write/Bash/Grep/Glob/WebFetch/WebSearch/TodoWrite/...）。delegate (Task) 工具特殊版：紫色边框 + agentType 标签 + body 显示 description / Prompt / Result + "⤢ 进入子工作流"按钮（保持 Claude Desktop 风格的同时露出 Loomscope drill 能力）。
+
+### chainCount 区分链数 vs llm 数（6097a67）
+
+发现之前 `🧠 N 轮` 把"轮"理解错了——用户说"轮"是 WorkFlow DAG 里**互不连续的 llm_call 序列数**（disconnected chains），不是 llm_call 总数。例：节点有 23 个 llm_call 但只有 2 条链（auto-compact 中断 / 错误重试 / harness 干预把连续 chain 切断）。
+
+加 `WorkflowSummary.chainCount`：每个 llm_call 检查 predecessor llm_call 是否在本 WorkFlow 内 reach（直接边 `B.parent === A.id` 或间接边 `B.parent === A 的 tool_call.resultUserUuid`）。任一可达 → 续 chain；都不可达 → 新 chain root。`chainCount = root 数`。
+
+ChatNodeCard 新增 `🔗 N` chip（紫色），仅当 `chainCount > 1` 显示（单链是常态，挂出来糊）。
+
+### Hover-pan viewport top-left bug（56568c2）
+
+`rf.setCenter(node.position.x, node.position.y, ...)` 中 `node.measured?.width ?? 0` 在卡片刚 unfold 出来 DOM 没量过时塌成 0，setCenter 拿到 top-left 坐标——卡片整体显示在视口右下方而不是中间。修：fallback 到 layout 常量 `NODE_WIDTH=208 / NODE_HEIGHT=150`，DOM 没量出来时也不会塌。两处重复 setCenter 抽成 `panToNodeCenter` helper。
+
+### Drill in/out 之间 viewport 不保留（89639f7）
+
+ChatFlow canvas keep-mounted（display:none/block 切换）。React Flow 内部 viewport 应该 persist 但实测不可靠——ResizeObserver 在 0×0 → real-size 跳变时把 viewport 重置到原点。修：subscribe drillStack depth；0→>0 时 stash `rf.getViewport()`，>0→0 时下一个 rAF 内 `setViewport(stash)`（rAF 让 RF 自己的 resize-driven adjust 跑完再 override）。
+
+### Sub-agent uuid 共享 4 处踩坑（b8d9dba → bdf12c9）
+
+CC 的 Task 派发**复用 parent ChatNode 的 user uuid 作为 sub-agent jsonl 第一条 user record 的 uuid**。所以 sub-agent 第一个 ChatNode 跟 parent 共享 `chatNode.id`。所有用 chatNodeId 当 scope key 的 lookup 都被骗，一晚连环 4 次：
+
+| 位置 | 症状 | 修复 |
+|---|---|---|
+| `useChatNodeWorkflow` hook | sub-agent canvas 拉到 top-level 的 cache → 渲染错的 WorkFlow | inline 优先于 cache（`/subagents` 永远 full-fat，inline 非空） |
+| `DrillPanel.DetailTabContent` | 选中 sub-agent WorkNode 右侧 detail 不显示 | 同上 |
+| `resolveDelegate` / `resolveDrillView` | walker 走深层 chatnode 帧时拉错 cache → 同一 toolu id 反复套娃 → breadcrumb 无限延长 | 用 `crossedSubWorkflow` 位置 flag 而不是 id 比较 |
+| `enterWorkflow` 的 RESET vs APPEND 判定 | sub-agent 内点击被误判 top-level → RESET 把用户踢回顶层 | revert 到原始 stack-aware 逻辑（top 是 subworkflow 就 APPEND） |
+
+最终钉死的原则（写到 `design-data-model.md` 的 sub-agent 章节"⚠ uuid 共享陷阱"）：
+
+> **scope 判定永远用位置，不用 id**。drillStack walker 跨过任何 subworkflow 帧之后必然是 sub-agent scope；或更简单——`chatNode.workflow.nodes.length > 0` 就用 inline，否则用 cache。
+
+### Compact-fold storage 语义反向（a0c44dd）
+
+原来 storage 存 `[已 fold 列表]`——新出现的 compact（live-tail 追加 / 老 session 没存过）不在 list 里就**默认不折**，default-fold 等于实质失效。语义翻转为存 `[已 unfold 列表]`：hydrate = `liveCompacts \ unfolded`，新 compact 不在 storage 里 → 自动折。storage key `loomscope:fold:` → `loomscope:unfold:`，老数据语义不兼容直接弃用（用户首次刷新回到"全折叠"默认）。
 
 ### v0.9.1 三件功能 ship（commits `2a22aeb` / `99ca03e` / `7466416`）
 

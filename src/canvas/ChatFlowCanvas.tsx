@@ -29,6 +29,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { CanvasPanContext } from "@/canvas/CanvasPanContext";
+import { useConversationScrollShim } from "@/canvas/ConversationScrollContext";
 import { NODE_HEIGHT, NODE_WIDTH, layoutChatFlow } from "@/canvas/layoutDag";
 import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
 import { ChatFoldNodeCard } from "@/canvas/nodes/ChatFoldNodeCard";
@@ -194,6 +195,7 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     [chatFlow, foldedCompactIds],
   );
   const setSelected = useStore((s) => s.setSelected);
+  const conversationScroll = useConversationScrollShim();
   const onNodeClick = useCallback(
     (_e: unknown, node: { id: string }) => {
       // chatFold phantoms aren't real ChatNodes — skip selection so
@@ -202,8 +204,52 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
       // but defense-in-depth here covers keyboard activation paths.
       if (isChatFoldId(node.id)) return;
       setSelected(sessionId, node.id);
+      // Click → conversation scrolls to the matching bubble. Done
+      // explicitly here in addition to the selectedId-driven effect
+      // in ConversationView so the smooth-scroll behaviour is
+      // predictable on direct user action (the effect path uses
+      // 'auto' on selection change to avoid jumpiness across drill
+      // round-trips).
+      conversationScroll(node.id, { smooth: true });
     },
-    [setSelected, sessionId],
+    [setSelected, sessionId, conversationScroll],
+  );
+
+  // v0.9.1: hover dwell on a ChatNode card → conversation scrolls.
+  // Mirrors ConversationView's 250ms hover-pan dwell so the two
+  // directions feel symmetric. Single timer per canvas (the cursor
+  // can only hover one node at a time); mouseLeave on any node
+  // clears the pending fire.
+  const hoverTimerRef = useRef<number | null>(null);
+  const onNodeMouseEnter = useCallback(
+    (_e: unknown, node: { id: string }) => {
+      if (isChatFoldId(node.id)) return;
+      if (hoverTimerRef.current !== null) {
+        window.clearTimeout(hoverTimerRef.current);
+      }
+      hoverTimerRef.current = window.setTimeout(() => {
+        hoverTimerRef.current = null;
+        conversationScroll(node.id, { smooth: true });
+      }, 250);
+    },
+    [conversationScroll],
+  );
+  const onNodeMouseLeave = useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+  // Cleanup on unmount so a half-fired timer doesn't reach a stale
+  // shim after canvas remount.
+  useEffect(
+    () => () => {
+      if (hoverTimerRef.current !== null) {
+        window.clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+    },
+    [],
   );
 
   const rf = useReactFlow();
@@ -463,6 +509,8 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onNodeClick={onNodeClick}
+      onNodeMouseEnter={onNodeMouseEnter}
+      onNodeMouseLeave={onNodeMouseLeave}
       onEdgeMouseEnter={(_e, edge: Edge) =>
         onEdgeHover({
           parent: edge.source,

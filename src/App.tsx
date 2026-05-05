@@ -15,6 +15,7 @@
 import { useEffect, useMemo } from "react";
 
 import { CanvasPanProvider } from "@/canvas/CanvasPanContext";
+import { ConversationScrollProvider } from "@/canvas/ConversationScrollContext";
 import { ChatFlowCanvas } from "@/canvas/ChatFlowCanvas";
 import { WorkFlowCanvas } from "@/canvas/WorkFlowCanvas";
 import { DrillPanel } from "@/components/drill/DrillPanel";
@@ -168,6 +169,7 @@ export default function App() {
 
   return (
     <CanvasPanProvider>
+    <ConversationScrollProvider>
     <div className="h-screen w-screen flex flex-col bg-gray-50 text-gray-900">
       <Header />
       <div className="flex flex-1 min-h-0">
@@ -224,6 +226,7 @@ export default function App() {
         )}
       </div>
     </div>
+    </ConversationScrollProvider>
     </CanvasPanProvider>
   );
 }

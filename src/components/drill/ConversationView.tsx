@@ -21,9 +21,10 @@
 // which both flips selectedNodeId AND persists the leaf for next
 // re-entry.
 
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCanvasPanShim } from "@/canvas/CanvasPanContext";
+import { ConversationScrollContext } from "@/canvas/ConversationScrollContext";
 import { MarkdownView } from "@/components/MarkdownView";
 import {
   findLatestLeafInSubtree,
@@ -101,15 +102,66 @@ export function ConversationView({ sessionId, chatFlow }: Props) {
   const topMarkerRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const skipNextScrollRef = useRef(false);
+  // v0.9.1: scroll-to-bubble helper. Resolves the rendered DOM node
+  // by data-testid (= conversation-bubble-<chatNodeId>) and scrolls
+  // it into view. Falls back to bottom marker when the bubble isn't
+  // in the current rendered slice (lazy-pack window may have it
+  // truncated above startIdx). Both ChatNodeCard hover/click and
+  // selectedId-change effects route through this so behaviour is
+  // uniform.
+  const scrollToBubble = useCallback(
+    (chatNodeId: string, opts?: { smooth?: boolean }) => {
+      const root = containerRef.current;
+      if (!root) return;
+      const bubble = root.querySelector<HTMLElement>(
+        `[data-testid="conversation-bubble-${CSS.escape(chatNodeId)}"]`,
+      );
+      if (bubble) {
+        bubble.scrollIntoView({
+          block: "center",
+          behavior: opts?.smooth === false ? "auto" : "smooth",
+        });
+      } else {
+        bottomMarkerRef.current?.scrollIntoView({
+          block: "end",
+          behavior: "auto",
+        });
+      }
+    },
+    [],
+  );
+  // Register the scroll handler so canvas hover/click can call it
+  // across the React tree (ConversationScrollContext is a sibling-
+  // to-sibling mediator like CanvasPanContext but in reverse).
+  const conversationScrollCtx = useContext(ConversationScrollContext);
+  useEffect(() => {
+    if (!conversationScrollCtx) return;
+    conversationScrollCtx.ref.current = scrollToBubble;
+    return () => {
+      if (conversationScrollCtx.ref.current === scrollToBubble) {
+        conversationScrollCtx.ref.current = null;
+      }
+    };
+  }, [conversationScrollCtx, scrollToBubble]);
+  // selectedId-driven scroll: when canvas click fires setSelected, we
+  // need to land on the matching bubble. When selection clears (null)
+  // OR on session change, snap to the bottom (latest message). Skip
+  // when an internal bubble click set the flag — clicking a bubble
+  // means "focus here", not "jump elsewhere".
   useEffect(() => {
     if (skipNextScrollRef.current) {
       skipNextScrollRef.current = false;
       return;
     }
-    const el = bottomMarkerRef.current;
-    if (!el) return;
-    el.scrollIntoView({ block: "end", behavior: "auto" });
-  }, [selectedId, chatFlow?.id]);
+    if (!selectedId) {
+      bottomMarkerRef.current?.scrollIntoView({
+        block: "end",
+        behavior: "auto",
+      });
+      return;
+    }
+    scrollToBubble(selectedId, { smooth: false });
+  }, [selectedId, chatFlow?.id, scrollToBubble]);
 
   // v0.8.1 #4: lazy-pack window. Recompute initial startIdx on path
   // identity change.
