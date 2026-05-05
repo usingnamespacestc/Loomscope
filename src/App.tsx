@@ -80,8 +80,24 @@ export default function App() {
           {!activeId && <EmptyState />}
           {activeId && session?.isLoading && <LoadingState />}
           {activeId && session?.error && <ErrorState message={session.error} />}
-          {activeId && session?.chatFlow && view.mode === "chatflow" && (
-            <ChatFlowCanvas chatFlow={session.chatFlow} sessionId={activeId} />
+          {/* v0.10 perf: top-level ChatFlowCanvas stays mounted across
+              drill in/out — hidden via display:none when not the
+              active view. Prevents the 187-card unmount/remount spike
+              when user exits a WorkFlow drill. WorkFlowCanvas itself
+              stays conditional (only ~30 WorkNodes per drill, fast to
+              mount); sub-chatflow ChatFlowCanvas is also conditional
+              since each drill renders a different sub-agent ChatFlow.
+              React Flow's ResizeObserver re-measures cleanly when
+              display flips from none → block. */}
+          {activeId && session?.chatFlow && (
+            <div
+              className="absolute inset-0"
+              style={{
+                display: view.mode === "chatflow" ? "block" : "none",
+              }}
+            >
+              <ChatFlowCanvas chatFlow={session.chatFlow} sessionId={activeId} />
+            </div>
           )}
           {activeId && session?.chatFlow && view.mode === "workflow" && (
             <>
