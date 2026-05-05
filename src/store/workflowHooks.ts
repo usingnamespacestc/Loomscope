@@ -73,10 +73,25 @@ export function useChatNodeWorkflow(
     void load(sessionId, [chatNode.id]);
   }, [needsLazy, cached?.status, load, sessionId, chatNode.id]);
 
-  // Resolution priority: cached wins because the cache is the live
-  // post-fetch source of truth (and matches v0.9 file-tail mtime
-  // invalidation when that lands). Inline fall-through covers
-  // sub-agent / eager paths.
+  // Resolution priority: INLINE WINS when the workflow is already
+  // populated. Why: workflowCache is keyed by chatNode.id, and CC's
+  // Task delegation reuses parent user uuids as the sub-agent jsonl's
+  // first user record uuid → top-level and sub-agent ChatNodes
+  // routinely share ids. If we let cache win for an id-collision case,
+  // we'd render the WRONG WorkFlow (top-level's) when chatNode is
+  // sub-agent's. Inline-populated chatNodes ALWAYS come from the
+  // /subagents path (full-fat) so trusting inline over cache is
+  // correct for sub-agent ChatNodes. For lite top-level ChatNodes,
+  // inlineLoaded is false (lite strips nodes) so we still fall
+  // through to cache.
+  if (inlineLoaded) {
+    return {
+      workflow: chatNode.workflow,
+      status: "ready",
+      error: null,
+      isLazy: false,
+    };
+  }
   if (cached?.status === "ready" && cached.workflow) {
     return {
       workflow: cached.workflow,
@@ -91,14 +106,6 @@ export function useChatNodeWorkflow(
       status: "error",
       error: cached.error,
       isLazy: true,
-    };
-  }
-  if (inlineLoaded) {
-    return {
-      workflow: chatNode.workflow,
-      status: "ready",
-      error: null,
-      isLazy: false,
     };
   }
   if (!summaryHasContent) {

@@ -604,23 +604,47 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
   enterSubWorkflow: (sessionId, parentWorkNodeId) => {
     const sessions = get().sessions;
     const cur = sessions.get(sessionId);
-    if (!cur || !cur.chatFlow) return;
-    if (cur.drillStack.length === 0) return; // need an existing chatnode frame
+    if (!cur || !cur.chatFlow) {
+      console.warn("[loomscope] enterSubWorkflow: no chatFlow", { sessionId });
+      return;
+    }
+    if (cur.drillStack.length === 0) {
+      console.warn(
+        "[loomscope] enterSubWorkflow: drillStack empty (need a chatnode frame first)",
+        { parentWorkNodeId },
+      );
+      return;
+    }
 
     // Idempotent: if the top frame already targets this WorkNode,
     // skip the re-push. Avoids a stray double-double-click stacking
     // two identical frames.
     const top = cur.drillStack[cur.drillStack.length - 1];
-    if (top.kind === "subworkflow" && top.parentWorkNodeId === parentWorkNodeId) return;
+    if (top.kind === "subworkflow" && top.parentWorkNodeId === parentWorkNodeId) {
+      console.info(
+        "[loomscope] enterSubWorkflow: idempotent (already on this delegate)",
+        { parentWorkNodeId },
+      );
+      return;
+    }
 
     // Validate: the parentWorkNodeId must resolve to a delegate
     // WorkNode in the currently visible WorkFlow. Walk the current
-    // drill stack to find it; if validation fails, drop the push
-    // silently — same defensive policy as Agentloom's enterSubWorkflow.
+    // drill stack to find it; if validation fails, drop the push.
     const delegate = resolveDelegate(cur, parentWorkNodeId);
-    if (!delegate) return;
+    if (!delegate) {
+      // resolveDelegate already warns about WorkNode-not-found; this
+      // covers "found but not a delegate" too.
+      return;
+    }
     const agentId = delegate.agentId;
-    if (!agentId) return; // a delegate without agentId can't be drilled
+    if (!agentId) {
+      console.warn(
+        "[loomscope] enterSubWorkflow: delegate has no agentId (sidecar not locatable)",
+        { parentWorkNodeId, delegateId: delegate.id },
+      );
+      return;
+    }
 
     const nextStack: DrillFrame[] = [
       ...cur.drillStack,
