@@ -312,6 +312,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         ? new Map(oldFlow.chatNodes.map((c) => [c.id, c]))
         : new Map<string, ChatNode>();
       const newCache = new Map<string, WorkflowCacheEntry>();
+      const now = Date.now();
       const mergedChatNodes: ChatNode[] = cf.chatNodes.map((newCn) => {
         const oldCn = oldById.get(newCn.id);
         if (!oldCn) return newCn; // genuinely new ChatNode
@@ -321,9 +322,17 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
           if (cached) newCache.set(newCn.id, cached);
           return oldCn;
         }
-        // Summary shifted (turn count / contextTokens / etc.) — use
-        // new ref but DROP cache so lazy hook refetches the new
-        // workflow.nodes. This is the running-card path.
+        // Summary shifted (turn count / contextTokens / etc.) — new
+        // ref so canvas re-renders, but if there was a ready cached
+        // workflow keep it visible as STALE while the lazy hook
+        // refetches in the background. Without this the WorkFlowCanvas
+        // briefly renders an empty placeholder during the 50-100ms
+        // fetch window. Drill view is the most affected — that's the
+        // running ChatNode whose summary keeps shifting.
+        const cached = oldCache.get(newCn.id);
+        if (cached?.status === "ready" && cached.workflow) {
+          newCache.set(newCn.id, { ...cached, staleSince: now });
+        }
         return newCn;
       });
       const mergedFlow: ChatFlow = { ...cf, chatNodes: mergedChatNodes };
@@ -520,8 +529,15 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     const sess0 = get().sessions.get(sessionId);
     if (!sess0) return;
 
-    // Filter to ids that are NOT already ready or pending. ``error``
-    // entries get retried — caller decides retry policy.
+    // EN: Filter to ids that need a network fetch. Skip when already
+    // pending (in-flight) or ready+fresh. Refetch when:
+    //   - no cache entry yet (first access)
+    //   - status === "error" (caller-driven retry)
+    //   - status === "ready" but `staleSince` set (refreshSession
+    //     marked the entry stale because summary shifted; we keep
+    //     the old workflow visible meanwhile so no flicker)
+    // 中: 决定哪些 id 真要发请求。已 pending 跳过；ready 且不 stale
+    // 跳过；error 重试；ready+staleSince 后台刷新。
     const cache = sess0.workflowCache;
     const toFetch: string[] = [];
     for (const id of chatNodeIds) {
@@ -530,24 +546,35 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         toFetch.push(id);
         continue;
       }
-      if (e.status === "ready") continue;
       if (e.status === "pending") continue;
-      toFetch.push(id); // error → retry
+      if (e.status === "ready" && !e.staleSince) continue;
+      // error OR (ready + stale) → fetch
+      toFetch.push(id);
     }
     if (toFetch.length === 0) return;
 
-    // Mark to-fetch ids as `pending` synchronously so other callers
-    // in the same tick (typically: 50 child useEffects firing before
-    // the parent's batch effect) see them and skip re-adding to the
-    // toFetch list. This is the visible signal `useChatNodeWorkflow`
-    // reads.
+    // EN: Mark to-fetch ids as `pending` synchronously so other
+    // callers in the same tick see them and skip re-adding to the
+    // toFetch list. For STALE entries (had ready workflow), preserve
+    // the old workflow as the placeholder body — useChatNodeWorkflow
+    // displays it while the fetch is in flight, no empty-canvas
+    // flicker. Once the fetch lands, status flips to ready + clean.
+    // 中: 同步标 pending 防同 tick 重入。stale 的 entry 保留旧
+    // workflow 作占位，避免画布空白闪烁。
     {
       const sessions = new Map(get().sessions);
       const cur = sessions.get(sessionId);
       if (!cur) return;
       const next = new Map(cur.workflowCache);
       for (const id of toFetch) {
-        next.set(id, { status: "pending", workflow: null, error: null });
+        const prev = next.get(id);
+        const stalePlaceholder =
+          prev?.staleSince && prev.workflow ? prev.workflow : null;
+        next.set(id, {
+          status: "pending",
+          workflow: stalePlaceholder,
+          error: null,
+        });
       }
       sessions.set(sessionId, { ...cur, workflowCache: next });
       set({ sessions });

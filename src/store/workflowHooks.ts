@@ -116,6 +116,23 @@ export function useChatNodeWorkflow(
       isLazy: true,
     };
   }
+  // EN: stale-while-revalidate — when refreshSession marked an entry
+  // as pending+stale (kept the old workflow as a placeholder), show
+  // the old workflow as ready so the bubble doesn't visually shrink
+  // to summary.assistantPreview during the 50-100ms refetch window.
+  // Once the fetch lands, the new entry is status:ready + workflow
+  // updated; this branch stops matching.
+  // 中: stale-while-revalidate —— refreshSession 把 entry 标 pending
+  // 但保留旧 workflow 作占位时，本路径让 hook 把旧 workflow 当 ready
+  // 显示，避免气泡瞬间压缩成一行预览。fetch 完成后自动切换。
+  if (cached?.status === "pending" && cached.workflow) {
+    return {
+      workflow: cached.workflow,
+      status: "ready",
+      error: null,
+      isLazy: true,
+    };
+  }
   if (cached?.status === "error") {
     return {
       workflow: null,

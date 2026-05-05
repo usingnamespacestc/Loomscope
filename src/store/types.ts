@@ -109,6 +109,18 @@ export interface WorkflowCacheEntry {
   status: "pending" | "ready" | "error";
   workflow: import("@/data/types").WorkFlow | null;
   error: string | null;
+  // EN: stale-while-revalidate marker. Set by refreshSession when a
+  // ChatNode's summary shifted but the old workflow is still useful
+  // as a placeholder during refetch (avoids 50-100ms of empty
+  // WorkFlowCanvas while the new lazy fetch is in flight).
+  // useChatNodeWorkflow displays the old workflow + status='ready'
+  // while staleSince is truthy; loadChatNodeWorkflows refires the
+  // fetch and clears staleSince on success.
+  // 中: stale-while-revalidate 标记。refreshSession 发现 summary 变了
+  // 但老 workflow 仍可作占位时设置；hook 在 staleSince 存在期间
+  // 继续显示旧 workflow，避免 WorkFlowCanvas 出现 50-100ms 的空白。
+  // 重新 fetch 完成后清除。
+  staleSince?: number;
 }
 
 export interface SubAgentCacheEntry {
