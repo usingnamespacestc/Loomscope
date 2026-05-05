@@ -806,6 +806,12 @@ export function resolveDrillView(state: SessionState): ResolvedDrillView | null 
   if (!state.chatFlow || state.drillStack.length === 0) return null;
   let scopeChatFlow: ChatFlow = state.chatFlow;
   let chatNode: import("@/data/types").ChatNode | null = null;
+  // Tracks whether we've crossed any subworkflow frame yet. The first
+  // chatnode frame (= drillStack[0]) is always top-level; everything
+  // after a subworkflow descend is sub-agent scope. We can't use the
+  // chatNode's id to disambiguate (ids collide between top-level and
+  // sub-agent due to CC's Task delegation reusing parent uuids).
+  let crossedSubWorkflow = false;
   const labels: DrillBreadcrumbItem[] = [];
   for (let depth = 0; depth < state.drillStack.length; depth += 1) {
     const frame = state.drillStack[depth];
@@ -828,16 +834,13 @@ export function resolveDrillView(state: SessionState): ResolvedDrillView | null 
     // any) picks one out of the sub scope.
     if (!chatNode) return null;
     // v0.10 lazy: top-level chatNode's `workflow.nodes` is empty in
-    // lite mode — must read workflowCache first. Sub-agent ChatNode
-    // workflows (descended via earlier subworkflow frames) come from
-    // /subagents (full-fat) so their inline nodes ARE authoritative.
-    // Distinguish: chatNode is in `state.chatFlow` ⇒ top-level ⇒
-    // prefer cache; otherwise it's in a sub-agent ChatFlow ⇒ inline.
-    const isTopLevelCn = state.chatFlow.chatNodes.some(
-      (c) => c.id === chatNode!.id,
-    );
+    // lite mode → must read workflowCache. Once we've crossed a
+    // subworkflow descend, scope is sub-agent → inline nodes are
+    // authoritative (full-fat from /subagents). Position-based check
+    // is reliable; id-based is NOT (sub-agent ChatNodes can share
+    // ids with top-level via parent-uuid reuse).
     let nodes: import("@/data/types").WorkNode[];
-    if (isTopLevelCn) {
+    if (!crossedSubWorkflow) {
       const cached = state.workflowCache.get(chatNode.id);
       nodes =
         cached?.status === "ready" && cached.workflow
@@ -854,6 +857,7 @@ export function resolveDrillView(state: SessionState): ResolvedDrillView | null 
     if (cached?.status !== "ready" || !cached.chatFlow) return null;
     scopeChatFlow = cached.chatFlow;
     chatNode = null;
+    crossedSubWorkflow = true;
     const isAutoCompact = delegate.agentId.startsWith("acompact-");
     const agentLabel =
       cached.meta?.agentType ??
@@ -885,30 +889,38 @@ function resolveDelegate(
   state: SessionState,
   parentWorkNodeId: string,
 ): DelegateNode | null {
-  // Walk frames in order, narrowing the resolved (chatNode, nodes)
-  // pair each step. v0.10 lazy ChatFlow: top-level `chatFlow.chatNodes
-  // [i].workflow.nodes` is EMPTY in lite mode (the per-cn workflow
-  // lives in `workflowCache` instead). We MUST read from workflowCache
-  // first; falling back to the inline list keeps test fixtures and
-  // any pre-lazy paths working. Sub-agent ChatFlows (loaded via
-  // /subagents) come back full-fat so their inline nodes are
-  // authoritative — no cache lookup needed for subworkflow frames.
+  // Walk frames, tracking scope. We CAN'T use chatNodeId as a "is this
+  // top-level?" signal because CC's Task delegation reuses parent
+  // user uuids → top-level and sub-agent ChatNodes routinely share
+  // ids. Use the walker's POSITION (whether we've crossed a
+  // subworkflow frame) instead. Pre-cross = top-level (lazy, read
+  // workflowCache); post-cross = sub-agent scope (full-fat, read
+  // inline workflow.nodes from the cached sub ChatFlow).
+  let scopeChatFlow: ChatFlow | null = state.chatFlow;
+  let crossedSubWorkflow = false;
   let nodes: unknown[] = [];
   for (const frame of state.drillStack) {
     if (frame.kind === "chatnode") {
-      const cached = state.workflowCache.get(frame.chatNodeId);
-      if (cached?.status === "ready" && cached.workflow) {
-        nodes = cached.workflow.nodes;
+      if (!crossedSubWorkflow) {
+        // Top-level: workflow.nodes is empty in lite mode → cache.
+        const cached = state.workflowCache.get(frame.chatNodeId);
+        if (cached?.status === "ready" && cached.workflow) {
+          nodes = cached.workflow.nodes;
+        } else {
+          const cn = scopeChatFlow?.chatNodes.find(
+            (c) => c.id === frame.chatNodeId,
+          );
+          nodes = cn?.workflow.nodes ?? [];
+        }
       } else {
-        const cn = state.chatFlow?.chatNodes.find(
+        // Sub-agent scope: chatFlow is full-fat from /subagents.
+        const cn = scopeChatFlow?.chatNodes.find(
           (c) => c.id === frame.chatNodeId,
         );
         nodes = cn?.workflow.nodes ?? [];
       }
     } else {
-      // subworkflow: the previous frame's nodes must contain a
-      // delegate with matching id; descend into its sub-agent's first
-      // ChatNode's workflow.nodes (full-fat, from /subagents).
+      // subworkflow: descend into sub-agent's first ChatNode workflow.
       const delegate = nodes.find(
         (n) =>
           (n as { kind?: string }).kind === "delegate" &&
@@ -917,9 +929,13 @@ function resolveDelegate(
       if (!delegate?.agentId) return null;
       const cached = state.subAgentCache.get(delegate.agentId);
       if (cached?.status !== "ready" || !cached.chatFlow) return null;
+      scopeChatFlow = cached.chatFlow;
+      crossedSubWorkflow = true;
+      // nodes gets re-set by the next chatnode frame from new scope.
       // For v0.5 we descend into the FIRST ChatNode of the sub-agent
-      // (see handoff: 73% of sub-agents have only 1 ChatNode). Multi-
-      // ChatNode rendering is v0.5.1 backlog.
+      // (73% of sub-agents have only 1 ChatNode); multi-ChatNode is
+      // v0.5.1 backlog. Pre-fill nodes here so that consecutive
+      // subworkflow frames (without a chatnode between) still work.
       const firstCn = cached.chatFlow.chatNodes[0];
       nodes = firstCn?.workflow.nodes ?? [];
     }
@@ -928,10 +944,6 @@ function resolveDelegate(
     (n) => (n as { id: string }).id === parentWorkNodeId,
   );
   if (!wn) {
-    // Loud-bail in dev so a future "click does nothing" tells us where
-    // it actually died instead of silently returning. Production noise
-    // is acceptable — fires only when the WorkNode tree is unexpectedly
-    // empty (typically: lazy fetch hadn't landed when the user clicked).
     if (typeof console !== "undefined") {
       console.warn(
         "[loomscope] resolveDelegate: WorkNode not found",
