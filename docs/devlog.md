@@ -6,6 +6,70 @@
 
 ---
 
+## 2026-05-06 上午 — v0.9.2 batch：lite payload 增强 + 数据形态 in-flight + 视口驱动 fetch
+
+接着昨晚的 v0.9.1 节奏，把 ConversationView "感觉很慢"的那串感受性问题逐一根因化拆解。最后落到一个相对干净的"hook 解耦读和 fetch + ConversationView 用 IntersectionObserver 自驱"模式。
+
+### (a) `summary.assistantText[]` 进 lite payload（commit `1cc3cca`）
+
+之前 lite 只有 `assistantPreview`（80 字符截断），bubble 在 workflow 真正 fetch 落地前先显示这条预览，然后扩展到完整 markdown ——视觉上一行预览 → 几行展开的"shrink+expand"跳动很难看。
+
+让 server 端 `computeWorkflowSummary` 顺手把每条 `llm_call.text`（按时序，过滤 trim 后空）打包进 `summary.assistantText: string[]`。bubble 拿到 lite ChatFlow 时立刻能用 assistantText 合成 text-only rounds 渲染完整文本，等 workflow.nodes 真正到了再补 tool pill。
+
+副作用：lite payload 体积涨了，但 saliency 完全压过 — 用户最直观的"发消息后看到完整回复"不再卡 fetch round-trip。
+
+### (b) 数据形态 in-flight 检测（commit `97500a2`，跟进 `11b02a2` / `abb4b82`）
+
+之前判定 ChatNode 是否"在跑"完全靠 SSE-driven `sessionLive`（5s 衰减 timer）。长 Bash 跑 30s 时动画 5s 后熄灭，用户看到一个看似已停的卡片但其实后台还在跑。改成**数据形态**判定：
+
+```
+hasInFlightWork =
+  nodes.length === 0 ||                           // user 刚发，assistant 还没产出
+  ∃ tool_call.resultBlock == null ||              // tool_use 写了但 tool_result 没到
+  ∃ delegate.status==null && toolUseResult==null  // 派发了但还没收尾
+  ∃ last_real_llm.stopReason 缺失                 // 流式响应被截断
+```
+
+server 端预算进 `summary.hasInFlightWork`；client 端 `isLatest && (hasInFlight || sessionLive)` 决定是否亮 running 动画。完全数据驱动，无 timer 误判。
+
+跟进修：
+- `11b02a2`：`workflowSummariesEqual` 漏比 `hasInFlightWork` + `assistantText`，refreshSession 的 diff-merge 把 stale 的 summary 当相同 → 动画状态卡死；新增字段比对全补
+- `abb4b82`：empty workflow 也算 in-flight（user 刚发完消息、模型还没产出第一条 llm_call），否则刚发出的瞬间没动画
+
+### (c) 渐进 reveal 第一版失败：setTimeout stagger 没效果（commit `df4cc32`，事后撤）
+
+用户反映"打开 session 等 7 秒一锅出"，希望 bubble 倒序逐个填充。第一版 `setTimeout(0)` reverse 走 visiblePath 倒着发 N 个 `loadWorkflows([id])`——上线后用户报"网络面板里看不到分批请求"。
+
+根因：父 `useEffect` 在**所有子组件 useEffect 之后**才跑，每个 `MessageBubble` 内部的 `useChatNodeWorkflow` 在 mount 时同 tick fire `load(sessionId, [id])`，全部进 `loadChatNodeWorkflows` 的 microtask coalesce buffer 合并成**1 次 batch 请求**。等父 stagger 跑到时 cache 已全部 pending → stagger 全是 no-op。
+
+**教训：长列表里子组件自带 auto-fetch + 父组件自带调度，二者必然冲突。**
+
+### (c') 真正可用的渐进 reveal：autoFetch decoupling + sequential await（commit `89e066b`）
+
+`useChatNodeWorkflow(sessionId, chatNode, opts?)` 加 `opts.autoFetch?: boolean`（默认 true 后向兼容）。`MessageBubble` 传 `disableAutoFetch={true}`，hook 退化成纯读；ConversationView 独占 fetch 时序，`for…of` 倒序 `await loadWorkflows([id])` 一条一条拉。每次单独 tick / 单独 coalesce buffer / 单独 HTTP 请求 / 单独 store update → bubble 严格倒序填工具 pill。
+
+落地后用户验收：渐进可视，但**仍然全量 fetch**——visiblePath 里那些用户根本不会滚到的旧 ChatNode 也照样在拉。问题转化为"懒还不够"。
+
+### (d) 视口驱动 + 预读 + 跳过纯文本 — 终态（commit `9d79943`）
+
+把 (c') 的"全量倒序 await" 替换成 IntersectionObserver 驱动：
+
+- ConversationView 持一个 observer，`rootMargin: 1000px 0px 1000px 0px`（≈ 3-5 个气泡高度的双向预读）
+- 通过 `ConversationObserverContext` 下发，每个 bubble 注册自己的 DOM 根
+- entries 进 Set，sequential drainer 按 `visiblePath.indexOf(id)` 从大到小弹（newest first），await 后弹下一个
+- 每个 id 最多 fetch 一次（`fetchedRef`），命中后立刻 `unobserve`
+- session 切换时 effect 重建，fetched / queue state 全部清
+
+加一条 F-skip：`summary.toolCount === 0 && assistantText.length > 0` 直接不发请求 —— bubble 用 assistantText 合成 rounds 跟 `buildConversationRounds(无 tool 的 workflow)` 字节等价。常态吃掉 30-50 % 请求。
+
+净效果：50 节点会话开 session 从 50 个请求 → ≈ 视口 ± 1000 px 那部分（典型 5-10 个）+ 跳掉 30-50 % 纯文本节点；剩下的随用户滚动按需 fetch。
+
+### 这条线总结的设计模式（写到 design-architecture.md "ChatFlow lite payload + 视口驱动懒加载"）
+
+> 长列表 + lazy fetch 的正确分层：**hook 默认 auto-fetch 给单卡 caller 用；长列表 caller 显式关掉 auto-fetch、自己用 IntersectionObserver 驱动**。把"哪些 id 该 fetch / 顺序如何"的语义放在父组件，而不是隐式在 child mount 时打散——后者跟 React 的 effect 顺序、microtask coalescing、视口 / 滚动语义都打架。
+
+---
+
 ## 2026-05-06 凌晨 — UX 反向同步 + chip 体系 + 持久化 bug 链
 
 晚间一连串浏览器实测推动的修复。

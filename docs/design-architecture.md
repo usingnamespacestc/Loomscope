@@ -1028,6 +1028,49 @@ function ChatFlowCanvas({ sessionId }: { sessionId: string }) {
 
 不要把 RF 的 nodes 持久化到 Loomscope store——RF 自管，重新渲染时由 chatFlow 派生。
 
+## ChatFlow lite payload + 视口驱动懒加载
+
+**lite shape**：top-level `/api/sessions/<sid>` 端点把 `workflow.nodes` / `workflow.edges` 剥空，只保留服务端预算好的 `workflow.summary`（≈ 14 % 总 JSON 体积）。`workflow.nodes` 通过 `/api/sessions/<sid>/chatnodes/workflows?ids=<...>` 按需取，缓存在 Zustand 的 `workflowCache`（`Map<chatNodeId, { status, workflow, error, staleSince? }>`）。`/subagents` 端点保持 full-fat（inline `workflow.nodes` 非空）—— sub-agent ChatFlow 一次性返回，不走 lite 路径。
+
+**summary 字段哪些 UI 在用**：
+
+| 字段 | 谁读 | 替代了什么 fetch |
+|---|---|---|
+| `assistantPreview` / `userPreview` | ChatFlowCanvas 卡片预览 | 不需要 nodes |
+| `assistantText[]`（每条 llm_call 的完整 markdown，按时序） | ConversationView bubble 文本 | 让 bubble 在 workflow 拉到之前已能显示完整文本 |
+| `hasInFlightWork` | ChatNodeCard / bubble running 动画 | 数据形态判定，不依赖 sessionLive |
+| `llmCount` / `chainCount` / `toolCount` | ChatNodeCard chip / 数字 | 0 fetch |
+| `contextTokens` / `maxContextTokens` / `lastModel` | TokenBar / 模型 chip | 0 fetch |
+| `toolUseFilePaths` | 文件改动 chip | 0 fetch |
+| `totalThinkingChars` | 思考 chip | 0 fetch |
+
+只有 ConversationView **inline 工具 pill**（每个 tool_call 的 toolName / input / resultText / isError 等**逐项原文**）需要 `workflow.nodes`；本质上不是统计、是原文，不能搬到 summary 否则等于把 lite 退化回 full。
+
+### `useChatNodeWorkflow` 的 read / fetch 解耦
+
+hook 签名 `useChatNodeWorkflow(sessionId, chatNode, opts?)`，opts 加了 `autoFetch?: boolean`（默认 true）。
+
+- **autoFetch=true（默认）**：hook 同时承担读 cache + 在 useEffect 里 fire `loadChatNodeWorkflows([chatNode.id])`。`ChatNodeDetail` 等单卡 caller 直接用，简单。
+- **autoFetch=false**：hook 退化成纯读，fetch 由调用方自己驱动。这是 ConversationView 这类**长列表**场景必须走的路：所有 children hook 在父 useEffect 之前同 tick fire 会被 `loadChatNodeWorkflows` 的 microtask coalesce buffer 合并成**单个 batch 请求**——长列表里这是默认行为，但当我们想做"渐进 reveal / 视口驱动"时它正好把停得住的策略撞回去。decoupling 后 ConversationView 独占 fetch 时序，children-coalescing 被绕过。
+
+### ConversationView 的视口驱动 fetch（v0.9.2 d）
+
+ConversationView 持有一个共享 `IntersectionObserver`（`rootMargin: 1000px 0px 1000px 0px` ≈ 3-5 个气泡高度的双向预读），通过 `ConversationObserverContext` 下发；每个 `MessageBubble` 把自己 DOM 根（带 `data-cnid={chatNode.id}`）注册进去。
+
+请求 / 排序细节：
+- entries 进 `Set<id>`；sequential drainer 每次 pop **最高 visiblePath 索引**（= 最新的 ChatNode）→ initial mount + stick-to-bottom 把整屏 entries 同时投进队列时仍然 newest-first
+- drainer `await loadWorkflows([id])` 后再下一轮 → 每次单独的 microtask coalesce buffer / 1 次 HTTP / 1 次 store update
+- `fetchedRef` 一个 id 只 fetch 一次；observer 命中后立刻 `unobserve`
+- session 切换时 effect 重建，fetched / queue state 全部清
+
+F-skip 优化：drainer 在 fetch 前看一眼 summary，`toolCount === 0 && assistantText.length > 0` 直接跳——bubble 用 `summary.assistantText` 合成 rounds 跟 `buildConversationRounds(无 tool 的 workflow)` 字节等价。常态省 30-50 % 请求。
+
+### 失败的中间方案及其教训
+
+(c) v0.9.2 第一版 `setTimeout(0)` stagger 不工作：父 `useEffect` 在子 hook 之后才跑，子 hook 的 auto-fetch 同 tick 全 fire 进 coalesce buffer 合成 1 个 batch 请求；等父 stagger 跑时 cache 已全部 pending。**教训**：长列表里"在父 effect 里调度 fetch"的设计前提是子 component 不会自己 fetch；React 的 effect 顺序天然违反这个前提。
+
+(c') 中间一版：autoFetch=false + sequential await `for…of` 倒序 `await loadWorkflows([id])`，能产生 N 个独立请求 + newest-first 顺序 —— 但仍然是 visiblePath 全量 fetch。视口驱动是直接向上替代它的方案。
+
 ## Cache 失效策略
 
 | Cache | 失效 trigger |
