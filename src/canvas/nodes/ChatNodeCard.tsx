@@ -21,6 +21,7 @@ import { type ChatNodeRFNode } from "@/canvas/layoutDag";
 import { NodeIdLine } from "@/canvas/nodes/chrome/NodeIdLine";
 import { TokenBar } from "@/canvas/nodes/chrome/TokenBar";
 import { useStore } from "@/store/index";
+import { useIsChatNodeRunning } from "@/store/livenessHooks";
 import { useIsChatNodeSelected, useIsConversationHovered } from "@/store/selectionHooks";
 
 export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
@@ -39,6 +40,11 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
   // affect layout. Per-card subscription via the hook (single bool)
   // so 1499 cards skip re-render — only the enter/leave pair flips.
   const conversationHovered = useIsConversationHovered(id);
+  // v0.9.1 Task 3: emerald pulse border when this is the running
+  // (= chronologically latest + session live) ChatNode. Decays to
+  // false within 5s of last SSE invalidate.
+  const activeSessionId = useStore((s) => s.activeSessionId);
+  const running = useIsChatNodeRunning(activeSessionId ?? "", id);
   const compact = data.isCompactSummary;
   const triggerSchedule = cn.trigger === "scheduled";
   const slash = data.slashCommand;
@@ -114,6 +120,10 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
         bgClass,
         accentClass,
         borderClass,
+        // EN: pulsing emerald glow while this is the running latest
+        // ChatNode + session is live. CSS keyframe in index.css.
+        // 中: 运行中且是最新节点时的脉动绿光，keyframe 在 index.css。
+        running ? "loomscope-running-pulse" : "",
       ].join(" ")}
       style={
         conversationHovered
@@ -124,6 +134,7 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
           : undefined
       }
       data-testid={`chat-node-${cn.id}`}
+      data-running={running ? "true" : "false"}
     >
       {/* Handles — invisible 0×0 when no edge connects (viewer mode). */}
       <Handle

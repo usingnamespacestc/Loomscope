@@ -48,6 +48,7 @@ describe("Header", () => {
         isLoading: false,
         error: null,
         lastUpdated: 1,
+        lastInvalidateAt: 0,
       });
       return { sessions, activeSessionId: cf.id };
     });

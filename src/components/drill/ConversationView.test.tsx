@@ -74,6 +74,7 @@ function seed(cf: ChatFlow, selectedNodeId: string | null = null): void {
       isLoading: false,
       error: null,
       lastUpdated: 0,
+        lastInvalidateAt: 0,
     });
     return { sessions, activeSessionId: SID };
   });

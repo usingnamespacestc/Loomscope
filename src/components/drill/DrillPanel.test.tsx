@@ -56,6 +56,7 @@ beforeEach(() => {
       isLoading: false,
       error: null,
       lastUpdated: 0,
+        lastInvalidateAt: 0,
     }),
     activeSessionId: SID,
     drillPanelCollapsed: false,

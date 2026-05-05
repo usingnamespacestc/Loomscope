@@ -90,6 +90,7 @@ describe("App shell", () => {
         isLoading: true,
         error: null,
         lastUpdated: 0,
+        lastInvalidateAt: 0,
       });
       return { sessions, activeSessionId: "sid" };
     });
@@ -114,6 +115,7 @@ describe("App shell", () => {
         isLoading: false,
         error: "boom",
         lastUpdated: 0,
+        lastInvalidateAt: 0,
       });
       return { sessions, activeSessionId: "sid" };
     });

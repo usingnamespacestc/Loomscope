@@ -25,6 +25,10 @@ import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, us
 
 import { useCanvasPanShim } from "@/canvas/CanvasPanContext";
 import { ConversationScrollContext } from "@/canvas/ConversationScrollContext";
+import {
+  useLatestChatNodeId,
+  useSessionLiveness,
+} from "@/store/livenessHooks";
 import { MarkdownView } from "@/components/MarkdownView";
 import {
   findLatestLeafInSubtree,
@@ -78,6 +82,10 @@ export function ConversationView({ sessionId, chatFlow }: Props) {
   const setSelected = useStore((s) => s.setSelected);
   const pickBranch = useStore((s) => s.pickBranch);
   const panToChatNode = useCanvasPanShim();
+  // v0.9.1 Task 3: liveness signal — latest ChatNode of the
+  // session pulses while session is active.
+  const sessionLive = useSessionLiveness(sessionId);
+  const latestRunningId = useLatestChatNodeId(sessionId);
 
   const { path, forks, selectedIndex } = useMemo(
     () => resolvePath(chatFlow, selectedId),
@@ -279,6 +287,14 @@ export function ConversationView({ sessionId, chatFlow }: Props) {
         if (!cn) return null;
         const fork = forkAt.get(nid);
         const isDimmed = idx > selectedIndex;
+        // EN: latest visible bubble + session live = running. We
+        // compute against `latestRunningId` (chronologically last
+        // ChatNode in the full ChatFlow, NOT just visible path)
+        // because the user may have selected an earlier ChatNode;
+        // we still want the running pulse on the actual leaf.
+        // 中: 最新 ChatNode（不是视图最后一条）+ session 活跃才显示
+        // running，避免用户切到中间节点时丢动画。
+        const isRunning = sessionLive && nid === latestRunningId;
         return (
           <Fragment key={nid}>
             <MessageBubble
@@ -286,6 +302,7 @@ export function ConversationView({ sessionId, chatFlow }: Props) {
               sessionId={sessionId}
               isSelected={nid === selectedId}
               isDimmed={isDimmed}
+              isRunning={isRunning}
               onSelect={handleSelect}
               onHoverDwell={handleHoverDwell}
               onHoverEnd={handleHoverEnd}
@@ -334,6 +351,7 @@ function MessageBubbleImpl({
   sessionId,
   isSelected,
   isDimmed,
+  isRunning,
   onSelect,
   onHoverDwell,
   onHoverEnd,
@@ -342,6 +360,7 @@ function MessageBubbleImpl({
   sessionId: string;
   isSelected: boolean;
   isDimmed: boolean;
+  isRunning: boolean;
   onSelect: (chatNodeId: string) => void;
   onHoverDwell: (chatNodeId: string) => void;
   onHoverEnd: () => void;
@@ -415,15 +434,22 @@ function MessageBubbleImpl({
       data-testid={`conversation-bubble-${chatNode.id}`}
       data-selected={isSelected ? "true" : "false"}
       data-dimmed={isDimmed ? "true" : "false"}
+      data-running={isRunning ? "true" : "false"}
       onClick={handleClick}
       onMouseEnter={startDwell}
       onMouseLeave={cancelDwell}
       className={[
-        "group relative cursor-pointer pl-3 transition-all",
+        "group relative cursor-pointer pl-3 transition-all rounded-md",
         isSelected
           ? "border-l-2 border-blue-400"
           : "border-l-2 border-transparent hover:border-gray-200",
         isDimmed ? "opacity-40 hover:opacity-80" : "",
+        // EN: emerald pulse when this bubble is the running ChatNode
+        // (= chronologically latest + session live). Subtle border
+        // glow + 2s ease cycle so it draws attention without being
+        // distracting during reading.
+        // 中: 当前 running 时跳动绿光，2 秒一周期、不抢戏。
+        isRunning ? "loomscope-running-pulse" : "",
       ].join(" ")}
     >
       {userText && (

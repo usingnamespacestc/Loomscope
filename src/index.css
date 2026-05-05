@@ -84,3 +84,35 @@ body,
   background-color: rgb(0 0 0 / 0.2) !important;
   color: rgb(255 255 255) !important;
 }
+
+/* v0.9.1 Task 3 — running-node animations.
+   EN: Two animations drive the "this is currently happening" UI:
+   - `loomscope-pulse-border`: a slow emerald glow on the latest
+     ChatNode card / latest Conversation bubble while the session
+     is live. Subtle (no scale change, no fast strobe) so it draws
+     attention without distracting from reading.
+   - `loomscope-flow-dash`: dashed-line offset animation on edges
+     leading INTO the running node. Mimics common "loading" /
+     "in flight" treatments (terminal cursor, IDE breakpoints).
+   中: 两套动画驱动"运行中"提示：脉动边框（最新 ChatNode 卡片 /
+   最后 conversation bubble）+ 流动虚线（流向运行节点的边）。 */
+@keyframes loomscope-pulse-border {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgb(16 185 129 / 0); /* emerald-500 transparent */
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgb(16 185 129 / 0.4);
+  }
+}
+@keyframes loomscope-flow-dash {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+.loomscope-running-pulse {
+  animation: loomscope-pulse-border 2s ease-in-out infinite;
+}
+.loomscope-running-edge {
+  stroke-dasharray: 6 3 !important;
+  animation: loomscope-flow-dash 0.6s linear infinite;
+}

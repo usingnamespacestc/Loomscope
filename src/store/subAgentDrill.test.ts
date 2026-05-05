@@ -117,6 +117,7 @@ function seedSession(cf: ChatFlow = makeChatFlow()) {
       isLoading: false,
       error: null,
       lastUpdated: Date.now(),
+      lastInvalidateAt: 0,
     });
     return { sessions, activeSessionId: SID };
   });

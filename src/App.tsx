@@ -76,6 +76,12 @@ export default function App() {
           subdir?: string | null;
         };
         if (payload.sessionId !== activeId) return;
+        // EN: bump session activity timestamp so liveness hooks
+        // (useSessionLiveness) flip into active state. Both main
+        // and subagent invalidates count as "session is alive".
+        // 中: 任何一种 invalidate 都算 session 活跃信号；让 liveness
+        // hook 进入 active 显示动画。
+        useStore.getState().markSessionActivity(activeId);
         if (payload.kind === "subagent" && payload.agentId) {
           void useStore
             .getState()

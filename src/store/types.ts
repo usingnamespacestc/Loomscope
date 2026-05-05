@@ -168,6 +168,21 @@ export interface SessionState {
   isLoading: boolean;
   error: string | null;
   lastUpdated: number;
+  // EN: epoch-ms timestamp of the most recent SSE `invalidate` event
+  // received for this session. Drives the "running" / live animation
+  // heuristic (selectionHooks.useSessionLiveness): if `now -
+  // lastInvalidateAt < 5000`, the session is treated as actively
+  // ticking and the latest ChatNode/bubble pulses; otherwise it goes
+  // static. This is also the orphan-handling story — a backend
+  // restart cuts off SSE → no more invalidates → all liveness
+  // indicators decay to static within 5s, no stuck "running"
+  // forever. 0 = never received (fresh load, no liveness shown).
+  // 中: 该 session 收到最后一次 SSE 'invalidate' 的时间戳（epoch ms）。
+  // 用于"运行中"动画判定：5s 内有过 invalidate 就认为活跃，超时
+  // 后所有 liveness 指示自动退化为静态。这就是 orphan 处理——后端
+  // 重启 / SSE 断开 → 5s 内自然无指示，不会卡在"running"永久状态。
+  // 0 = 从未收到（刚 load，不显示 liveness）。
+  lastInvalidateAt: number;
 }
 
 export interface SessionSlice {
@@ -180,6 +195,12 @@ export interface SessionSlice {
   // drillStack / foldedCompactIds — and clears `workflowCache` so the
   // lazy hooks pull fresh per-ChatNode workflow data.
   refreshSession: (id: string) => Promise<void>;
+  // EN: bump lastInvalidateAt for `sessionId` to now. Called from the
+  // SSE `invalidate` handler in App.tsx so liveness UI flips into
+  // active state.
+  // 中: 把指定 session 的 lastInvalidateAt 设为当前时间戳，由 App.tsx
+  // 的 SSE invalidate 处理器调用，触发 liveness 进入 active。
+  markSessionActivity: (sessionId: string) => void;
   // v0.9.1: SSE `invalidate` with kind='subagent' fires when a sidecar
   // sub-agent jsonl ticked over (CC delegated tool, sub-agent appended
   // a turn). Drops the cached entry then re-fetches if it was ready —

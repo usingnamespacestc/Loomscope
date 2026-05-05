@@ -30,6 +30,10 @@ import "@xyflow/react/dist/style.css";
 
 import { CanvasPanContext } from "@/canvas/CanvasPanContext";
 import { useConversationScrollShim } from "@/canvas/ConversationScrollContext";
+import {
+  useLatestChatNodeId,
+  useSessionLiveness,
+} from "@/store/livenessHooks";
 import { NODE_HEIGHT, NODE_WIDTH, layoutChatFlow } from "@/canvas/layoutDag";
 import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
 import { ChatFoldNodeCard } from "@/canvas/nodes/ChatFoldNodeCard";
@@ -195,10 +199,29 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
   const foldedCompactIds = useStore(
     (s) => s.sessions.get(sessionId)?.foldedCompactIds,
   );
-  const { nodes, edges } = useMemo(
+  const { nodes, edges: rawEdges } = useMemo(
     () => layoutChatFlow(chatFlow, foldedCompactIds),
     [chatFlow, foldedCompactIds],
   );
+  // EN: v0.9.1 Task 3 — decorate the edge feeding the running
+  // ChatNode with `data.running=true` so ContinuationEdge / SpawnEdge
+  // render the animated dashed flow. We pass it as edge data rather
+  // than a global flag so each edge component decides locally and
+  // non-running edges keep their stable identity (avoids forcing
+  // every edge to re-render on liveness flips).
+  // 中: 把流向运行节点的那条边的 data.running 标 true，让边组件
+  // 自己决定是否画流动虚线；其它边不变 identity 避免 liveness 切换
+  // 触发全图 re-render。
+  const sessionLive = useSessionLiveness(sessionId);
+  const latestRunningId = useLatestChatNodeId(sessionId);
+  const edges = useMemo(() => {
+    if (!sessionLive || !latestRunningId) return rawEdges;
+    return rawEdges.map((e) =>
+      e.target === latestRunningId
+        ? { ...e, data: { ...(e.data ?? {}), running: true } }
+        : e,
+    );
+  }, [rawEdges, sessionLive, latestRunningId]);
   const setSelected = useStore((s) => s.setSelected);
   const conversationScroll = useConversationScrollShim();
   const onNodeClick = useCallback(

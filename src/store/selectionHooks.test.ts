@@ -30,6 +30,7 @@ function seedSession() {
       isLoading: false,
       error: null,
       lastUpdated: 0,
+        lastInvalidateAt: 0,
     }),
   }));
 }

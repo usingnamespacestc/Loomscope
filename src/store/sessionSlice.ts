@@ -28,6 +28,7 @@ function blankSessionState(): SessionState {
     isLoading: false,
     error: null,
     lastUpdated: 0,
+    lastInvalidateAt: 0,
   };
 }
 
@@ -296,6 +297,15 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     } catch (err) {
       console.error("[loomscope] refreshSubAgent failed:", err);
     }
+  },
+
+  markSessionActivity: (sessionId) => {
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur) return;
+    const updated = new Map(sessions);
+    updated.set(sessionId, { ...cur, lastInvalidateAt: Date.now() });
+    set({ sessions: updated });
   },
 
   setActiveSession: (id) => {
