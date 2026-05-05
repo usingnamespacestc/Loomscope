@@ -30,14 +30,16 @@ export function DelegateCard({ id, data }: NodeProps<DelegateRFNode>) {
   const contentPreview = delegateContentPreview(n);
   const desc = (n.description ?? "").trim();
   const selected = useIsWorkNodeSelected(id);
+  const isRunning = (data as { isRunning?: boolean }).isRunning === true;
 
   return (
     <div
-      className={workNodeChromeClass(accent, selected)}
+      className={workNodeChromeClass(accent, selected, isRunning)}
       style={{ width: WF_NODE_SIZE.delegate.width }}
       data-testid={`worknode-delegate-${n.id}`}
       data-worknode-kind="delegate"
       data-auto-compact={isAutoCompact ? "true" : "false"}
+      data-running={isRunning ? "true" : "false"}
     >
       <Handle
         type="target"

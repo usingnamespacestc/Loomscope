@@ -95,14 +95,26 @@ export function useLatestChatNodeId(sessionId: string): string | null {
 }
 
 /**
- * EN: Convenience selector: is `chatNodeId` the currently-running
- * latest one for `sessionId`, AND is the session live? Returns true
- * only when both conditions hold. Used by ChatNodeCard to decide
- * whether to render the pulsing "live" outline.
+ * EN (v0.9.2): combined selector for ChatNode-level running state.
+ * Animation gates on:
+ *   1. chatNodeId is the chronologically latest ChatNode (no
+ *      historical orphan animations)
+ *   2. EITHER (a) summary.hasInFlightWork is true (data shape says
+ *      a tool_call lacks resultBlock OR final llm_call lacks
+ *      stopReason — even if mtime hasn't ticked in 30s during a
+ *      long Bash, this stays true), OR (b) sessionLive (recent SSE
+ *      invalidate within 5s — covers the brief gap between
+ *      tool_result write and next assistant llm_call write where
+ *      data shape says "all done" but session is still actively
+ *      generating).
  *
- * 中: 组合判定：sessionId 上当前是否在跑，且 chatNodeId 是不是最新
- * 那个。两个条件都成立才返回 true。ChatNodeCard 用它决定是否画
- * 跳动边框。
+ * Replaces the v0.9.1 mtime-only heuristic, which incorrectly
+ * flipped off during long-running tools (mtime didn't tick because
+ * no new records were being written).
+ *
+ * 中: ChatNode 运行态判定。门: (1) 是最新 ChatNode；(2) 数据形态有
+ * 在飞工作 OR session 5s 内有过 SSE invalidate。比 v0.9.1 单纯 mtime
+ * 准——长 Bash 期间 mtime 不变但 hasInFlightWork=true 持续亮。
  */
 export function useIsChatNodeRunning(
   sessionId: string,
@@ -110,5 +122,44 @@ export function useIsChatNodeRunning(
 ): boolean {
   const live = useSessionLiveness(sessionId);
   const latest = useLatestChatNodeId(sessionId);
-  return live && latest === chatNodeId;
+  const hasInFlight = useStore((s) => {
+    const cf = s.sessions.get(sessionId)?.chatFlow;
+    if (!cf) return false;
+    const cn = cf.chatNodes.find((c) => c.id === chatNodeId);
+    return cn?.workflow.summary?.hasInFlightWork === true;
+  });
+  if (latest !== chatNodeId) return false;
+  return hasInFlight || live;
+}
+
+/**
+ * EN: Per-WorkNode running detection by data shape. tool_call /
+ * delegate without resultBlock = response not yet written; llm_call
+ * without stopReason = streaming response cut mid-stream. Gated by
+ * the parent ChatNode's running state to avoid lighting up old
+ * historical tool_calls that legitimately lack results (rare, but
+ * possible with malformed jsonl or aborted runs from before this
+ * heuristic existed).
+ *
+ * 中: 每个 WorkNode 的运行态。tool_call/delegate 无 resultBlock 或
+ * llm_call 无 stopReason → 数据上未完成。还要看父 ChatNode 在不在
+ * 跑（避免历史 ChatNode 的孤儿 tool_call 误亮动画）。
+ */
+import type { WorkNode } from "@/data/types";
+export function isWorkNodeRunning(
+  n: WorkNode,
+  parentChatNodeIsRunning: boolean,
+): boolean {
+  if (!parentChatNodeIsRunning) return false;
+  if (n.kind === "tool_call") {
+    return n.resultBlock == null;
+  }
+  if (n.kind === "delegate") {
+    // Delegate completion = status set + toolUseResult written.
+    return n.status == null && n.toolUseResult == null;
+  }
+  if (n.kind === "llm_call") {
+    return !n.stopReason;
+  }
+  return false;
 }

@@ -234,6 +234,24 @@ export interface WorkflowSummary {
   // lazy fetch。tool pill 仍懒加载。代价 ~5-15% lite 体积增长。
   assistantText: string[];
   llmCount: number;
+  // EN (v0.9.2): true when this ChatNode has any tool_call /
+  // delegate WorkNode whose `resultBlock` is missing OR a final
+  // llm_call without a stopReason. Server-computed at parse time;
+  // drives the canvas / conversation 'running' animation. Stays
+  // accurate during long-running tools (mtime doesn't tick during
+  // a 30s Bash, but data-shape correctly says "still in flight"
+  // because the tool_use record exists without a matching
+  // tool_result yet).
+  // Combined with `isLatest` chronologically and the SSE
+  // sessionLive heuristic in livenessHooks.ts to gate the
+  // animation: history ChatNodes with leftover unfinished tools
+  // (rare orphan case) don't animate; only the latest with
+  // in-flight work animates.
+  // 中: ChatNode 内部有任何 tool_call/delegate 的 resultBlock 缺失，
+  // 或最末 llm_call 无 stopReason 时为 true。server 解析时算好。
+  // 长时工具（30s Bash 期间 mtime 不变）依然正确显示运行中，因为
+  // 是按数据形态判定，不靠 mtime。
+  hasInFlightWork: boolean;
   // Number of CONNECTED llm_call chains in the WorkFlow DAG. A chain
   // is a maximal run of llm_call nodes linked by continuation
   // (llm → tool → llm). chainCount=1 is the common case (one prompt

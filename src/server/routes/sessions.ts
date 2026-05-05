@@ -554,6 +554,7 @@ export function stripChatFlowToLite(chatFlow: ChatFlow): ChatFlow {
         summary: cn.workflow.summary ?? {
           assistantPreview: "",
           assistantText: [],
+          hasInFlightWork: false,
           llmCount: 0,
           chainCount: 0,
           toolCount: 0,

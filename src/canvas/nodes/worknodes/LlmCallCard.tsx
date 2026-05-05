@@ -29,13 +29,15 @@ export function LlmCallCard({ id, data }: NodeProps<LlmCallRFNode>) {
   const inputTokens = numOrZero(n.usage?.input_tokens);
   const outputTokens = numOrZero(n.usage?.output_tokens);
   const totalTokens = inputTokens + outputTokens;
+  const isRunning = (data as { isRunning?: boolean }).isRunning === true;
 
   return (
     <div
-      className={workNodeChromeClass(accent, selected)}
+      className={workNodeChromeClass(accent, selected, isRunning)}
       style={{ width: WF_NODE_SIZE.llm_call.width }}
       data-testid={`worknode-llm_call-${n.id}`}
       data-worknode-kind="llm_call"
+      data-running={isRunning ? "true" : "false"}
     >
       <Handle
         type="target"

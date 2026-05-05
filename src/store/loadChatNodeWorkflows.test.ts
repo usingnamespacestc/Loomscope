@@ -20,6 +20,7 @@ function chatNode(id: string, parent: string | null = null): ChatNode {
       summary: {
         assistantPreview: `${id} reply preview`,
         assistantText: [],
+        hasInFlightWork: false,
         llmCount: 1,
         chainCount: 1,
         toolCount: 0,

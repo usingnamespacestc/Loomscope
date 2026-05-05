@@ -7,6 +7,7 @@ import { BaseEdge, getBezierPath } from "@xyflow/react";
 import type { EdgeProps } from "@xyflow/react";
 
 const SPAWN_COLOR = "#f59e0b"; // amber-500
+const RUNNING_COLOR = "#10b981"; // emerald-500
 
 export function SpawnEdge(props: EdgeProps) {
   const [d] = getBezierPath({
@@ -18,11 +19,20 @@ export function SpawnEdge(props: EdgeProps) {
     targetPosition: props.targetPosition,
     curvature: 0.25,
   });
+  // EN (v0.9.2): edge into a running tool_call → emerald + animated
+  // dashed flow. Same convention as ContinuationEdge.
+  // 中: 流向运行中工具节点的边 → emerald 流动虚线，跟 ContinuationEdge
+  // 一致风格。
+  const running = (props.data as { running?: boolean } | undefined)?.running;
   return (
     <BaseEdge
       id={props.id}
       path={d}
-      style={{ stroke: SPAWN_COLOR, strokeWidth: 1.5 }}
+      className={running ? "loomscope-running-edge" : undefined}
+      style={{
+        stroke: running ? RUNNING_COLOR : SPAWN_COLOR,
+        strokeWidth: running ? 2 : 1.5,
+      }}
       markerEnd="url(#arrow-spawn)"
     />
   );

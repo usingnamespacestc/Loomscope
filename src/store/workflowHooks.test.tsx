@@ -22,6 +22,7 @@ function summary(over: Partial<WorkFlow["summary"] & object> = {}) {
   return {
     assistantPreview: "preview",
         assistantText: [],
+        hasInFlightWork: false,
     llmCount: 1,
     chainCount: 1,
     toolCount: 0,

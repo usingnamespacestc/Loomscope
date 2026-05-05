@@ -30,6 +30,11 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { layoutWorkFlow, WF_NODE_SIZE } from "@/canvas/layoutWorkflow";
+import {
+  isWorkNodeRunning,
+  useIsChatNodeRunning,
+} from "@/store/livenessHooks";
+import type { WorkNode } from "@/data/types";
 import { ContinuationArrowDefs, ContinuationEdge } from "@/canvas/edges/ContinuationEdge";
 import { SpawnArrowDefs, SpawnEdge } from "@/canvas/edges/SpawnEdge";
 import { LlmCallCard } from "@/canvas/nodes/worknodes/LlmCallCard";
@@ -85,9 +90,54 @@ function CanvasInner({ chatNode, sessionId }: WorkFlowCanvasProps) {
     if (access.workflow) return { ...chatNode, workflow: access.workflow };
     return chatNode;
   }, [chatNode, access.workflow]);
-  const { nodes, edges } = useMemo(
+  const { nodes: rawNodes, edges: rawEdges } = useMemo(
     () => layoutWorkFlow(layoutChatNode),
     [layoutChatNode],
+  );
+  // EN (v0.9.2 b): per-WorkNode running detection. The DRILLED
+  // ChatNode's running state gates everything underneath — when the
+  // user opens a static historical ChatNode, no internal node should
+  // animate even if some old tool_call lacks a resultBlock (parser
+  // edge case / aborted CC run). Each WorkNode then derives its own
+  // running flag by data shape (tool_call.resultBlock missing,
+  // delegate without status, llm_call without stopReason).
+  // Decorate the layout output with `data.isRunning` so cards can
+  // pulse without each subscribing to liveness selectors. Edges into
+  // running WorkNodes get `data.running` for ContinuationEdge to
+  // animate the dashed flow.
+  // 中: WorkFlow 内部 per-WorkNode 运行态判定。drill 进的父 ChatNode
+  // 是否在跑作为总开关；每个 WorkNode 再按数据形态推（无 resultBlock /
+  // 无 status / 无 stopReason）。装饰 layout 结果让卡片读 data.isRunning
+  // 跳动，到达运行节点的边读 data.running 显示流动虚线。
+  const parentRunning = useIsChatNodeRunning(sessionId, chatNode.id);
+  const nodes = useMemo(
+    () =>
+      rawNodes.map((rfn) => {
+        const wn = (rfn.data as { workNode?: WorkNode } | undefined)?.workNode;
+        if (!wn) return rfn;
+        const running = isWorkNodeRunning(wn, parentRunning);
+        if (!running && !(rfn.data as { isRunning?: boolean }).isRunning) {
+          return rfn;
+        }
+        return { ...rfn, data: { ...rfn.data, isRunning: running } };
+      }),
+    [rawNodes, parentRunning],
+  );
+  const runningWorkNodeIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const rfn of nodes) {
+      if ((rfn.data as { isRunning?: boolean }).isRunning) set.add(rfn.id);
+    }
+    return set;
+  }, [nodes]);
+  const edges = useMemo(
+    () =>
+      rawEdges.map((e) =>
+        runningWorkNodeIds.has(e.target)
+          ? { ...e, data: { ...(e.data ?? {}), running: true } }
+          : e,
+      ),
+    [rawEdges, runningWorkNodeIds],
   );
   const setSelected = useStore((s) => s.setWorkflowSelected);
 

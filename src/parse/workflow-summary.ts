@@ -78,6 +78,37 @@ export function computeWorkflowSummary(
   ).length;
   const llmCount = nodes.filter((n) => n.kind === "llm_call").length;
   const chainCount = computeChainCount(nodes);
+  // EN (v0.9.2): data-shape "in flight" detection. Tool_call /
+  // delegate without resultBlock = response not yet written; final
+  // llm_call without stopReason = streaming response cut mid-stream.
+  // Either condition means the ChatNode's work isn't complete from
+  // the data's perspective. Drives running animation (combined with
+  // isLatest + sessionLive on the client to gate against history
+  // orphans).
+  // 中: 数据形态判定"运行中"。tool_call/delegate 缺 resultBlock 或
+  // 最末 llm_call 无 stopReason → 数据上未完成。客户端再结合
+  // isLatest + sessionLive 决定是否真画动画（避免历史孤儿误亮）。
+  let hasInFlightWork = false;
+  for (const n of nodes) {
+    if (n.kind === "tool_call") {
+      if (n.resultBlock == null) {
+        hasInFlightWork = true;
+        break;
+      }
+    } else if (n.kind === "delegate") {
+      // DelegateNode shape (data/types.ts) doesn't carry resultBlock
+      // directly — completion is signalled by status presence and
+      // toolUseResult / content. Treat undefined status as in-flight
+      // (CC writes status='completed' / 'failed' on resolution).
+      if (n.status == null && n.toolUseResult == null) {
+        hasInFlightWork = true;
+        break;
+      }
+    }
+  }
+  if (!hasInFlightWork && lastReal && !lastReal.stopReason) {
+    hasInFlightWork = true;
+  }
 
   const totalThinkingChars = nodes.reduce((acc, n) => {
     if (n.kind !== "llm_call") return acc;
@@ -110,6 +141,7 @@ export function computeWorkflowSummary(
   return {
     assistantPreview: truncate(assistantPreviewSource, ASSISTANT_PREVIEW_LEN),
     assistantText,
+    hasInFlightWork,
     llmCount,
     chainCount,
     toolCount,

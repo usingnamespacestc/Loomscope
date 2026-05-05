@@ -49,9 +49,15 @@ const ACCENT_BORDER: Record<WorkNodeAccent, string> = {
 // Width is applied via inline style (not Tailwind arbitrary class) so
 // Tailwind's static-analysis safelist doesn't need entries for every
 // per-kind width. Class string is constant — JIT picks it up fine.
+//
+// EN (v0.9.2): `running` adds the loomscope-running-pulse keyframe
+// (emerald glow) so this WorkNode visibly signals 'in flight'. Used
+// for tool_call without resultBlock, delegate without status, etc.
+// 中: running=true 加 emerald 脉动外发光，标记数据形态在飞的工具。
 export function workNodeChromeClass(
   accent: WorkNodeAccent,
   selected: boolean,
+  running = false,
 ): string {
   const ring = selected
     ? "border-blue-500 ring-2 ring-blue-200"
@@ -62,6 +68,7 @@ export function workNodeChromeClass(
     ACCENT_BG[accent],
     ACCENT_LEFT_BAR[accent],
     ring,
+    running ? "loomscope-running-pulse" : "",
   ].join(" ");
 }
 

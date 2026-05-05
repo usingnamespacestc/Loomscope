@@ -25,13 +25,17 @@ export function ToolCallCard({ id, data }: NodeProps<ToolCallRFNode>) {
   const failed = n.isError === true;
   const accent = failed ? "rose" : "amber";
   const selected = useIsWorkNodeSelected(id);
+  // v0.9.2: data.isRunning decorated by WorkFlowCanvas based on
+  // tool_call.resultBlock missing + parent ChatNode running.
+  const isRunning = (data as { isRunning?: boolean }).isRunning === true;
 
   return (
     <div
-      className={workNodeChromeClass(accent, selected)}
+      className={workNodeChromeClass(accent, selected, isRunning)}
       style={{ width: WF_NODE_SIZE.tool_call.width }}
       data-testid={`worknode-tool_call-${n.id}`}
       data-worknode-kind="tool_call"
+      data-running={isRunning ? "true" : "false"}
     >
       <Handle
         type="target"
