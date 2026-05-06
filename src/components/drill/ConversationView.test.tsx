@@ -582,4 +582,58 @@ describe("ConversationView — focusLock (workflow drill read-only mode)", () =>
     expect(bubble.dataset.locked).toBe("false");
     expect(bubble.className).toContain("cursor-pointer");
   });
+
+  it("focusLock + drillTab=conversation scrolls bubble with block:'end'", () => {
+    // Stub Element.prototype.scrollIntoView so we can inspect args.
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy as unknown as typeof Element.prototype.scrollIntoView;
+    useStore.setState({ drillPanelTab: "conversation" });
+    const cf = flow([cn("a", null), cn("b", "a"), cn("c", "b")]);
+    renderLocked(null, cf, "a", "b");
+    // The selectedId-driven scroll fires on mount with locked=true →
+    // block:'end' for the focused bubble. Search for any call that
+    // matches block:'end'.
+    const endCall = spy.mock.calls.find((args) => {
+      const opts = args[0];
+      return opts && typeof opts === "object" && opts.block === "end";
+    });
+    expect(endCall).toBeTruthy();
+  });
+
+  it("focusLock + drillTab=detail suppresses scroll (waits for tab flip)", () => {
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy as unknown as typeof Element.prototype.scrollIntoView;
+    useStore.setState({ drillPanelTab: "detail" });
+    const cf = flow([cn("a", null), cn("b", "a"), cn("c", "b")]);
+    renderLocked(null, cf, "a", "b");
+    spy.mockClear();
+    // Flip the tab — effect re-fires and now scrolls with block:'end'.
+    act(() => {
+      useStore.setState({ drillPanelTab: "conversation" });
+    });
+    const endCall = spy.mock.calls.find((args) => {
+      const opts = args[0];
+      return opts && typeof opts === "object" && opts.block === "end";
+    });
+    expect(endCall).toBeTruthy();
+  });
+
+  it("non-locked mode still scrolls with block:'center' (preserves preview UX)", () => {
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy as unknown as typeof Element.prototype.scrollIntoView;
+    useStore.setState({ drillPanelTab: "conversation" });
+    const cf = flow([cn("a", null), cn("b", "a"), cn("c", "b")]);
+    seed(cf, "a");
+    render(<ConversationView sessionId={SID} chatFlow={cf} />);
+    spy.mockClear();
+    act(() => {
+      useStore.getState().setSelected(SID, "b");
+    });
+    // External selection change triggers scroll with block:'center'.
+    const centerCall = spy.mock.calls.find((args) => {
+      const opts = args[0];
+      return opts && typeof opts === "object" && opts.block === "center";
+    });
+    expect(centerCall).toBeTruthy();
+  });
 });

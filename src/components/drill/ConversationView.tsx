@@ -151,7 +151,15 @@ export function ConversationView({ sessionId, chatFlow, focusLock = null }: Prop
   const scrollToBubble = useCallback(
     (
       chatNodeId: string,
-      opts?: { smooth?: boolean; mode?: "click" | "hover" },
+      opts?: {
+        smooth?: boolean;
+        mode?: "click" | "hover";
+        // Where in the viewport to align the bubble. Defaults to
+        // 'center' for click/hover/canvas-pan callers (preview-style
+        // centring). focusLock-driven scroll passes 'end' so the
+        // drilled ChatNode's bottom edge sits at the viewport bottom.
+        block?: ScrollLogicalPosition;
+      },
     ) => {
       const root = containerRef.current;
       if (!root) return;
@@ -162,7 +170,7 @@ export function ConversationView({ sessionId, chatFlow, focusLock = null }: Prop
       );
       if (bubble) {
         bubble.scrollIntoView({
-          block: "center",
+          block: opts?.block ?? "center",
           behavior: opts?.smooth === false ? "auto" : "smooth",
         });
       } else {
@@ -204,11 +212,23 @@ export function ConversationView({ sessionId, chatFlow, focusLock = null }: Prop
   // OR on session change, snap to the bottom (latest message). Skip
   // when an internal bubble click set the flag — clicking a bubble
   // means "focus here", not "jump elsewhere".
+  //
+  // In locked mode (workflow drill), two extras:
+  //   (a) align via block:'end' — caller wants the focused ChatNode's
+  //       bottom edge at the viewport bottom, not centred.
+  //   (b) wait for `drillTab === 'conversation'` before scrolling.
+  //       Entering WorkFlow drill auto-switches the tab to 'detail'
+  //       (DrillPanel viewMode effect), which sets the Conversation
+  //       container to display:none — `scrollIntoView` on an off-flow
+  //       element is a no-op. Re-firing when the tab flips back to
+  //       'conversation' guarantees the scroll lands when visible.
+  const drillTab = useStore((s) => s.drillPanelTab);
   useEffect(() => {
     if (skipNextScrollRef.current) {
       skipNextScrollRef.current = false;
       return;
     }
+    if (isLocked && drillTab !== "conversation") return;
     if (!selectedId) {
       bottomMarkerRef.current?.scrollIntoView({
         block: "end",
@@ -216,8 +236,11 @@ export function ConversationView({ sessionId, chatFlow, focusLock = null }: Prop
       });
       return;
     }
-    scrollToBubble(selectedId, { smooth: false });
-  }, [selectedId, chatFlow?.id, scrollToBubble]);
+    scrollToBubble(selectedId, {
+      smooth: false,
+      block: isLocked ? "end" : "center",
+    });
+  }, [selectedId, chatFlow?.id, scrollToBubble, isLocked, drillTab]);
 
   // EN: stick-to-bottom pattern (chat app convention). On session
   // open, all bubbles render with text from summary.assistantText
