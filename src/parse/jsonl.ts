@@ -631,7 +631,18 @@ export function buildChatFlow(
   // (computeCompactRange) can walk parentChatNodeId from a known
   // ChatNode without any uuid chain walk at runtime.
   for (const cn of chatNodes) {
-    if (!cn.isCompactSummary || !cn.compactMetadata) continue;
+    // PR 2.4-B: backfill for both pure compact and hybrid ChatNodes
+    // so the field stays populated for completeness. Hybrid's
+    // logicalParentUuid resolves back to the same promptId
+    // (self-reference — the pre-compact tail is in this bucket), so
+    // the backfilled value is self.id; computeCompactRange uses
+    // parentChatNodeId for hybrid so the self-reference is harmless.
+    if (
+      (!cn.isCompactSummary && !cn.hasInnerCompact) ||
+      !cn.compactMetadata
+    ) {
+      continue;
+    }
     const lpu = cn.compactMetadata.logicalParentUuid;
     if (!lpu) {
       cn.compactMetadata.logicalParentChatNodeId = null;

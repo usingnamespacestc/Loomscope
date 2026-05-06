@@ -199,9 +199,14 @@ export function computeFoldProjection(
   const preTokensByFold = new Map<string, number>();
   const activeFoldHostIds = new Set<string>();
 
+  // PR 2.4-B: include both pure compact ChatNodes and hybrid
+  // ChatNodes (real prompt + inline compact). Both carry
+  // compactMetadata.preTokens used by the chatFold phantom badge.
   const compactMetaById = new Map<string, ChatNode>();
   for (const cn of chatFlow.chatNodes) {
-    if (cn.isCompactSummary) compactMetaById.set(cn.id, cn);
+    if (cn.isCompactSummary || cn.hasInnerCompact) {
+      compactMetaById.set(cn.id, cn);
+    }
   }
 
   for (const [hostId, claimed] of claimByFold) {

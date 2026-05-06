@@ -62,6 +62,38 @@ function chatNode(
   };
 }
 
+// PR 2.4-B helper: hybrid ChatNode = real prompt + inline mid-turn
+// compact. isCompactSummary=false but hasInnerCompact=true; the
+// compactMetadata's logicalParentChatNodeId self-references (the
+// pre-compact tail lives inside this very promptId bucket).
+function hybridChatNode(
+  id: string,
+  parentId: string | null,
+  preTokens = 100_000,
+): ChatNode {
+  return {
+    kind: "chat",
+    id,
+    parentChatNodeId: parentId,
+    rootUserUuid: `u-${id}`,
+    userMessage: { uuid: `u-${id}`, content: `real prompt for ${id}`, attachments: [] },
+    workflow: { nodes: [], edges: [] },
+    trigger: "user",
+    isCompactSummary: false,
+    hasInnerCompact: true,
+    compactMetadata: {
+      id: `compact-wn-${id}`,
+      kind: "compact",
+      parentUuid: null,
+      summaryText: "...",
+      trigger: "auto",
+      preTokens,
+      logicalParentChatNodeId: id, // self-reference (real-data pattern)
+    },
+    meta: {},
+  };
+}
+
 function chatFlow(nodes: ChatNode[]): ChatFlow {
   return {
     id: SID,
@@ -188,6 +220,37 @@ describe("computeCompactRange", () => {
     ]);
     expect(computeCompactRange(cf, "d").map((c) => c.id)).toEqual(["a", "b", "c"]);
   });
+
+  // PR 2.4-B: hybrid ChatNode (real prompt + inline mid-turn compact).
+  // logicalParentChatNodeId self-references → can't drive the walk.
+  // computeCompactRange falls back to self.parentChatNodeId so the
+  // fold range covers the prior chain WITHOUT including self.
+  it("walks from parentChatNodeId for hybrid (not logicalParentChatNodeId, which self-references)", () => {
+    // a → b → c → d-hybrid (real prompt + inline compact at d).
+    const cf = chatFlow([
+      chatNode("a", null),
+      chatNode("b", "a"),
+      chatNode("c", "b"),
+      hybridChatNode("d", "c"),
+    ]);
+    const range = computeCompactRange(cf, "d");
+    expect(range.map((c) => c.id)).toEqual(["a", "b", "c"]);
+    // Self (d) MUST NOT be in the range — hybrid keeps itself visible.
+    expect(range.map((c) => c.id)).not.toContain("d");
+  });
+
+  it("returns [] for hybrid that's the very first ChatNode in the flow (no parent chain)", () => {
+    // Edge case: hybrid with no parentChatNodeId → nothing to fold.
+    const cf = chatFlow([hybridChatNode("d", null)]);
+    expect(computeCompactRange(cf, "d")).toEqual([]);
+  });
+
+  it("returns [] for a non-host ChatNode (not pure compact, not hybrid)", () => {
+    // Verifies the gate rejects normal ChatNodes even after PR 2.4-B
+    // expanded the host class.
+    const cf = chatFlow([chatNode("a", null), chatNode("b", "a")]);
+    expect(computeCompactRange(cf, "b")).toEqual([]);
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────
@@ -247,6 +310,29 @@ describe("hydrateFoldedCompactIds", () => {
     expect(hydrateFoldedCompactIds(SID, flowWithTwoCompacts())).toEqual(
       new Set(["c", "e"]),
     );
+  });
+
+  // PR 2.4-B: hybrid ChatNodes are also fold-host candidates.
+  it("default-folds hybrid ChatNodes (real prompt + inline compact) the same as pure compact ChatNodes", () => {
+    const cf = chatFlow([
+      chatNode("a", null),
+      chatNode("b", "a"),
+      hybridChatNode("c", "b"), // hybrid — should default-fold
+      chatNode("d", "c"),
+      chatNode("e", "d", true, "d"), // pure compact — should also default-fold
+    ]);
+    expect(hydrateFoldedCompactIds(SID, cf)).toEqual(new Set(["c", "e"]));
+  });
+
+  it("respects unfold storage for hybrid ChatNodes too", () => {
+    localStorage.setItem(`loomscope:unfold:${SID}`, JSON.stringify(["c"]));
+    const cf = chatFlow([
+      chatNode("a", null),
+      hybridChatNode("c", "a"),
+      chatNode("d", "c"),
+      chatNode("e", "d", true, "d"),
+    ]);
+    expect(hydrateFoldedCompactIds(SID, cf)).toEqual(new Set(["e"]));
   });
 });
 

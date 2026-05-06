@@ -142,6 +142,22 @@ function workflowSummariesEqual(
   return true;
 }
 
+// PR 2.4-B: a ChatNode qualifies as a "compact fold host" if it
+// either is a pure compact ChatNode (synthetic resume marker, no
+// real prompt) OR is a hybrid ChatNode (real prompt + inline
+// mid-turn compact). Both shapes carry compactMetadata and benefit
+// from default-folding the prior chain that the inline compact
+// summarised. Hybrid hosts keep themselves visible (fold range
+// excludes self — see computeCompactRange below) so the real work
+// inside isn't hidden.
+//
+// 中: 折叠 host 候选 = pure compact OR hybrid。两者都带
+// compactMetadata，前面的对话链都能被折掉；hybrid 只折祖先链
+// 不折自己（因为 self 含真实 prompt + 真实工作）。
+function isCompactFoldHost(cn: ChatNode): boolean {
+  return cn.isCompactSummary || (cn.hasInnerCompact ?? false);
+}
+
 // Persist the explicitly-unfolded ids derived from the in-memory
 // folded set. Computed as liveCompacts \ foldedSet so storage
 // always reflects the current "user wants this open" state.
@@ -152,7 +168,7 @@ function persistUnfoldFromFolded(
 ): void {
   const unfolded = new Set<string>();
   for (const cn of chatFlow.chatNodes) {
-    if (cn.isCompactSummary && !foldedIds.has(cn.id)) unfolded.add(cn.id);
+    if (isCompactFoldHost(cn) && !foldedIds.has(cn.id)) unfolded.add(cn.id);
   }
   writeUnfoldStorage(sessionId, unfolded);
 }
@@ -167,7 +183,7 @@ export function hydrateFoldedCompactIds(
 ): Set<string> {
   const liveCompactIds = new Set<string>();
   for (const cn of chatFlow.chatNodes) {
-    if (cn.isCompactSummary) liveCompactIds.add(cn.id);
+    if (isCompactFoldHost(cn)) liveCompactIds.add(cn.id);
   }
   const unfolded = new Set(readUnfoldStorage(sessionId) ?? []);
   const folded = new Set<string>();
@@ -398,11 +414,11 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       const oldCompactIds = new Set<string>();
       if (oldFlow) {
         for (const cn of oldFlow.chatNodes) {
-          if (cn.isCompactSummary) oldCompactIds.add(cn.id);
+          if (isCompactFoldHost(cn)) oldCompactIds.add(cn.id);
         }
       }
       for (const cn of mergedFlow.chatNodes) {
-        if (cn.isCompactSummary) liveCompactIds.add(cn.id);
+        if (isCompactFoldHost(cn)) liveCompactIds.add(cn.id);
       }
       const nextFolded = new Set<string>();
       for (const id of liveCompactIds) {
@@ -1153,7 +1169,7 @@ export interface DrillBreadcrumbItem {
 // can't leak into ``foldedCompactIds`` and pollute fold projection /
 // localStorage.
 function isCompactChatNodeInFlow(cf: ChatFlow, id: string): boolean {
-  return cf.chatNodes.some((c) => c.id === id && c.isCompactSummary);
+  return cf.chatNodes.some((c) => c.id === id && isCompactFoldHost(c));
 }
 
 // Compute the full pre-compact range for a compact ChatNode: the chain
@@ -1181,8 +1197,29 @@ export function computeCompactRange(
 ): ChatNode[] {
   const byId = new Map(scope.chatNodes.map((c) => [c.id, c]));
   const compactCn = byId.get(compactChatNodeId);
-  if (!compactCn?.isCompactSummary) return [];
-  const startId = compactCn.compactMetadata?.logicalParentChatNodeId;
+  if (!compactCn) return [];
+  if (!isCompactFoldHost(compactCn)) return [];
+
+  // Walk start: the ChatNode immediately before the chain we want to
+  // fold. Differs by host shape:
+  //   - Pure compact ChatNode (synthetic resume marker): the boundary
+  //     points back via logicalParentUuid → resolvePromptId →
+  //     logicalParentChatNodeId, which the parser backfills onto
+  //     compactMetadata. That ChatNode is the pre-compact tail; walk
+  //     parentChatNodeId from there back to root.
+  //   - Hybrid ChatNode (real prompt + inline mid-turn compact):
+  //     logicalParentUuid resolves back to the SAME promptId (the
+  //     pre-compact tail lives inside this very bucket), so
+  //     logicalParentChatNodeId self-references. Useless as a walk
+  //     start. Use self.parentChatNodeId instead — that's the prior
+  //     turn's ChatNode, which IS the chain we want to fold.
+  let startId: string | null | undefined;
+  if (compactCn.isCompactSummary) {
+    startId = compactCn.compactMetadata?.logicalParentChatNodeId;
+  } else {
+    // hybrid case
+    startId = compactCn.parentChatNodeId;
+  }
   if (!startId) return [];
   const start = byId.get(startId);
   if (!start) return [];
