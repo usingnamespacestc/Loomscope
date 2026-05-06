@@ -259,7 +259,8 @@ function computeChainCount(
 
 // EN: walk parentUuid backward through the WorkFlow's nodes until we
 // either hit another llm_call (= predecessor exists, NOT a chain root)
-// or run out of resolvable nodes (= chain root).
+// or run out of resolvable nodes / hit a compact boundary (= chain
+// root).
 //
 // CC's chain isn't a strict llm→tool→llm sequence in jsonl. The
 // canonical predecessor walk needs to handle these transit kinds
@@ -268,24 +269,26 @@ function computeChainCount(
 //   - tool_call / delegate: llm_(N+1).parentUuid = tool.resultUserUuid
 //     (the user record carrying the tool_result).
 //   - attachment: CC injects task_reminder / hook_additional_context
-//     style records on the chain (utils/sessionStorage.ts:154 says
-//     attachment IS a chain participant) → llm_(N+1).parentUuid =
-//     attachment.uuid.
-//   - compact: compact_boundary records sit on the chain too;
-//     post-compact assistants point their parentUuid at the boundary.
+//     / deferred_tools_delta style records on the chain
+//     (utils/sessionStorage.ts:154 says attachment IS a chain
+//     participant). These are pure transit: the prior conversation
+//     stays in the LLM's input verbatim → walk through.
 //
-// Failing to walk through these (the pre-fix behaviour) made every
-// task_reminder look like a chain break — turning a clean 1-chain
-// turn into chainCount = 3 in real sessions. Mirrors CC's own
-// buildConversationChain (sessionStorage.ts:2069) which is just a
-// parentUuid linked-list walk with no transit-kind discrimination.
+// Compact, in contrast, is a HARD chain break in information-flow
+// terms — the prior turn's content is replaced with a summary
+// before being sent to the next API call. Even though CC's parentUuid
+// topology stays continuous through the boundary, Loomscope's
+// chain count reflects the user-facing semantics: post-compact
+// llm_call sees fresh context, so it registers as a new chain root.
+// CompactNode.parentUuid is left pointing at the (invisible)
+// boundary record (PR 2.4-C revert), so the walk naturally
+// dead-ends here.
 //
-// 中: 走 parentUuid 反向链直到找到 llm_call（= 存在前驱，非链 root）或
-// 走光（= 链 root）。CC 的 chain 不是 llm→tool→llm 的纯交替序列：
-// attachment(task_reminder/hook_additional_context) 和 compact_boundary
-// 都是 chain participant，会写在 llm_(N) 和 llm_(N+1) 之间，需要把它们
-// 识别成 transit 节点跳过去。漏掉这步会把每个 task_reminder 误算成断链
-// （实际数据里观察到 1 条链被算成 3 条）。
+// 中: 走 parentUuid 反向链直到 (a) 找到 llm_call（= 存在前驱，非链 root）
+// (b) 走光 / 走到 compact 边界（= 链 root）。attachment 是真 transit
+// （信息流连续）；compact 在信息流意义上是真断链（前面对话被摘要替换），
+// 所以 walk 在 CompactNode 处自然 dead-end，post-compact llm_call 正确
+// 地被识别为新的链 root。
 function hasInWorkflowLlmPredecessor(
   llm: LlmCallNode,
   nodes: WorkNode[],
@@ -310,6 +313,10 @@ function hasInWorkflowLlmPredecessor(
     if (next) {
       if (visited.has(next.id)) return false;
       if (next.kind === "llm_call") return true;
+      // Compact boundary = explicit chain break. Stop walking even
+      // though CompactNode.parentUuid would dead-end on its own next
+      // iteration — explicit short-circuit makes the intent clear.
+      if (next.kind === "compact") return false;
       visited.add(next.id);
       cursor = next.parentUuid;
       continue;

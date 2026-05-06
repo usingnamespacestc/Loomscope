@@ -418,29 +418,24 @@ export function buildCompactNode(
   const meta = boundary?.compactMetadata ?? user.compactMetadata;
   const summary =
     typeof user.message?.content === "string" ? user.message.content : "";
-  // PR 2.4-C: route CompactNode.parentUuid past the (invisible)
-  // boundary record. CC writes compact_boundary with parentUuid=null
-  // and logicalParentUuid pointing at the pre-compact tail (the user
-  // record that carried the last tool_result before compaction). The
-  // synthetic compactSummary user record points its parentUuid at
-  // the boundary, which is then dangling for chain-walk purposes
-  // since the boundary itself isn't a WorkNode and (when its
-  // parentUuid=null) doesn't even surface in chainParentByUuid.
-  // Setting CompactNode.parentUuid = the resolved pre-compact tail
-  // uuid lets layoutWorkflow draw a continuation edge from the prior
-  // tool_call/llm_call into the CompactNode (semantically correct —
-  // the compact directly continues the prior work) and lets the
-  // front-end chain walk hop through into chain history without
-  // needing a raw-record map.
+  // CompactNode.parentUuid points at the (invisible) compact_boundary
+  // record. Treating compact as a chain TRANSIT (PR 2.4-C, reverted)
+  // by routing past the boundary into the pre-compact tail was wrong:
+  // a compact replaces prior conversation with a summary, so from the
+  // information-flow perspective post-compact context starts fresh
+  // even though CC's parentUuid topology stays continuous. Loomscope
+  // surfaces compact as a real chain break by leaving CompactNode
+  // disconnected from the prior chain — the walk dead-ends here, the
+  // post-compact llm_call shows up as a chain root, and the chain
+  // _position UI highlights compact as the cause via gapEvidence.
   const preCompactTailUuid =
-    boundary?.logicalParentUuid ?? user.logicalParentUuid ?? null;
-  const userParent = user.parentUuid ?? null;
+    boundary?.logicalParentUuid ?? user.logicalParentUuid ?? undefined;
   return {
     id: user.uuid ?? "",
     kind: "compact",
-    parentUuid: preCompactTailUuid ?? userParent,
+    parentUuid: user.parentUuid ?? null,
     boundaryUuid: boundary?.uuid,
-    logicalParentUuid: preCompactTailUuid ?? undefined,
+    logicalParentUuid: preCompactTailUuid,
     trigger: meta?.trigger,
     preTokens: typeof meta?.preTokens === "number" ? meta.preTokens : undefined,
     preCompactDiscoveredTools: meta?.preCompactDiscoveredTools,

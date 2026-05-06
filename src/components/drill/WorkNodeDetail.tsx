@@ -524,11 +524,15 @@ function walkChainBackward(
     if (visited.has(next.id)) break; // defensive against cycles
     visited.add(next.id);
     out.push(next);
+    // Compact = explicit chain break (prior context replaced with
+    // summary). Include it in the history but stop walking — the
+    // LLM that's currently being inspected didn't see anything before
+    // this point as raw content.
+    if (next.kind === "compact") break;
     cursorParent =
       next.kind === "llm_call" ||
       next.kind === "tool_call" ||
       next.kind === "delegate" ||
-      next.kind === "compact" ||
       next.kind === "attachment"
         ? next.parentUuid
         : null;
@@ -582,11 +586,12 @@ function computeChainPosition(
   node: LlmCallNode,
   nodes: WorkNode[],
 ): ChainPosition | null {
-  // Walk parentUuid back through the WorkFlow until we hit another
-  // llm_call. Mirrors workflow-summary.ts:hasInWorkflowLlmPredecessor —
-  // attachment(task_reminder) + compact_boundary are chain transit
-  // nodes, NOT structural breaks. Without walking through them, every
-  // task_reminder would falsely register as a chain root.
+  // Walk parentUuid back through the WorkFlow until we either find an
+  // llm_call (= mid-chain, not a root) or hit a CompactNode / dead
+  // end (= chain root). Attachment is chain transit (information
+  // flow stays continuous through task_reminder /
+  // deferred_tools_delta /etc.); compact is a hard break (prior
+  // turn's content is replaced with summary in the next API call).
   const byId = new Map<string, WorkNode>(nodes.map((n) => [n.id, n]));
   const byResultUserUuid = new Map<string, WorkNode>();
   for (const n of nodes) {
@@ -604,6 +609,7 @@ function computeChainPosition(
       foundLlmPredecessor = true;
       break;
     }
+    if (next.kind === "compact") break; // explicit chain break
     visited.add(next.id);
     cursor = next.parentUuid;
   }
@@ -686,39 +692,87 @@ function ChainPositionRow({
           {tail.id.slice(0, 8)}
         </button>
       </div>
-      {position.gapEvidence.length > 0 ? (
-        <div
-          className="flex flex-col gap-1"
-          data-testid="llm-chain-position-evidence-list"
-        >
-          <span>本 WorkFlow 内在两条链之间出现：</span>
-          <ul className="ml-3 flex flex-col gap-1 list-disc">
-            {position.gapEvidence.map((ev) => (
-              <li key={ev.id}>
+      {(() => {
+        const compact = position.gapEvidence.find(
+          (ev) => ev.kind === "compact",
+        ) as CompactNode | undefined;
+        if (compact) {
+          // Confident verdict: compact replaces prior context with a
+          // summary, so post-compact chain start is unambiguously
+          // caused by the compact even if other attachments also live
+          // in the gap.
+          const preTokens = compact.preTokens;
+          return (
+            <div
+              className="flex flex-col gap-1"
+              data-testid="llm-chain-position-cause-compact"
+            >
+              <div className="flex flex-wrap items-center gap-x-1.5">
+                <span>因 compact 断链 ←</span>
                 <button
                   type="button"
-                  onClick={() => onPanelView(ev.id)}
-                  onDoubleClick={() => onCanvasLocate(ev.id)}
+                  onClick={() => onPanelView(compact.id)}
+                  onDoubleClick={() => onCanvasLocate(compact.id)}
                   className="inline-flex items-center gap-1 rounded border border-amber-300 bg-white px-1.5 py-0.5 font-mono text-amber-900 hover:border-amber-500 hover:bg-amber-100 transition-colors"
-                  title="单击：在面板查看 / 双击：在画布定位"
-                  data-testid={`llm-chain-position-evidence-${ev.id}`}
+                  title="单击：在面板查看 compact / 双击：在画布定位"
+                  data-testid="llm-chain-position-compact-link"
                 >
-                  {ev.kind} {ev.id.slice(0, 8)}
+                  compact {compact.id.slice(0, 8)}
                 </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : (
-        <span data-testid="llm-chain-position-no-evidence">
-          本 WorkFlow 内在两条链之间没有可见证据。
-        </span>
-      )}
-      <p className="mt-0.5 text-amber-600/80 italic">
-        ⚠ Loomscope 无法精确判断断链原因 — 可能是 /clear、/escape mid-turn、
-        partial compact、cross-session resume 等。CC 的 compact 通常带
-        preservedSegment 接续 chain（见 CompactNode ≠ 断链）。
-      </p>
+                {typeof preTokens === "number" && (
+                  <span className="font-mono text-[10px]">
+                    preTokens {formatTokens(preTokens)}
+                  </span>
+                )}
+              </div>
+              <p className="text-amber-600/80 italic">
+                CC 在中段触发 compact，前面对话被替换为摘要再发给下一轮 API；
+                post-compact 的 input 上下文已经是 fresh start。
+              </p>
+            </div>
+          );
+        }
+        // No compact in gap — fall back to evidence list (likely
+        // /clear / cross-session resume / partial compact without
+        // local boundary node, etc.).
+        return (
+          <>
+            {position.gapEvidence.length > 0 ? (
+              <div
+                className="flex flex-col gap-1"
+                data-testid="llm-chain-position-evidence-list"
+              >
+                <span>本 WorkFlow 内在两条链之间出现：</span>
+                <ul className="ml-3 flex flex-col gap-1 list-disc">
+                  {position.gapEvidence.map((ev) => (
+                    <li key={ev.id}>
+                      <button
+                        type="button"
+                        onClick={() => onPanelView(ev.id)}
+                        onDoubleClick={() => onCanvasLocate(ev.id)}
+                        className="inline-flex items-center gap-1 rounded border border-amber-300 bg-white px-1.5 py-0.5 font-mono text-amber-900 hover:border-amber-500 hover:bg-amber-100 transition-colors"
+                        title="单击：在面板查看 / 双击：在画布定位"
+                        data-testid={`llm-chain-position-evidence-${ev.id}`}
+                      >
+                        {ev.kind} {ev.id.slice(0, 8)}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <span data-testid="llm-chain-position-no-evidence">
+                本 WorkFlow 内在两条链之间没有可见证据。
+              </span>
+            )}
+            <p className="mt-0.5 text-amber-600/80 italic">
+              ⚠ 无 compact 痕迹但 chain 在此重置 — 可能是 /clear、/escape
+              mid-turn、cross-session resume 或 partial compact 不带
+              preservedSegment。
+            </p>
+          </>
+        );
+      })()}
     </div>
   );
 }

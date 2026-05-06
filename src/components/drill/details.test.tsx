@@ -848,27 +848,30 @@ describe("LlmCallDetail PR 2.2 — chain_position metadata", () => {
     // No evidence list rendered; sentinel text instead.
     expect(screen.queryByTestId("llm-chain-position-evidence-list")).toBeNull();
     expect(screen.getByTestId("llm-chain-position-no-evidence")).toBeTruthy();
-    // Caveat note is always rendered.
-    expect(row.textContent).toMatch(/Loomscope 无法精确判断/);
-    expect(row.textContent).toMatch(/CompactNode ≠ 断链/);
+    // PR 2.4-C revert: caveat copy now explains the compact-less
+    // case (post 'compact = real break' semantics).
+    expect(row.textContent).toMatch(/无 compact 痕迹但 chain 在此重置/);
   });
 
-  it("chain root with intervening CompactNode lists it as evidence (NOT as the asserted cause)", () => {
+  it("chain root with intervening CompactNode → confident '因 compact 断链' verdict + compact link + preTokens", () => {
     seedSession();
-    // Chain 1: l1 (root). CompactNode c1 between. Chain 2: l2 (chain
-    // root, parentUuid points outside).
+    // Chain 1: l1 (root). CompactNode c1 with preTokens between.
+    // Chain 2: l2 (chain root, parentUuid points outside).
+    // Compact replaces prior context with summary, so it's the
+    // unambiguous cause — the UI gives a definite verdict, not the
+    // hedged evidence-list path.
     const l1 = llm("l1");
-    const c1 = compactNode("c1");
+    const c1: CompactNode = { ...compactNode("c1"), preTokens: 92_300 };
     const l2 = llm("l2", "external-uuid");
     renderWithPan(l2, [l1, c1, l2]);
-    const row = screen.getByTestId("llm-chain-position-with-prev");
-    // Evidence list rendered with the compact node listed.
-    expect(screen.getByTestId("llm-chain-position-evidence-list")).toBeTruthy();
-    expect(screen.getByTestId("llm-chain-position-evidence-c1")).toBeTruthy();
-    // No assertive language like "因 compact 断链" — only descriptive.
-    expect(row.textContent).not.toMatch(/因 compact 断链/);
-    expect(row.textContent).not.toMatch(/原因未知/);
-    expect(row.textContent).toMatch(/Loomscope 无法精确判断/);
+    const cause = screen.getByTestId("llm-chain-position-cause-compact");
+    expect(cause.textContent).toMatch(/因 compact 断链/);
+    expect(cause.textContent).toMatch(/preTokens 92\.3k/i);
+    expect(screen.getByTestId("llm-chain-position-compact-link")).toBeTruthy();
+    // Evidence-list path NOT used when compact present.
+    expect(screen.queryByTestId("llm-chain-position-evidence-list")).toBeNull();
+    // Old "无法精确判断" caveat replaced with compact-specific copy.
+    expect(cause.textContent).toMatch(/前面对话被替换为摘要/);
   });
 
   it("clicking tail link in panel mode selects via setWorkflowSelected (no canvas pan)", () => {

@@ -809,16 +809,14 @@ function buildChatNode(
   const chainParentByUuid = new Map<string, string>();
   for (const [uuid, ir] of index) {
     if (ir.type === "progress") continue;
-    // PR 2.4-C: compact_boundary records carry parentUuid=null and
-    // express their chain continuation through logicalParentUuid
-    // (= pre-compact tail). Use the logicalParentUuid as the
-    // effective transit parent so chain walks don't dead-end at
-    // the boundary.
-    const effectiveParent =
-      ir.type === "system" && ir.subtype === "compact_boundary"
-        ? ir.logicalParentUuid ?? ir.parentUuid
-        : ir.parentUuid;
-    if (effectiveParent) chainParentByUuid.set(uuid, effectiveParent);
+    // compact_boundary records have parentUuid=null +
+    // logicalParentUuid pointing at the pre-compact tail. Don't
+    // splice via logicalParentUuid here: compact is a real
+    // information-flow break (prior turn content replaced with
+    // summary), not a transit, so the walk should DEAD-END at the
+    // boundary and let the post-compact llm_call register as a
+    // chain root.
+    if (ir.parentUuid) chainParentByUuid.set(uuid, ir.parentUuid);
   }
   // v0.10 polish (lazy ChatFlow B1): pre-compute summary stats so the
   // lite ChatFlow endpoint can ship them inline. ~100-200B per
