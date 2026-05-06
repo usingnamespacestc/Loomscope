@@ -10,6 +10,7 @@
 // their toolUseResult carries a structuredPatch (CC source: utils/diff.ts).
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { JsonView } from "@/components/JsonView";
 import { MarkdownView } from "@/components/MarkdownView";
@@ -117,6 +118,7 @@ function LlmCallDetail({
   sessionId: string;
   workflowNodes: WorkNode[];
 }) {
+  const { t } = useTranslation();
   const setTab = useStore((s) => s.setDrillPanelTab);
   const setWorkflowSelected = useStore((s) => s.setWorkflowSelected);
   const panToWorkNode = useWorkFlowPanShim();
@@ -230,7 +232,7 @@ function LlmCallDetail({
             {node.text}
           </MarkdownView>
         ) : (
-          <div className="text-[11px] italic text-gray-400">(空)</div>
+          <div className="text-[11px] italic text-gray-400">{t("placeholders.empty")}</div>
         )}
       </Section>
 
@@ -308,7 +310,8 @@ function NodeNavRow({
   onCanvasLocate: (id: string) => void;
   testIdPrefix: string;
 }) {
-  const label = describeNodeForNav(node);
+  const { t } = useTranslation();
+  const label = describeNodeForNav(node, t("placeholders.empty_turn"));
   return (
     <li
       className="flex items-center justify-between gap-2 rounded border border-gray-200 bg-gray-50 px-2 py-1"
@@ -344,10 +347,10 @@ function NodeNavRow({
   );
 }
 
-function describeNodeForNav(n: WorkNode): string {
+function describeNodeForNav(n: WorkNode, emptyTurnLabel = "(empty turn)"): string {
   if (n.kind === "llm_call") {
     const text = n.text?.slice(0, 60) || (n.thinking[0]?.text?.slice(0, 60) ?? "");
-    return text || `${n.id.slice(0, 8)} (空 turn)`;
+    return text || `${n.id.slice(0, 8)} ${emptyTurnLabel}`;
   }
   if (n.kind === "tool_call") {
     const inputStr = n.input ? JSON.stringify(n.input).slice(0, 60) : "";
@@ -976,6 +979,7 @@ function formatBytes(n: number): string {
 // ── delegate ──────────────────────────────────────────────────────────
 
 function DelegateDetail({ node, sessionId }: { node: DelegateNode; sessionId: string }) {
+  const { t } = useTranslation();
   const isAutoCompact = (node.agentId ?? "").startsWith("acompact-");
   const enterSubWorkflow = useStore((s) => s.enterSubWorkflow);
   // Subscribe to the sub-agent cache entry for this delegate so the
@@ -1017,11 +1021,9 @@ function DelegateDetail({ node, sessionId }: { node: DelegateNode; sessionId: st
               disabled={cacheEntry?.status === "loading"}
               data-testid="drill-into-subagent"
             >
-              {cacheEntry?.status === "loading" ? (
-                <>⏳ 加载子对话流…</>
-              ) : (
-                <>⤢ 进入子对话流</>
-              )}
+              {cacheEntry?.status === "loading"
+                ? t("buttons.enter_subworkflow_loading")
+                : t("buttons.enter_subworkflow_glyph")}
             </button>
             {cacheEntry?.status === "error" && (
               <div className="mt-1 text-[10px] text-rose-700">
@@ -1094,6 +1096,7 @@ function DelegateDetail({ node, sessionId }: { node: DelegateNode; sessionId: st
 // ── compact ───────────────────────────────────────────────────────────
 
 function CompactDetail({ node }: { node: CompactNode }) {
+  const { t } = useTranslation();
   return (
     <>
       <Section title="Compact">
@@ -1105,9 +1108,6 @@ function CompactDetail({ node }: { node: CompactNode }) {
             <li>logicalParentUuid: {node.logicalParentUuid}</li>
           )}
         </ul>
-        <div className="mt-1.5 text-[10px] text-gray-400">
-          v0.6 才上 compact 完整交互（展开 pre-compact 原段）
-        </div>
       </Section>
       <Section title="Summary">
         {node.summaryText ? (
@@ -1115,7 +1115,7 @@ function CompactDetail({ node }: { node: CompactNode }) {
             {node.summaryText}
           </MarkdownView>
         ) : (
-          <div className="text-[11px] italic text-gray-400">(空)</div>
+          <div className="text-[11px] italic text-gray-400">{t("placeholders.empty")}</div>
         )}
       </Section>
     </>

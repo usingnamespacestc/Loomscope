@@ -22,6 +22,7 @@
 // re-entry.
 
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useCanvasPanShim } from "@/canvas/CanvasPanContext";
 import { ConversationScrollContext } from "@/canvas/ConversationScrollContext";
@@ -1282,11 +1283,12 @@ function CopyButton({
   chatNodeId: string;
   tone: "light" | "dark";
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   return (
     <button
       type="button"
-      aria-label="复制消息"
+      aria-label={t("buttons.copy_message_aria")}
       data-testid={`copy-msg-${role}-${chatNodeId}`}
       onClick={(e) => {
         e.stopPropagation();
@@ -1304,7 +1306,9 @@ function CopyButton({
           : "text-gray-400 hover:text-gray-700",
       ].join(" ")}
     >
-      {copied ? "✓ 已复制" : "复制"}
+      {copied
+        ? t("buttons.copy_message_done")
+        : t("buttons.copy_message_action")}
     </button>
   );
 }

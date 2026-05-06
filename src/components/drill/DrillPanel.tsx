@@ -16,6 +16,7 @@
 // the JSX of the wrapper reads cleanly with the new tab strip.
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 // v0.10 polish #6B: lazy-load the heavy detail / conversation
 // components. All three pull in the markdown stack (react-markdown +
@@ -222,6 +223,7 @@ function TabStrip({
   fullscreen: boolean;
   onToggleFullscreen: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       data-testid="drill-panel-tabs"
@@ -231,13 +233,13 @@ function TabStrip({
         active={activeTab === "detail"}
         onClick={() => onSelect("detail")}
         testId="drill-panel-tab-detail"
-        label="Detail"
+        label={t("drill_panel.tab_detail")}
       />
       <TabButton
         active={activeTab === "conversation"}
         onClick={() => onSelect("conversation")}
         testId="drill-panel-tab-conversation"
-        label="Conversation"
+        label={t("drill_panel.tab_conversation")}
       />
       {viewMode === "workflow" && drilledChatNode && (
         // Mode-following breadcrumb: keep parent ChatNode visible
@@ -318,6 +320,7 @@ function DetailTabContent({
   viewMode,
   drilledChatNode,
 }: Props) {
+  const { t } = useTranslation();
   const selectedChatId = useStore(
     (s) => s.sessions.get(sessionId)?.selectedNodeId ?? null,
   );
@@ -382,7 +385,7 @@ function DetailTabContent({
         />
       )}
       {focused.kind === "chatnode" && !focused.chatNode && (
-        <EmptyHint label="点 ChatNode 查看详情" />
+        <EmptyHint label={t("placeholders.click_chatnode_for_details")} />
       )}
       {focused.kind === "worknode" && focused.workNode && (
         <WorkNodeDetail
@@ -392,9 +395,11 @@ function DetailTabContent({
         />
       )}
       {focused.kind === "worknode" && !focused.workNode && (
-        <EmptyHint label="点 WorkNode 查看详情" />
+        <EmptyHint label={t("placeholders.click_worknode_for_details")} />
       )}
-      {focused.kind === "empty" && <EmptyHint label="进入工作流后选 WorkNode 查看" />}
+      {focused.kind === "empty" && (
+        <EmptyHint label={t("placeholders.enter_workflow_first")} />
+      )}
     </>
   );
 }

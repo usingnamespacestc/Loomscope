@@ -435,10 +435,10 @@ describe("ConversationView — v0.8.1 #11 copy buttons", () => {
     seed(cf, "a");
     render(<ConversationView sessionId={SID} chatFlow={cf} />);
     const btn = screen.getByTestId("copy-msg-user-a");
-    expect(btn.textContent).toBe("复制");
+    expect(btn.textContent).toMatch(/复制|Copy/);
     fireEvent.click(btn);
     expect(writeText).toHaveBeenCalledWith("**bold** prompt");
-    expect(btn.textContent).toBe("✓ 已复制");
+    expect(btn.textContent).toMatch(/✓ 已复制|✓ Copied/);
   });
 
   it("clicking copy stops propagation so the bubble underneath doesn't re-select", () => {

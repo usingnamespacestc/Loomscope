@@ -5,6 +5,7 @@
 
 import { Handle, Position } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
+import { useTranslation } from "react-i18next";
 
 import {
   WF_NODE_SIZE,
@@ -19,6 +20,7 @@ import { useIsWorkNodeSelected } from "@/store/selectionHooks";
 import { handleStyle, workNodeChromeClass } from "./cardChrome";
 
 export function LlmCallCard({ id, data }: NodeProps<LlmCallRFNode>) {
+  const { t } = useTranslation();
   const n = data.workNode;
   const text = previewLlmCallText(n);
   const thinkingLines = llmCallThinkingLines(n);
@@ -80,7 +82,7 @@ export function LlmCallCard({ id, data }: NodeProps<LlmCallRFNode>) {
           {text}
         </div>
       ) : (
-        <div className="text-[11px] italic text-gray-400">(无文本输出)</div>
+        <div className="text-[11px] italic text-gray-400">{t("placeholders.no_text_output")}</div>
       )}
       {thinkingLines > 0 && (
         <div className="mt-1 text-[10px] text-gray-500">

@@ -227,7 +227,9 @@ describe("DelegateCard", () => {
     // v0.9.1: drill affordance is now an explicit button (replaced
     // the v0.5 double-click + the briefly-tried right-click — both
     // were eaten by RF / browser defaults).
-    expect(screen.getByText(/进入子工作流/)).toBeTruthy();
+    // PR 2-D + i18n round: copy unified to "进入子对话流" (sub-agent's
+    // inner shape is a ChatFlow not a WorkFlow).
+    expect(screen.getByText(/进入子对话流/)).toBeTruthy();
     // v0.6 redo M4: TokenBar (totalTokens=49560) + NodeIdLine present.
     expect(screen.getByTestId("node-id-d1")).toBeTruthy();
   });

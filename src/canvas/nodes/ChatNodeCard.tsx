@@ -173,7 +173,7 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
       <div className="mb-1.5">
         <div className="text-[10px] text-gray-500 mb-0.5">{t("chat_node.user")}</div>
         <div className="text-[11px] text-gray-900 break-words line-clamp-2">
-          {data.userPreview || <span className="italic text-gray-300">(空)</span>}
+          {data.userPreview || <span className="italic text-gray-300">{t("placeholders.empty")}</span>}
         </div>
       </div>
 
@@ -338,6 +338,7 @@ function CompactCard({
   hasOutgoing: boolean;
   userPreview: string;
 }) {
+  const { t } = useTranslation();
   const trigger = cn.compactMetadata?.trigger;
   const preTokens = cn.compactMetadata?.preTokens;
   const palette = compactPalette(trigger);
@@ -398,7 +399,7 @@ function CompactCard({
       <div className="mb-1.5">
         <div className="text-[10px] text-gray-500 mb-0.5">summary</div>
         <div className="text-[11px] text-gray-900 break-words line-clamp-3 italic">
-          {userPreview || <span className="not-italic text-gray-300">(空)</span>}
+          {userPreview || <span className="not-italic text-gray-300">{t("placeholders.empty")}</span>}
         </div>
       </div>
 
@@ -511,6 +512,7 @@ function CompactFoldToggleButton({
   accent: "auto" | "manual" | "failed";
   hasPreCompactRange: boolean;
 }) {
+  const { t } = useTranslation();
   const toggle = useStore((s) => s.toggleCompactFold);
   const activeId = useStore((s) => s.activeSessionId);
   // FoldAnchorContext is provided by ChatFlowCanvas. When the button
@@ -538,7 +540,9 @@ function CompactFoldToggleButton({
       : accent === "failed"
         ? "border-rose-200 bg-rose-50/40 text-rose-400"
         : "border-teal-200 bg-teal-50/40 text-teal-400";
-  const label = isFolded ? "展开 pre-compact" : "折叠 pre-compact";
+  const label = isFolded
+    ? t("compact_fold.expand_pre_compact")
+    : t("compact_fold.collapse_pre_compact");
   const glyph = isFolded ? "⤢" : "⤡";
   return (
     <button

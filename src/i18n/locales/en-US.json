@@ -54,10 +54,31 @@
   },
   "buttons": {
     "enter_workflow": "Enter WorkFlow",
-    "enter_subworkflow": "Enter sub-WorkFlow",
+    "enter_subworkflow": "Enter sub-chatflow",
+    "enter_subworkflow_loading": "⏳ Loading sub-chatflow…",
+    "enter_subworkflow_glyph": "⤢ Enter sub-chatflow",
     "copy": "Copy",
     "copied": "Copied",
-    "copy_failed": "Copy failed"
+    "copy_failed": "Copy failed",
+    "copy_message_aria": "Copy message",
+    "copy_message_action": "Copy",
+    "copy_message_done": "✓ Copied"
+  },
+  "drill_panel": {
+    "tab_detail": "Detail",
+    "tab_conversation": "Conversation"
+  },
+  "placeholders": {
+    "no_text_output": "(no text output)",
+    "empty": "(empty)",
+    "empty_turn": "(empty turn)",
+    "click_chatnode_for_details": "Click a ChatNode to see details",
+    "click_worknode_for_details": "Click a WorkNode to see details",
+    "enter_workflow_first": "Enter a workflow first, then pick a WorkNode"
+  },
+  "compact_fold": {
+    "expand_pre_compact": "Expand pre-compact",
+    "collapse_pre_compact": "Collapse pre-compact"
   },
   "tool_pill": {
     "input": "Input",

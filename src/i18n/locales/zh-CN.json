@@ -54,10 +54,31 @@
   },
   "buttons": {
     "enter_workflow": "进入工作流",
-    "enter_subworkflow": "进入子工作流",
+    "enter_subworkflow": "进入子对话流",
+    "enter_subworkflow_loading": "⏳ 加载子对话流…",
+    "enter_subworkflow_glyph": "⤢ 进入子对话流",
     "copy": "复制",
     "copied": "已复制",
-    "copy_failed": "复制失败"
+    "copy_failed": "复制失败",
+    "copy_message_aria": "复制消息",
+    "copy_message_action": "复制",
+    "copy_message_done": "✓ 已复制"
+  },
+  "drill_panel": {
+    "tab_detail": "详情",
+    "tab_conversation": "对话"
+  },
+  "placeholders": {
+    "no_text_output": "(无文本输出)",
+    "empty": "(空)",
+    "empty_turn": "(空 turn)",
+    "click_chatnode_for_details": "点 ChatNode 查看详情",
+    "click_worknode_for_details": "点 WorkNode 查看详情",
+    "enter_workflow_first": "进入工作流后选 WorkNode 查看"
+  },
+  "compact_fold": {
+    "expand_pre_compact": "展开 pre-compact",
+    "collapse_pre_compact": "折叠 pre-compact"
   },
   "tool_pill": {
     "input": "Input",
