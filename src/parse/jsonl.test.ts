@@ -1690,3 +1690,95 @@ describe("buildChatFlow reuse hint (M2 — v0.10 收尾 / v0.11 prep)", () => {
     }
   });
 });
+
+// PR 2.5 / task #89: hasInFlightWork must treat 'tool_use' and other
+// non-terminal stop_reasons as in-flight, not done. Pre-fix the
+// running animation flickered off during inter-API-call gaps because
+// CC sets stopReason='tool_use' on the assistant message that emits
+// tool_use blocks, all tool_results write back, then the next
+// API call is fired — between "all tools done" and "next stream
+// starts" the data shape said complete + sessionLive decayed to false
+// → animation off. Fix: only stopReasons in TERMINAL_STOP_REASONS
+// count as terminal.
+describe("computeWorkflowSummary — hasInFlightWork stop_reason gate (#89)", () => {
+  // Helper to construct a minimal session via parseJsonlText and
+  // extract the single ChatNode's hasInFlightWork.
+  const trace = (
+    lastStopReason: string | undefined,
+    allToolsResolved = true,
+  ): boolean => {
+    const records: RawRecord[] = [
+      {
+        type: "user",
+        uuid: "u-1",
+        promptId: "p-flight",
+        message: { role: "user", content: "do it" },
+      } as RawRecord,
+      {
+        type: "assistant",
+        uuid: "llm-1",
+        parentUuid: "u-1",
+        message: {
+          id: "msg_A",
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tu-1", name: "Bash", input: {} }],
+          stop_reason: lastStopReason,
+        },
+      } as RawRecord,
+    ];
+    if (allToolsResolved) {
+      records.push({
+        type: "user",
+        uuid: "u-tr-1",
+        promptId: "p-flight",
+        parentUuid: "llm-1",
+        // Record-level toolUseResult is the signal isToolResultRecord
+        // checks (raw-record.ts:126); without it the parser doesn't
+        // associate this record back to tool_call tu-1, leaving
+        // resultBlock=null and forcing hasInFlightWork=true via the
+        // tool_call branch.
+        toolUseResult: { stdout: "ok" },
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tu-1", content: "ok" }],
+        },
+      } as RawRecord);
+    }
+    const cf = parseJsonlText(recordsToJsonl(records), FIXTURE_PATH).chatFlow;
+    return cf.chatNodes[0]?.workflow.summary?.hasInFlightWork ?? false;
+  };
+
+  it("hasInFlightWork=true for stopReason='tool_use' even with all tool_results landed (waiting for next API call)", () => {
+    expect(trace("tool_use", true)).toBe(true);
+  });
+
+  it("hasInFlightWork=true for stopReason='pause_turn' (CC harness pause, more API calls coming)", () => {
+    expect(trace("pause_turn", true)).toBe(true);
+  });
+
+  it("hasInFlightWork=true for stopReason undefined (still streaming)", () => {
+    expect(trace(undefined, true)).toBe(true);
+  });
+
+  it("hasInFlightWork=false for stopReason='end_turn' (turn truly done)", () => {
+    expect(trace("end_turn", true)).toBe(false);
+  });
+
+  it("hasInFlightWork=false for stopReason='max_tokens' (terminated by token limit)", () => {
+    expect(trace("max_tokens", true)).toBe(false);
+  });
+
+  it("hasInFlightWork=false for stopReason='stop_sequence' (matched stop string)", () => {
+    expect(trace("stop_sequence", true)).toBe(false);
+  });
+
+  it("hasInFlightWork=false for stopReason='refusal' (safety-side terminal)", () => {
+    expect(trace("refusal", true)).toBe(false);
+  });
+
+  it("hasInFlightWork=true regardless of stopReason when a tool_call lacks resultBlock (tool still running)", () => {
+    // tool_use emitted but no tool_result yet — should still be in
+    // flight even if (somehow) stopReason were terminal already.
+    expect(trace("end_turn", false)).toBe(true);
+  });
+});

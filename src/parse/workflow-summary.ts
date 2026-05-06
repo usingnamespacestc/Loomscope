@@ -21,6 +21,31 @@ import type {
 
 const ASSISTANT_PREVIEW_LEN = 80;
 
+// EN: Anthropic API stop_reasons that mean "this turn is truly done"
+// — no further API call expected. Anything ELSE (notably 'tool_use'
+// and 'pause_turn') means the assistant emitted control signals that
+// CC's harness will consume and follow up with another API call, so
+// from the user's perspective the turn is still in flight.
+//
+// Pre-fix the running-animation gate (workflow-summary.ts hasInFlight
+// + livenessHooks useIsChatNodeRunning) treated any present
+// stopReason as terminal, which caused the animation to flicker off
+// during every tool→llm round inside a multi-step turn (stopReason=
+// 'tool_use' set + all tool_results landed → "complete" → animation
+// off; next API call's stream begins → animation back on). Limiting
+// "terminal" to this whitelist keeps the animation continuous across
+// the inter-call gap.
+//
+// 中: 真正 turn-end 的 stop_reason 集合。'tool_use' / 'pause_turn'
+// 不算 terminal —— 模型只是发出了控制信号，CC 接着会再发一次 API。
+// 之前把"有 stopReason 就当完成"导致动画在多轮 tool→llm 中段闪烁。
+const TERMINAL_STOP_REASONS = new Set([
+  "end_turn",
+  "max_tokens",
+  "stop_sequence",
+  "refusal",
+]);
+
 // Skip llm_call records that aren't real API responses:
 //   - model === "<synthetic>" — CC injects these for rate-limit (429),
 //     interruption, or other harness-side fake assistant records.
@@ -132,7 +157,15 @@ export function computeWorkflowSummary(
       }
     }
   }
-  if (!hasInFlightWork && lastReal && !lastReal.stopReason) {
+  if (
+    !hasInFlightWork &&
+    lastReal &&
+    !TERMINAL_STOP_REASONS.has(lastReal.stopReason ?? "")
+  ) {
+    // Last llm_call's stopReason missing OR a non-terminal control
+    // signal (tool_use / pause_turn). Either way another API call is
+    // still expected — keep the running indicator lit through the
+    // inter-call gap.
     hasInFlightWork = true;
   }
 
