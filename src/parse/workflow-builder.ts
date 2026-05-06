@@ -102,30 +102,122 @@ function indexRecords(records: RawRecord[]): BuildContext {
 }
 
 function buildLlmCall(r: RawRecord): LlmCallNode {
-  const thinking: ThinkingBlock[] = [];
-  const textParts: string[] = [];
-  for (const b of blocksOf(r)) {
-    if (b.type === "thinking") {
-      thinking.push({
-        text: typeof b.thinking === "string" ? b.thinking : "",
-        signature: typeof b.signature === "string" ? b.signature : undefined,
-      });
-    } else if (b.type === "text") {
-      const txt = (b as { text?: unknown }).text;
-      if (typeof txt === "string") textParts.push(txt);
+  // Legacy single-record builder. Kept for tests / reference but
+  // production paths now go through `buildMergedLlmCall` (which
+  // degenerates to this for singleton groups).
+  return buildMergedLlmCall([r]);
+}
+
+// EN (B / msg_id merge): CC writes one assistant jsonl record per
+// content block. A response with [thinking, tool_use, text] becomes
+// 3 records, all sharing `message.id`, each with one block in
+// `message.content[]` and an internal-chain parent (record 2.parent
+// = record 1.uuid, etc.). Building one LlmCallNode per record
+// produced near-empty "split" nodes — drilling into a thinking-only
+// or tool_use-only record's detail showed e.g. `Text: (空) +
+// Thinking (1 block, internal empty) + Usage` while the SIBLING
+// record had the actual content.
+//
+// Merging by message.id consolidates one logical API call into one
+// LlmCallNode. Information is strictly preserved (union of all
+// blocks across the group); intra-group parent edges collapse
+// (they were CC writer-internal chains, not meaningful workflow
+// edges); chainCount becomes semantic again (real chain breaks vs
+// split-record artifacts).
+//
+// 中: 按 message.id 合并多条 split assistant records 成一个逻辑
+// LlmCallNode。一次 API call 产出 N 条 record（thinking/text/
+// tool_use 各一块）共享 message.id；合并后 1 API call = 1 节点，
+// 内容并集，组内串行 parent 边自然 collapse。
+//
+// `messageId` is null for records that genuinely have no
+// `message.id` (extremely old / hand-crafted fixtures); each such
+// record gets its own group of size 1, so the legacy per-record
+// behaviour falls out naturally.
+export interface AssistantGroup {
+  messageId: string | null;
+  group: RawRecord[];
+}
+
+export function groupAssistantsByMessageId(
+  records: RawRecord[],
+): AssistantGroup[] {
+  // Walk records preserving first-seen order. For each assistant
+  // record, append to existing group if the messageId matches; else
+  // start a new group. Records without a messageId form singleton
+  // groups (so the iteration cost stays O(N) with a small Map).
+  const out: AssistantGroup[] = [];
+  // mid -> index into out[] (only valid for non-null messageIds; null
+  // ids always create fresh singletons, never coalesce)
+  const indexByMid = new Map<string, number>();
+  for (const r of records) {
+    if (r.type !== "assistant") continue;
+    const mid = r.message?.id ?? null;
+    if (mid === null) {
+      out.push({ messageId: null, group: [r] });
+      continue;
+    }
+    const existing = indexByMid.get(mid);
+    if (existing !== undefined) {
+      out[existing].group.push(r);
+    } else {
+      indexByMid.set(mid, out.length);
+      out.push({ messageId: mid, group: [r] });
     }
   }
+  return out;
+}
+
+export function buildMergedLlmCall(records: RawRecord[]): LlmCallNode {
+  if (records.length === 0) {
+    throw new Error("buildMergedLlmCall: empty records[]");
+  }
+  const first = records[0];
+  const thinking: ThinkingBlock[] = [];
+  const textParts: string[] = [];
+  for (const r of records) {
+    for (const b of blocksOf(r)) {
+      if (b.type === "thinking") {
+        thinking.push({
+          text: typeof b.thinking === "string" ? b.thinking : "",
+          signature: typeof b.signature === "string" ? b.signature : undefined,
+        });
+      } else if (b.type === "text") {
+        const txt = (b as { text?: unknown }).text;
+        if (typeof txt === "string") textParts.push(txt);
+      }
+      // tool_use / image / tool_use_reference blocks are NOT merged
+      // into the LlmCallNode — they spawn separate ToolCallNodes
+      // (or are filtered by buildToolCallOrDelegate). The merge here
+      // only gathers content that lives ON the llm_call itself.
+    }
+  }
+  // stop_reason: streamed responses can have transient values on
+  // earlier records; the FINAL record carries the resolved one. Take
+  // the last non-empty.
+  let stopReason: string | undefined;
+  for (const r of records) {
+    if (r.message?.stop_reason) stopReason = r.message.stop_reason;
+  }
   return {
-    id: r.uuid ?? "",
+    // id picks the first record's uuid — keeps cn.id stable across
+    // upgrade (no disk-cache schema break beyond the SCHEMA_VERSION
+    // bump that happens in step 2 anyway).
+    id: first.uuid ?? "",
     kind: "llm_call",
-    parentUuid: r.parentUuid ?? null,
-    requestId: r.requestId,
-    model: r.message?.model,
+    // Outermost parent — first record's parent points OUTSIDE the
+    // group (records 2..N's parents point at sibling records inside
+    // the group, which are CC-writer-internal chains we collapse).
+    parentUuid: first.parentUuid ?? null,
+    // Envelope fields are copied across split records (CC behavior),
+    // so any record gives the same value. Use first for stable ref.
+    requestId: first.requestId,
+    model: first.message?.model,
     text: textParts.join(""),
     thinking,
-    stopReason: r.message?.stop_reason,
-    usage: r.message?.usage,
-    timestamp: r.timestamp,
+    stopReason,
+    usage: first.message?.usage,
+    timestamp: first.timestamp,
   };
 }
 

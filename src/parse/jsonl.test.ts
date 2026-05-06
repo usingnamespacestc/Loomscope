@@ -30,7 +30,12 @@ import {
   parseAgentId,
   SidecarLoader,
 } from "./sidecar";
-import { buildWorkflow, DELEGATE_TOOL_NAMES } from "./workflow-builder";
+import {
+  buildMergedLlmCall,
+  buildWorkflow,
+  DELEGATE_TOOL_NAMES,
+  groupAssistantsByMessageId,
+} from "./workflow-builder";
 
 const FIXTURE_PATH = "/synthetic/main.jsonl";
 const FIXTURE_DIR = path.resolve(
@@ -93,6 +98,182 @@ describe("raw-record", () => {
       message: { role: "user", content: "plain text" },
     } as RawRecord;
     expect(blocksOf(r)).toEqual([]);
+  });
+});
+
+describe("workflow-builder — groupAssistantsByMessageId (B msg_id merge step 1)", () => {
+  it("groups two assistant records sharing message.id into one group", () => {
+    const recs: RawRecord[] = [
+      {
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u",
+        message: { id: "msg_X", role: "assistant", content: [{ type: "thinking", thinking: "" }] },
+      } as RawRecord,
+      {
+        type: "assistant",
+        uuid: "a2",
+        parentUuid: "a1",
+        message: { id: "msg_X", role: "assistant", content: [{ type: "tool_use", id: "tu1", name: "Bash", input: {} }] },
+      } as RawRecord,
+    ];
+    const groups = groupAssistantsByMessageId(recs);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messageId).toBe("msg_X");
+    expect(groups[0].group.map((r) => r.uuid)).toEqual(["a1", "a2"]);
+  });
+
+  it("isolates records without message.id into singleton groups", () => {
+    const recs: RawRecord[] = [
+      { type: "assistant", uuid: "a1", message: { role: "assistant" } } as RawRecord,
+      { type: "assistant", uuid: "a2", message: { role: "assistant" } } as RawRecord,
+    ];
+    const groups = groupAssistantsByMessageId(recs);
+    expect(groups).toHaveLength(2);
+    expect(groups.every((g) => g.messageId === null)).toBe(true);
+    expect(groups.every((g) => g.group.length === 1)).toBe(true);
+  });
+
+  it("preserves first-seen ordering across multiple groups", () => {
+    const recs: RawRecord[] = [
+      { type: "assistant", uuid: "a1", message: { id: "msg_A" } } as RawRecord,
+      { type: "assistant", uuid: "b1", message: { id: "msg_B" } } as RawRecord,
+      { type: "assistant", uuid: "a2", message: { id: "msg_A" } } as RawRecord,
+      { type: "assistant", uuid: "b2", message: { id: "msg_B" } } as RawRecord,
+    ];
+    const groups = groupAssistantsByMessageId(recs);
+    expect(groups.map((g) => g.messageId)).toEqual(["msg_A", "msg_B"]);
+    expect(groups[0].group.map((r) => r.uuid)).toEqual(["a1", "a2"]);
+    expect(groups[1].group.map((r) => r.uuid)).toEqual(["b1", "b2"]);
+  });
+
+  it("ignores non-assistant records", () => {
+    const recs: RawRecord[] = [
+      { type: "user", uuid: "u1" } as RawRecord,
+      { type: "assistant", uuid: "a1", message: { id: "msg_A" } } as RawRecord,
+      { type: "system", uuid: "s1" } as RawRecord,
+    ];
+    const groups = groupAssistantsByMessageId(recs);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].group[0].uuid).toBe("a1");
+  });
+});
+
+describe("workflow-builder — buildMergedLlmCall (B msg_id merge step 1)", () => {
+  it("merges thinking + text blocks across split records", () => {
+    const recs: RawRecord[] = [
+      {
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u",
+        message: {
+          id: "msg_X",
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "" }],
+          model: "claude-opus-4-7",
+          usage: { input_tokens: 10 },
+        },
+      } as RawRecord,
+      {
+        type: "assistant",
+        uuid: "a2",
+        parentUuid: "a1",
+        message: {
+          id: "msg_X",
+          role: "assistant",
+          content: [{ type: "text", text: "Hello." }],
+          model: "claude-opus-4-7",
+          usage: { input_tokens: 10 },
+          stop_reason: "end_turn",
+        },
+      } as RawRecord,
+    ];
+    const node = buildMergedLlmCall(recs);
+    expect(node.kind).toBe("llm_call");
+    expect(node.id).toBe("a1"); // first record's uuid
+    expect(node.parentUuid).toBe("u"); // first record's parent (= outside the group)
+    expect(node.thinking).toEqual([{ text: "", signature: undefined }]);
+    expect(node.text).toBe("Hello.");
+    expect(node.stopReason).toBe("end_turn"); // taken from last non-empty
+    expect(node.model).toBe("claude-opus-4-7");
+    expect(node.usage).toEqual({ input_tokens: 10 });
+  });
+
+  it("singleton group is byte-equivalent to the legacy buildLlmCall", () => {
+    const r: RawRecord = {
+      type: "assistant",
+      uuid: "a1",
+      parentUuid: "u",
+      requestId: "req-1",
+      timestamp: "2026-05-08T00:00:00Z",
+      message: {
+        id: "msg_X",
+        role: "assistant",
+        content: [
+          { type: "text", text: "lonely turn" },
+          { type: "thinking", thinking: "before" },
+        ],
+        model: "claude-opus-4-7",
+        stop_reason: "end_turn",
+        usage: { input_tokens: 5 },
+      },
+    } as RawRecord;
+    const merged = buildMergedLlmCall([r]);
+    // Field-by-field equivalence to the v0 single-record build
+    // contract (text, thinking, parentUuid, model, stopReason,
+    // requestId, usage, timestamp). Doesn't compare references —
+    // the helpers create new objects.
+    expect(merged.id).toBe("a1");
+    expect(merged.parentUuid).toBe("u");
+    expect(merged.text).toBe("lonely turn");
+    expect(merged.thinking).toEqual([{ text: "before", signature: undefined }]);
+    expect(merged.model).toBe("claude-opus-4-7");
+    expect(merged.stopReason).toBe("end_turn");
+    expect(merged.requestId).toBe("req-1");
+    expect(merged.timestamp).toBe("2026-05-08T00:00:00Z");
+    expect(merged.usage).toEqual({ input_tokens: 5 });
+  });
+
+  it("text from multiple records concatenates in record order", () => {
+    const recs: RawRecord[] = [
+      { type: "assistant", uuid: "a1", message: { id: "m", content: [{ type: "text", text: "Part 1. " }] } } as RawRecord,
+      { type: "assistant", uuid: "a2", message: { id: "m", content: [{ type: "text", text: "Part 2." }] } } as RawRecord,
+    ];
+    const node = buildMergedLlmCall(recs);
+    expect(node.text).toBe("Part 1. Part 2.");
+  });
+
+  it("stopReason takes the last non-empty value (streaming intermediates lose to final)", () => {
+    const recs: RawRecord[] = [
+      { type: "assistant", uuid: "a1", message: { id: "m", stop_reason: "tool_use" } } as RawRecord,
+      { type: "assistant", uuid: "a2", message: { id: "m", stop_reason: "end_turn" } } as RawRecord,
+    ];
+    expect(buildMergedLlmCall(recs).stopReason).toBe("end_turn");
+  });
+
+  it("tool_use blocks are NOT folded into the LlmCallNode body (they spawn separate ToolCallNodes)", () => {
+    const recs: RawRecord[] = [
+      {
+        type: "assistant",
+        uuid: "a1",
+        message: {
+          id: "m",
+          content: [
+            { type: "thinking", thinking: "" },
+            { type: "tool_use", id: "tu1", name: "Bash", input: { command: "ls" } },
+          ],
+        },
+      } as RawRecord,
+    ];
+    const node = buildMergedLlmCall(recs);
+    expect(node.thinking).toHaveLength(1);
+    expect(node.text).toBe("");
+    // No `tools` or `tool_use` field on LlmCallNode — design intent.
+    expect("tools" in node).toBe(false);
+  });
+
+  it("throws on empty records[] (caller invariant)", () => {
+    expect(() => buildMergedLlmCall([])).toThrow();
   });
 });
 
