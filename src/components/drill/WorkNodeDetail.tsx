@@ -166,6 +166,15 @@ function LlmCallDetail({
 
   return (
     <>
+      <Section title="Model / Request">
+        <ul className="text-[11px] text-gray-700 font-mono space-y-0.5">
+          <li>model: {node.model ?? "—"}</li>
+          {node.requestId && <li>requestId: {node.requestId}</li>}
+          {node.stopReason && <li>stop_reason: {node.stopReason}</li>}
+          {node.parentUuid && <li>parentUuid: {node.parentUuid}</li>}
+        </ul>
+      </Section>
+
       <Section title="Input · 上下文">
         <button
           type="button"
@@ -176,6 +185,17 @@ function LlmCallDetail({
           <span>📜 Conversation 截止此节点（点击切到 Conversation 面板）</span>
           <span className="font-mono text-[10px] opacity-70">→</span>
         </button>
+        {chainHistory.length > 0 && (
+          <div className="mt-1.5">
+            <ChainHistoryToggle
+              history={chainHistory}
+              llmCount={chainLlmCount}
+              toolCount={chainToolCount}
+              onPanelView={onPanelView}
+              onCanvasLocate={onCanvasLocate}
+            />
+          </div>
+        )}
         <p
           className="mt-1.5 text-[10px] leading-relaxed text-gray-400"
           data-testid="llm-input-system-note"
@@ -184,15 +204,6 @@ function LlmCallDetail({
           这两部分在 CC 启动时由 base prompt + CLAUDE.md + settings + tool
           registry 拼接，不写入 jsonl，所以这里无法呈现。
         </p>
-      </Section>
-
-      <Section title="Model / Request">
-        <ul className="text-[11px] text-gray-700 font-mono space-y-0.5">
-          <li>model: {node.model ?? "—"}</li>
-          {node.requestId && <li>requestId: {node.requestId}</li>}
-          {node.stopReason && <li>stop_reason: {node.stopReason}</li>}
-          {node.parentUuid && <li>parentUuid: {node.parentUuid}</li>}
-        </ul>
       </Section>
 
       <Section title="Output · Text">
@@ -239,16 +250,6 @@ function LlmCallDetail({
             ))}
           </ul>
         </Section>
-      )}
-
-      {chainHistory.length > 0 && (
-        <ChainHistorySection
-          history={chainHistory}
-          llmCount={chainLlmCount}
-          toolCount={chainToolCount}
-          onPanelView={onPanelView}
-          onCanvasLocate={onCanvasLocate}
-        />
       )}
 
       {node.usage && (
@@ -341,9 +342,13 @@ function describeNodeForNav(n: WorkNode): string {
   return n.id.slice(0, 8);
 }
 
-// PR 2-C: chain-internal accumulation, default-folded so the heavy
-// content stays out of the way until the user asks for it.
-function ChainHistorySection({
+// PR 2.1: chain-internal accumulation toggle. Renders inline inside
+// the input Section (PR 2.1 step 2 corrected the placement: the chain
+// history IS part of the LLM's input, not its output, since CC's
+// API request includes the prior thinking/tool_use/tool_result from
+// the same chain). Default-folded so the heavy content doesn't push
+// the rest of the panel below the fold.
+function ChainHistoryToggle({
   history,
   llmCount,
   toolCount,
@@ -358,7 +363,7 @@ function ChainHistorySection({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <section data-testid="llm-chain-history">
+    <div data-testid="llm-chain-history">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -386,7 +391,7 @@ function ChainHistorySection({
           ))}
         </ul>
       )}
-    </section>
+    </div>
   );
 }
 

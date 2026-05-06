@@ -210,29 +210,68 @@ export function layoutWorkFlow(chatNode: ChatNode): LayoutWorkFlowResult {
   // Build edges from ``parentUuid``. ``spawn`` (orange triangle) when
   // parent is an llm_call and child is a tool_call/delegate — the
   // tool was emitted by that LLM turn. Otherwise ``continuation`` (gray).
+  //
+  // PR 2.1 step 4: tool-fan-in for continuation edges. CC's parentUuid
+  // chain only records the LAST tool_result of a multi-tool round, so
+  // a naive parentUuid walk would produce a single t_last → l_next
+  // edge. But the next API call sees ALL tool_results from that round
+  // as input — so the canonical information-flow visualisation is
+  // {t_1, t_2, ..., t_n} → l_next. When a continuation edge would
+  // resolve through a tool_call/delegate parent, we emit additional
+  // edges from every sibling tool/delegate that shares the same
+  // upstream llm_call. Visual + structural intent: a wide fan-in
+  // arrow pattern reflects the actual prompt assembly.
   const edges: RFEdge[] = [];
   const incoming = new Set<string>();
   const outgoing = new Set<string>();
   const byId = new Map(wf.nodes.map((n) => [n.id, n] as const));
+  const addEdge = (
+    sourceId: string,
+    targetId: string,
+    kind: "spawn" | "continuation",
+  ) => {
+    const id = `we-${sourceId}->${targetId}`;
+    if (edges.some((e) => e.id === id)) return; // dedupe in case fan-in
+    g.setEdge(sourceId, targetId);
+    edges.push({ id, source: sourceId, target: targetId, type: kind });
+    incoming.add(targetId);
+    outgoing.add(sourceId);
+  };
   for (const child of wf.nodes) {
     const parentId = resolveParent(child.parentUuid);
     if (!parentId) continue;
     const parent = byId.get(parentId);
     if (!parent) continue;
-    const kind: "spawn" | "continuation" =
+    if (
       parent.kind === "llm_call" &&
       (child.kind === "tool_call" || child.kind === "delegate")
-        ? "spawn"
-        : "continuation";
-    g.setEdge(parentId, child.id);
-    edges.push({
-      id: `we-${parentId}->${child.id}`,
-      source: parentId,
-      target: child.id,
-      type: kind,
-    });
-    incoming.add(child.id);
-    outgoing.add(parentId);
+    ) {
+      // spawn: l → t
+      addEdge(parentId, child.id, "spawn");
+      continue;
+    }
+    if (
+      child.kind === "llm_call" &&
+      (parent.kind === "tool_call" || parent.kind === "delegate")
+    ) {
+      // continuation through a tool_result. Fan in from every sibling
+      // tool/delegate that shares the same upstream llm_call.
+      const upstreamLlmId = parent.parentUuid;
+      const siblings = wf.nodes.filter(
+        (n) =>
+          (n.kind === "tool_call" || n.kind === "delegate") &&
+          n.parentUuid === upstreamLlmId,
+      );
+      // siblings always includes ``parent`` itself; emit at least that
+      // edge even if siblings list is empty (defensive).
+      const sources = siblings.length > 0 ? siblings : [parent];
+      for (const sib of sources) {
+        addEdge(sib.id, child.id, "continuation");
+      }
+      continue;
+    }
+    // Other continuation cases (e.g. llm → llm direct, attachment chains).
+    addEdge(parentId, child.id, "continuation");
   }
 
   dagre.layout(g);

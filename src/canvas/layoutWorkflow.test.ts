@@ -191,6 +191,117 @@ describe("layoutWorkFlow — graph construction", () => {
   });
 });
 
+// PR 2.1 step 4: when a single llm_call spawns multiple tool_calls,
+// the next-round llm_call sees ALL their tool_results as input, but
+// CC's parentUuid only chains through the LAST tool. layoutWorkFlow
+// fans those edges in to reflect the actual information flow.
+describe("layoutWorkFlow — multi-tool fan-in continuation", () => {
+  it("emits continuation edges from EVERY sibling tool to the next llm_call", () => {
+    // l1 → {t1, t2, t3} → l2. l2.parentUuid points at t3's
+    // resultUserUuid (CC convention). All 3 tools must connect to l2.
+    const cn = makeChatNode({
+      nodes: [
+        llm({ id: "l1" }),
+        tool({ id: "t1", parentUuid: "l1", resultUserUuid: "u-t1" }),
+        tool({ id: "t2", parentUuid: "l1", resultUserUuid: "u-t2" }),
+        tool({ id: "t3", parentUuid: "l1", resultUserUuid: "u-t3" }),
+        llm({ id: "l2", parentUuid: "u-t3" }),
+      ],
+      edges: [],
+    });
+    const { edges } = layoutWorkFlow(cn);
+    const intoL2 = edges.filter((e) => e.target === "l2");
+    expect(intoL2).toHaveLength(3);
+    const sources = intoL2.map((e) => e.source).sort();
+    expect(sources).toEqual(["t1", "t2", "t3"]);
+    expect(intoL2.every((e) => e.type === "continuation")).toBe(true);
+  });
+
+  it("fan-in mixes tool_call + delegate siblings (both kinds reach the next llm_call)", () => {
+    // l1 → {t1 (tool), d1 (delegate)} → l2.
+    const cn = makeChatNode({
+      nodes: [
+        llm({ id: "l1" }),
+        tool({ id: "t1", parentUuid: "l1", resultUserUuid: "u-t1" }),
+        delegate({ id: "d1", parentUuid: "l1", resultUserUuid: "u-d1" }),
+        llm({ id: "l2", parentUuid: "u-d1" }),
+      ],
+      edges: [],
+    });
+    const { edges } = layoutWorkFlow(cn);
+    const intoL2 = edges.filter((e) => e.target === "l2");
+    expect(intoL2).toHaveLength(2);
+    expect(intoL2.map((e) => e.source).sort()).toEqual(["d1", "t1"]);
+  });
+
+  it("single-tool case unchanged (1 sibling = 1 continuation edge)", () => {
+    // Sanity-check the regression: pre-PR 2.1 the single-tool case
+    // emitted exactly one t1→l2 continuation; the fan-in path must
+    // not duplicate that.
+    const cn = makeChatNode({
+      nodes: [
+        llm({ id: "l1" }),
+        tool({ id: "t1", parentUuid: "l1", resultUserUuid: "u-res" }),
+        llm({ id: "l2", parentUuid: "u-res" }),
+      ],
+      edges: [],
+    });
+    const { edges } = layoutWorkFlow(cn);
+    const intoL2 = edges.filter((e) => e.target === "l2");
+    expect(intoL2).toHaveLength(1);
+    expect(intoL2[0].source).toBe("t1");
+  });
+
+  it("two consecutive multi-tool rounds: each round's tools fan in to the round's next llm_call", () => {
+    // Chain: l1 → {t1, t2} → l2 → {t3, t4} → l3.
+    // Expected continuation edges into l2: from t1, t2.
+    // Expected continuation edges into l3: from t3, t4.
+    const cn = makeChatNode({
+      nodes: [
+        llm({ id: "l1" }),
+        tool({ id: "t1", parentUuid: "l1", resultUserUuid: "u-t1" }),
+        tool({ id: "t2", parentUuid: "l1", resultUserUuid: "u-t2" }),
+        llm({ id: "l2", parentUuid: "u-t2" }),
+        tool({ id: "t3", parentUuid: "l2", resultUserUuid: "u-t3" }),
+        tool({ id: "t4", parentUuid: "l2", resultUserUuid: "u-t4" }),
+        llm({ id: "l3", parentUuid: "u-t4" }),
+      ],
+      edges: [],
+    });
+    const { edges } = layoutWorkFlow(cn);
+    const intoL2 = edges
+      .filter((e) => e.target === "l2")
+      .map((e) => e.source)
+      .sort();
+    const intoL3 = edges
+      .filter((e) => e.target === "l3")
+      .map((e) => e.source)
+      .sort();
+    expect(intoL2).toEqual(["t1", "t2"]);
+    expect(intoL3).toEqual(["t3", "t4"]);
+  });
+
+  it("hasIncomingEdge / hasOutgoingEdge still correct under fan-in (every sibling tool now has outgoing)", () => {
+    // Pre-PR 2.1 only the LAST tool had outgoing=true; siblings showed
+    // no downstream handle. Fan-in fix: ALL siblings should have
+    // hasOutgoingEdge=true.
+    const cn = makeChatNode({
+      nodes: [
+        llm({ id: "l1" }),
+        tool({ id: "t1", parentUuid: "l1", resultUserUuid: "u-t1" }),
+        tool({ id: "t2", parentUuid: "l1", resultUserUuid: "u-t2" }),
+        llm({ id: "l2", parentUuid: "u-t2" }),
+      ],
+      edges: [],
+    });
+    const { nodes } = layoutWorkFlow(cn);
+    const t1 = nodes.find((n) => n.id === "t1")!;
+    const t2 = nodes.find((n) => n.id === "t2")!;
+    expect(t1.data.hasOutgoingEdge).toBe(true);
+    expect(t2.data.hasOutgoingEdge).toBe(true);
+  });
+});
+
 describe("preview helpers", () => {
   it("previewLlmCallText collapses whitespace + truncates", () => {
     const long = "a".repeat(300);
