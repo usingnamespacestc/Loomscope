@@ -268,3 +268,91 @@ describe("ChatNodeCard — fork indicator chip (v0.8 M5)", () => {
     expect(screen.queryByTestId("chat-node-p-single-fork-indicator")).toBeNull();
   });
 });
+
+// PR 2.4: hybrid ChatNode = real user prompt + inline mid-turn compact.
+// Real CC sessions: 96% of compacts land in this shape (user-trigger
+// auto-compact in the middle of an active turn). Card stays normal
+// chrome but shows a ⊞ chip with preTokens to flag the inline compact.
+describe("ChatNodeCard — inner-compact chip (PR 2.4 hybrid)", () => {
+  function hybridProps(id: string, hasInner: boolean, preTokens: number | null) {
+    const cn: ChatNode = {
+      kind: "chat",
+      id,
+      parentChatNodeId: null,
+      rootUserUuid: "u-1",
+      userMessage: { uuid: "u-1", content: "real user prompt", attachments: [] },
+      workflow: {
+        nodes: [{ id: "l1", kind: "llm_call", parentUuid: null, text: "reply", thinking: [] }],
+        edges: [],
+      },
+      trigger: "user",
+      isCompactSummary: false,
+      hasInnerCompact: hasInner,
+      meta: {},
+    };
+    return {
+      id: cn.id,
+      type: "chatNode",
+      data: {
+        chatNode: cn,
+        userPreview: "real user prompt",
+        assistantPreview: "reply",
+        toolCount: 0,
+        llmCount: 1,
+        chainCount: 1,
+        totalThinkingChars: 0,
+        isCompactSummary: false,
+        hasInnerCompact: hasInner,
+        innerCompactPreTokens: preTokens,
+        fileTouchCount: 0,
+        nodeOwnFileChangeCount: 0,
+        childCount: 0,
+        contextTokens: 12_000,
+        maxContextTokens: 200_000,
+        slashCommand: undefined,
+        hasIncomingEdge: false,
+        hasOutgoingEdge: false,
+      },
+      selected: false,
+      dragging: false,
+      isConnectable: false,
+      zIndex: 0,
+      selectable: true,
+      deletable: true,
+      draggable: false,
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      width: 200,
+      height: 100,
+      sourcePosition: undefined,
+      targetPosition: undefined,
+      dragHandle: undefined,
+      parentId: undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+  }
+
+  it("renders ⊞ chip with preTokens when hasInnerCompact is true", () => {
+    render(withRF(<ChatNodeCard {...hybridProps("p-hybrid", true, 169_686)} />));
+    const chip = screen.getByTestId("chat-node-p-hybrid-inner-compact");
+    expect(chip).toBeTruthy();
+    expect(chip.textContent).toContain("⊞");
+    expect(chip.textContent).toMatch(/170K|169K/i);
+    expect(chip.title).toMatch(/inline compact/i);
+    expect(chip.title).toMatch(/preTokens/);
+  });
+
+  it("renders ⊞ chip without preTokens label when innerCompactPreTokens is null", () => {
+    render(withRF(<ChatNodeCard {...hybridProps("p-hybrid-2", true, null)} />));
+    const chip = screen.getByTestId("chat-node-p-hybrid-2-inner-compact");
+    expect(chip.textContent).toContain("⊞");
+    expect(chip.title).toMatch(/inline compact/i);
+    // No preTokens segment — title shouldn't include "preTokens".
+    expect(chip.title).not.toMatch(/preTokens/);
+  });
+
+  it("hides chip when hasInnerCompact is false (normal turn without compact)", () => {
+    render(withRF(<ChatNodeCard {...hybridProps("p-normal", false, null)} />));
+    expect(screen.queryByTestId("chat-node-p-normal-inner-compact")).toBeNull();
+  });
+});

@@ -559,6 +559,115 @@ describe("workflow-builder — buildWorkflow with split-assistant fixtures (B st
     expect(summary?.chainCount).toBe(1);
   });
 
+  // PR 2.4: hybrid ChatNode = real user prompt + isCompactSummary user
+  // record in the same promptId bucket. Real CC sessions show this in
+  // ~96% of compacts (user fires auto-compact mid-turn, the synthetic
+  // resume marker stays under the same promptId). Pre-fix, isCompact
+  // got set to true regardless of whether nonMetaUser existed,
+  // overlaying compact chrome on top of a real-work turn.
+  it("hybrid bucket (real prompt + isCompactSummary user) → isCompactSummary=false, hasInnerCompact=true", () => {
+    const records: RawRecord[] = [
+      // Real user prompt
+      {
+        type: "user",
+        uuid: "u-real",
+        promptId: "p-hybrid",
+        message: { role: "user", content: "do the task" },
+      } as RawRecord,
+      // Pre-compact assistant work
+      {
+        type: "assistant",
+        uuid: "llm-1",
+        parentUuid: "u-real",
+        message: {
+          id: "msg_A",
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tu-1", name: "Bash", input: {} }],
+        },
+      } as RawRecord,
+      {
+        type: "user",
+        uuid: "u-tr-1",
+        promptId: "p-hybrid",
+        parentUuid: "llm-1",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tu-1", content: "ok" }],
+        },
+      } as RawRecord,
+      // CC fires auto-compact mid-turn — synthetic resume marker
+      {
+        type: "user",
+        uuid: "u-compact",
+        promptId: "p-hybrid",
+        parentUuid: "u-tr-1",
+        isCompactSummary: true,
+        isVisibleInTranscriptOnly: true,
+        message: {
+          role: "user",
+          content: "This session is being continued from a previous conversation...",
+        },
+      } as RawRecord,
+      // Post-compact assistant
+      {
+        type: "assistant",
+        uuid: "llm-2",
+        parentUuid: "u-compact",
+        message: {
+          id: "msg_B",
+          role: "assistant",
+          content: [{ type: "text", text: "continuing" }],
+          stop_reason: "end_turn",
+        },
+      } as RawRecord,
+    ];
+    const cf = parseJsonlText(recordsToJsonl(records), FIXTURE_PATH).chatFlow;
+    const cn = cf.chatNodes.find((c) => c.id === "p-hybrid");
+    expect(cn).toBeTruthy();
+    if (!cn) return;
+    expect(cn.isCompactSummary).toBe(false);  // real prompt wins → not pure compact
+    expect(cn.hasInnerCompact).toBe(true);    // but compact happened inside
+    expect(cn.compactMetadata).toBeTruthy();   // metadata still surfaced for chip
+    // userMessage shows the REAL prompt, not the synthesised resume.
+    expect(typeof cn.userMessage.content === "string"
+      ? cn.userMessage.content
+      : "").toMatch(/do the task/);
+  });
+
+  it("pure compact bucket (only isCompactSummary user, no real prompt) → isCompactSummary=true, hasInnerCompact=true", () => {
+    const records: RawRecord[] = [
+      // Only the synthetic compact resume marker — no real user prompt.
+      {
+        type: "user",
+        uuid: "u-compact-only",
+        promptId: "p-pure",
+        isCompactSummary: true,
+        isVisibleInTranscriptOnly: true,
+        message: {
+          role: "user",
+          content: "This session is being continued from a previous conversation...",
+        },
+      } as RawRecord,
+      {
+        type: "assistant",
+        uuid: "llm-1",
+        parentUuid: "u-compact-only",
+        message: {
+          id: "msg_A",
+          role: "assistant",
+          content: [{ type: "text", text: "continuing" }],
+          stop_reason: "end_turn",
+        },
+      } as RawRecord,
+    ];
+    const cf = parseJsonlText(recordsToJsonl(records), FIXTURE_PATH).chatFlow;
+    const cn = cf.chatNodes.find((c) => c.id === "p-pure");
+    expect(cn).toBeTruthy();
+    if (!cn) return;
+    expect(cn.isCompactSummary).toBe(true);   // pure compact ChatNode chrome
+    expect(cn.hasInnerCompact).toBe(true);    // chip metadata still set
+  });
+
   it("chainCount = 1 when a compact_boundary sits between two llm_calls", () => {
     const records: RawRecord[] = [
       { type: "user", uuid: "u-prompt", promptId: "p1", message: { role: "user", content: "" } } as RawRecord,

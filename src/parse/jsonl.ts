@@ -754,14 +754,32 @@ function buildChatNode(
     attachments,
   };
 
-  // Compact pairing.
+  // Compact pairing. Two distinct shapes:
+  //   - Pure compact ChatNode: bucket carries an isCompactSummary user
+  //     record but NO real (non-meta, non-compactSummary) user prompt.
+  //     This is the canonical compact "boundary ChatNode" — the
+  //     synthetic resume-from-summary node CC inserts when compact
+  //     fully closes the previous chain.
+  //   - Hybrid ChatNode: bucket carries a real user prompt AND a
+  //     compactSummary record. CC fired auto-compact mid-turn (the
+  //     same promptId hosts pre-compact assistant work, the compact
+  //     boundary, the synthetic resume marker, and post-compact
+  //     assistant work). Real-data scan: 96% of compacts in observed
+  //     sessions land in the hybrid shape.
+  // We only set isCompactSummary when there's NO real prompt, keeping
+  // ChatNodeCard's compact chrome reserved for the pure shape; hybrid
+  // ChatNodes display as normal turns plus an inner-compact chip.
+  // hasInnerCompact tracks "this turn has an inline compact" for
+  // either shape — surfaces in compactMetadata-driven UI without
+  // requiring the chrome flip.
   let isCompact = false;
   let boundaryRec: RawRecord | undefined;
   if (compactUser) {
-    isCompact = true;
+    if (!nonMetaUser) isCompact = true;
     const pUuid = compactUser.parentUuid ?? "";
     boundaryRec = boundariesByUuid.get(pUuid);
   }
+  const hasInnerCompact = !!compactUser;
 
   const workflow = buildWorkflow(bucket.records, {
     compactRecord: compactUser,
@@ -861,6 +879,7 @@ function buildChatNode(
     workflow,
     trigger,
     isCompactSummary: isCompact,
+    hasInnerCompact,
     compactMetadata:
       compactWorkNode && compactWorkNode.kind === "compact" ? compactWorkNode : undefined,
     slashCommand,

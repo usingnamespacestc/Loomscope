@@ -342,6 +342,15 @@ export interface ChatNode extends NodeBase {
   trigger: ChatNodeTrigger;
   triggerSource?: { workNodeId: string };
   isCompactSummary: boolean;
+  /** True when this ChatNode's bucket carried a compact_summary user
+   * record AND a real user prompt — i.e. CC fired auto-compact mid-
+   * turn and continued the same promptId after the boundary. The
+   * ChatNode is a hybrid: regular turn that *also* contains an
+   * inline compact. The card stays the normal ChatNode chrome (real
+   * work was done here) and surfaces an inner-compact chip as a
+   * marker. Optional so existing test fixtures stay valid; parser
+   * always populates explicitly. */
+  hasInnerCompact?: boolean;
   compactMetadata?: CompactNode;
   /** When set: this ChatNode is a slash-command invocation, not a real
    * conversation turn. Render specially. */

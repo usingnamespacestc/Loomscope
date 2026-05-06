@@ -230,6 +230,20 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
             <span className="font-mono">{data.chainCount}</span>
           </span>
         )}
+        {data.hasInnerCompact && (
+          <span
+            className="inline-flex items-center gap-0.5 rounded border border-teal-300 bg-teal-50 px-1 text-teal-800"
+            title={`本 turn 内含 inline compact${data.innerCompactPreTokens ? ` — preTokens ${formatTokensCompact(data.innerCompactPreTokens)} (压缩前上下文体量)` : ""}。CC 在 turn 中段触发了 auto-compact，本 ChatNode 同时承载了真实 prompt + pre/post-compact 工作。`}
+            data-testid={`chat-node-${cn.id}-inner-compact`}
+          >
+            <span>⊞</span>
+            {data.innerCompactPreTokens != null && (
+              <span className="font-mono text-[9px]">
+                {formatTokensCompact(data.innerCompactPreTokens)}
+              </span>
+            )}
+          </span>
+        )}
         <span
           className="inline-flex items-center gap-0.5"
           title={`${data.toolCount} 次工具调用（tool_call + delegate）`}

@@ -38,6 +38,16 @@ export interface ChatNodeRFData extends Record<string, unknown> {
   chainCount: number;
   totalThinkingChars: number;
   isCompactSummary: boolean;
+  // True when the ChatNode is a hybrid: real user prompt + an inline
+  // compact happened mid-turn (96% of compacts in real CC sessions).
+  // Drives a ⊞ marker chip on ChatNodeCard so the user can tell the
+  // node's contextTokens dropped because of compaction. Pure compact
+  // ChatNodes (no real prompt) keep isCompactSummary chrome instead.
+  hasInnerCompact: boolean;
+  // Pre-compact context size from compactMetadata.preTokens — surfaced
+  // in the inner-compact chip's tooltip so the user sees the magnitude
+  // of the drop.
+  innerCompactPreTokens: number | null;
   // Cumulative working-tree-dirty count, derived from
   // ChatNode.meta.fileHistorySnapshots[*].trackedFiles. Used for the
   // 📁 N stats chip on ChatNodeCard. = "本轮累积文件改动" — every
@@ -406,6 +416,8 @@ function deriveCardData(
         return acc + n.thinking.reduce((a, t) => a + (t.text?.length ?? 0), 0);
       }, 0),
     isCompactSummary: cn.isCompactSummary,
+    hasInnerCompact: cn.hasInnerCompact ?? false,
+    innerCompactPreTokens: cn.compactMetadata?.preTokens ?? null,
     fileTouchCount: distinctTouchedFiles(cn).size,
     nodeOwnFileChangeCount: nodeOwnFileChanges(cn, chatFlow).size,
     childCount,
