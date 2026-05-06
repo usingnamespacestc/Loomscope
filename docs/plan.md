@@ -19,12 +19,12 @@
 | **v0.8** | fork 浏览 | parser 读 `forkedFrom` + `custom-title` / server merge fork 树 / **DrillPanel 2-tab（Detail + Conversation）** / ConversationView + branchMemory（在 Conversation tab 内）/ canvas fork ⑂ N indicator | ✅ shipped 2026-05-04 commits `c1e9e74` → M6 |
 | **v0.8.1** | 12 issue polish batch + 浏览器实测 hand-tuning | DrillPanel chrome / Conversation 滚动+lazy load+复制+灰化 / hover-pan+auto-unfold / typography theme.extend / panel fullscreen / 文件改动语义拆分 / logical edge 视觉删除 / fold handle 条件渲染 + 之后 13 commits 实测打磨（resize lag perf / typography fallback / 复制按钮位置 / chip 颜色 / hover 视觉反馈 / 卡片 ✏️ chip）| ✅ shipped 2026-05-04 晚 commits `dc5f20a` → `6413420` + 2026-05-05 hand-tuning `f815626` → `696efda`（409/409；handoff `handoff-v0.8.1-polish-batch.md`）|
 | **v0.9** | file-tail mode | 监听 jsonl mtime 增量更新 canvas | 🚧 spike `3153381`（chokidar+SSE+refresh，端到端通；真增量 parser / sidecar / 新 session 发现 / live indicator 留 v0.9.1）|
-| **v0.10** | polish & 性能 | empty state UI / syntax highlight / 快捷键 / audit fix / bundle code-split / LRU 缓存 / lazy ChatFlow（lite endpoint + per-cn workflow batch + summary）| 🚧 进行中 commits `0ed4a89` → `6635a5a`（458/458；session 打开 340ms→26ms / 87% bytes 减；canvas + DrillPanel + WorkFlowCanvas 已切到 lazy；ConversationView B5 待做）|
-| **v1.0** | ship | README / 截图 / 一键启动指令 | |
-| **v∞.0** | live read-only | 文件监听 + settings.json hooks push，浏览器实时观察终端 CC | |
-| **v∞.1** | 启动新 session | 从 Loomscope 起 CC（subprocess 或 Agent SDK） | |
-| **v∞.2** | 续接 prompt（leaf） | Conversation tab 底部加 composer input box；leaf-continuation 写新 turn（Loomscope 独占该 session） | |
-| **v∞.3** | 任意节点 fork（"120% of CC"） | 解除 v∞.2 的 leaf-only 限制；focused 节点可以是任意 ChatNode（含 assistant、旁支），composer 自动用 focused.末 assistant uuid 作为 parentUuid；"导出为独立 session"按钮等价 CC `/branch` 但任意起点 | |
+| **v0.10** | polish & 性能 | empty state / syntax highlight / 快捷键 / bundle split / LRU / lazy ChatFlow B1-B5 / v0.9.2 batch (a/b/c/d) / 收尾 (localStorage GC + WorkFlow viewport + follow-on-leaf) / perf 加强 (LazyMarkdownView + opacity gate + disk cache + M0+M1+M2 incremental parser) | ✅ shipped 2026-05-06 全天；563/563；244 MB session 实测 cold→warm 7s→4s（disk cache）；增量 parser 5/27/108 MB cold→incr 11×/5×/4× |
+| **v1.0** | ship | README + 截图 + GIF + npx packaging + bin entry + auto session picker | 🚧 README + single-process serve done (`310dc20`)；bin/publish/screenshots 待 |
+| **v∞.0** | live read-only | 文件监听 + settings.json hooks push，浏览器实时观察终端 CC + PermissionRequest banner | ✅ shipped 2026-05-06 晚 PR 1-4 (`a437d30` / `dd7b301` / `a7b0bb5` / `ca1ee0a`) + bug fixes (`246ae0c` schema / `7f74e34` CORS / `0105ee6` staleSince) |
+| **v∞.1** | 启动新 session | SDK `query()` 起 CC headless，writes ~/.claude/projects/<encoded-cwd>/<sid>.jsonl，Loomscope chokidar 自动渲染 | |
+| **v∞.2** | 续接 prompt（leaf） | Conversation tab 底部 composer input；SDK `query({resume, prompt})` leaf-continuation；前置：mtime advisory lock + 冲突检测 | |
+| **v∞.3** | 任意节点 fork（"120% of CC"） | SDK `resumeSessionAt: messageId` —— canvas 上点任意 ChatNode（含 assistant / 旁支）作为 fork 起点 | |
 
 ## v0.1 — parser（详细）
 
@@ -511,23 +511,56 @@ agent ship 完后 user 浏览器实测发现的小问题逐条手工打磨。每
 
 **架构产物**：`useChatNodeWorkflow` hook 是 component-level 抽象，未来 v0.9 file-tail / v∞.0 live update 触发 cache 失效时 hook 自动 refetch。LRU + lite 视图模式让未来"按字段聚合 / 跨 cn batch"等新查询 0 成本加。
 
-### v0.10 收尾批（小活，单刀做完）
+### v0.10 收尾批 ✅ shipped 2026-05-06 中午
 
-- localStorage GC：session 从 sidebar 删 / 文件不存在时清掉对应 `loomscope:unfold:<sid>` / `loomscope:fold:<sid>` / branchMemory
-- WorkFlow viewport 持久化：drill 内切换 ChatNode 时 WorkFlow canvas 自身 zoom/pan 保留（store 级，不写 localStorage——太细）
-- WorkFlow drill follow-on-leaf：commit `3ea2248` 提到要跟数据形态那批一起做但漏了；refresh 时若 `workflowSelectedNodeId` 是新 WorkNode 的父节点，focus 跟到新 leaf
+| commit | 内容 |
+|---|---|
+| `7424668` | localStorage GC — `removeSession` action + workspace SSE `reason:"remove"` 接线（session jsonl 被 unlink → in-memory 清 + `loomscope:unfold:<sid>` / 老的 `loomscope:fold:<sid>` 清） |
+| `d14864a` | WorkFlow viewport stash + follow-on-leaf — `SessionState.workflowViewports: Map<chatNodeId, vp>`，drill 切换 ChatNode 间 zoom/pan 保留；refreshSession 在 `workflowSelectedNodeId` 是新 WorkNode 父节点时跟到新 leaf |
+
+### v0.10 perf 加强批 ✅ shipped 2026-05-06 中午-晚
+
+跟 v0.9.2 batch 同条思路继续往下推，三个独立维度：
+
+| 段 | commit | 内容 + 收益 |
+|---|---|---|
+| **A · LazyMarkdownView** | `ecab1b3` | ConversationView 长列表里的 markdown pipeline 视口门控，rootMargin 1000 px。修 37 MB session conversation 6 s 渲染延迟（remark+rehype 30 个 bubble × 150 ms）。eager fallback for happy-dom 测试环境 |
+| **C · ChatFlowCanvas 首次 paint opacity 闸门** | `6bb67ef` | RF 默认 viewport 一帧的"复杂树形闪过"用 80 ms opacity:0→1 fade 遮住。大 session 切换时不再视觉碎片 |
+| **B · 持久化磁盘 cache** | `b334b8b` | `~/.loomscope/cache/<sid>.json`，atomic write + mtime+size guard + schema 版本失效。bench 244 MB real session 2.3 s cold → 1.0 s 二开（2.2×）；37 MB 1.6× |
+| **M0 · 增量 parser API** | `f65ecef` | `parseJsonlFileIncremental(prev, path)` —— 从 `byteSize` 起读 tail，appended-only growth 跳全文扫；`pendingFragment` 兜 mid-write 撕裂；fallback 全量 on shrink/error |
+| **M1 · cache 接增量** | `74d9581` | per-session `IncrementalParseState` stash，跨 LRU 失效保活。bench：5/27/108 MB → 2.7×/2.4×/2.1× |
+| **M2 · per-bucket reuse** | `3e7e618` | `buildChatFlow` 加 `reusePrev` —— 没碰过的 bucket 直接复用旧 ChatNode，砍掉 `buildChatNode×N` 大头。bench 5/27/108 MB cold→incr：83/225/973 ms → 7/43/235 ms（11.1× / 5.2× / 4.1×）。property test 钉死："任意 split 点 M2 reuse 跟 full rebuild 字节相等" |
+| **README + ship prep** | `310dc20` | README 重写覆盖 v0.x + v∞.0；Hono 加可选 staticDir 让单进程 serve 前端 + API；`npm run start` 脚本 |
+
+### v∞.0 read-only 远程观察 ✅ shipped 2026-05-06 晚
+
+CC settings.json HTTP hooks → SSE → 浏览器实时画面，含 PermissionRequest banner（唯一不进 jsonl 的事件）。
+
+| PR | commit | 内容 |
+|---|---|---|
+| **PR 1 · hook 端点 + LOOMSCOPE_SECRET** | `a437d30` | `POST /api/cc-hook?event=<E>` 收 CC fire；64 hex per-installation secret 持久化 `~/.loomscope/secret`；constant-time 比对；CSRF bypass（hook 是 server-to-server）；hookEventBus pub/sub |
+| **PR 2 · hookEventBus → SSE → store** | `dd7b301` | hookSseForwarder 桥到 sseHub；`applyCcHookEvent` store action；`pendingPermission` slot；`PermissionBanner` 黄色非模态 |
+| **PR 3 · onboarding modal + settings.json patcher** | `a7b0bb5` → `246ae0c` | 一键自动添加 / 复制配置 / 暂不开启；atomic write 保留所有第三方字段；schema 用对了（matcher + hooks 套娃 — 第一版直接平铺被 CC 拒，迁移路径同时认两种格式） |
+| **PR 4 · Header status chip** | `ca1ee0a` | 🪝 N/11 chip，30s poll + window event 即时同步 |
+
+修过的 bug：
+- `7f74e34` CORS rejects browser POST 5175→5174 — `allowedOrigin` 接受逗号分隔列表，dev:server 同时塞两个端口
+- `0105ee6` useChatNodeWorkflow 不响应 staleSince — 修 drill 视图 live update bug，property test 钉死
 
 ### 仍未做（defer 到 v0.11+ 或 backlog）
 
 - 性能：256MB 大 session 首屏 < 30s（按 lazy 收益线性外推 200MB session 约 ~28MB lite + 0.3s parse；够用）
 - Sidebar fork 树状缩进（v0.8 deferred → v∞.3）
-- 真正的增量 parser（v0.9.1 留下的最后一个口子；当前 SSE 触发是 full reparse，25MB / ~100ms 还行，200+MB 会卡）
-- B：parser 按 `message.id` 合并 llm_call（CC 把一次 API response 拆成多条 jsonl record，每条只装一个 content block，造成 detail 面板上"空壳节点"——v0.9.2 batch 末尾用户反馈后定下做但延后）
+- ConversationView 工具 pill 的 stale refetch（drainer `fetchedRef` 一次性，不响应 staleSince；同 `0105ee6` 同源；待用户验收后单独修）
+- Hook catchup（server 维护 per-session pendingPermission 状态，新订阅者上线时立即发送，让多 tab / 切 session / 后开 Loomscope 不丢 PermissionRequest）
+- B：parser 按 `message.id` 合并 llm_call（CC 把一次 API response 拆成多条 jsonl record，detail 上"空壳节点" — 用户反馈后延后做）
+- 多 tab corner cases triage（task #76）
 
 ## v1.0 — ship
 
-- README 完善：截图 + GIF 演示
-- 一键启动指令（`npx loomscope ~/.claude/.../session.jsonl` 类）—— 看是否要发 npm
+- README 完善：截图 + GIF 演示（用户驱动，需要真实 session 录制）
+- bin field + 真正 npm publish
+- esbuild bundle server 成 dist-server/（避免 runtime tsx）
 - 自动检测 ~/.claude/projects/ 下所有 session 列表（一个 session picker UI）
 
 ## v∞ — live hook

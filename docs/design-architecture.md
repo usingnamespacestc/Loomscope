@@ -1112,6 +1112,95 @@ key 命名跟 Agentloom 对齐（方便日后 Agentloom 之间 share copy）：
 
 ⚠ v0.2 当前所有面向用户字符串都是 zh-CN 硬编码，待 i18n phase 一次性抽到 bundle。
 
+## v∞.0 hook pipe — 实现参考（已 ship 2026-05-06）
+
+read-only 远程观察的实际落点。设计章节看 "v∞ 交互机制"；本节是落地后的代码地图。
+
+### 数据流
+
+```
+┌─ CC terminal ─┐                        ┌─ Loomscope server ─┐                  ┌─ Browser tab ─┐
+│ tool 触发      │  POST /api/cc-hook    │ ccHookRouter        │  publishHook     │                │
+│ axios + 5s    │ ───────────────────►   │ verify secret       │ ─────────────►   │                │
+│ allowedEnvVars│  X-Loomscope-Secret    │ zod validate body   │                  │                │
+│ LOOMSCOPE_…   │                        │ 204 ack             │  hookEventBus    │                │
+└──────┬────────┘                        └────────┬────────────┘  (in-process)    │                │
+       │                                          │                               │                │
+       │  CC writes jsonl                         │   subscribeHooks              │                │
+       │                                          │                               │                │
+┌──────▼─────────────────────────────────────────▼──────┐                         │                │
+│ chokidar (sessionWatcher.ts)                          │                         │                │
+│  awaitWriteFinish 80 ms → invalidateSession() + SSE   │   hookSseForwarder.ts   │                │
+│  broadcast 'invalidate' frame                         │                         │                │
+└──────────────────────────┬────────────────────────────┘                         │                │
+                           │                                  ┌──────────────────►│ EventSource    │
+                           │                                  │                   │ /api/sessions/ │
+                           ▼                                  │                   │   <sid>/events │
+                  sseHub.broadcast(sid, …) ◄──────────────────┘                   └────────────────┘
+                                                                                  events:
+                                                                                    invalidate (file)
+                                                                                    cc-hook (hook)
+                                                                                    hello / ping
+```
+
+### 文件 / 模块责任
+
+| 文件 | 职责 |
+|---|---|
+| `services/loomscopeSecret.ts` | per-installation `~/.loomscope/secret` 64-hex（mode 0600）。timing-safe compare |
+| `services/hookEventBus.ts` | 进程内 pub/sub。bus 跟 sseHub 解耦留接口给非 SSE 消费者（log / metrics / audit） |
+| `routes/ccHook.ts` | `POST /api/cc-hook?event=<E>`。zod 校验事件 enum + body envelope；event-specific 字段进 `extras` passthrough；CSRF bypass（在 csrf.ts 列表里） |
+| `services/hookSseForwarder.ts` | hookEventBus → sseHub 的桥。subscribe once at boot；按 `payload.session_id` broadcast `cc-hook` event |
+| `services/ccSettingsPatcher.ts` | 读 / add / remove `~/.claude/settings.json` 里的 hook 块。atomic tmp+rename。CC 的 schema 是 `{matcher, hooks:[actions]}` 两层套娃（不是平铺）。识别"我们的"entry：URL 含 `localhost:<port>/api/cc-hook` —— 同时识别新格式 + 旧错格式（migration） |
+| `routes/ccHookOnboarding.ts` | GET status / POST patch endpoint。status 返 shellRcSnippet + pasteableJson 给前端用 |
+| `components/HookOnboardingModal.tsx` | 一键自动添加 / 复制配置 / 暂不开启。dismiss 写 localStorage 不重弹 |
+| `components/PermissionBanner.tsx` | PermissionRequest 黄色非模态 strip。当 `pendingPermission` 非 null 时显示 |
+| `components/HookStatusChip.tsx` | Header `🪝 N/11` chip。30s poll + window event 即时同步（onboarding 写完立刻刷新） |
+| `store/sessionSlice.ts` `applyCcHookEvent` | 每个 hook event = activity 信号 +bump lastInvalidateAt；PermissionRequest 写 pendingPermission；PermissionDenied / PostToolUse 清 |
+
+### CC settings.json schema（踩坑笔记）
+
+CC 期望的 hooks 段必须是**两层套娃**：
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:5174/api/cc-hook?event=PreToolUse",
+            "headers": { "X-Loomscope-Secret": "$LOOMSCOPE_SECRET" },
+            "allowedEnvVars": ["LOOMSCOPE_SECRET"],
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+外层 array = matcher entries（matcher 是 tool 过滤，`""` = 全部）；内层 `hooks` array = 实际的 action 列表。**不能直接在外层放 action**（v∞.0 PR 3 第一版犯过这个错，CC 报 `hooks: Expected array, but received undefined` 整个文件 skip）。
+
+`ccSettingsPatcher` 的 `entryHasOurAction()` 同时识别新格式 + 旧错格式作为"ours"，下次 add 会清掉旧错格式重写新格式 —— **migration test 钉死了"含错格式 + 第三方 flat 格式的文件，调 add 之后我们的清干净换正确格式、第三方原封不动"**。
+
+### 安全模型
+
+- `LOOMSCOPE_SECRET` 64 hex per-installation（不是 per-session）；用户 shell rc 里 export 一次，CC 通过 `allowedEnvVars` 白名单从环境变量读
+- `X-Loomscope-Secret` header 在 ccHook 路由用 `timingSafeEqualHex` 比对
+- CSRF 中间件 bypass `/api/cc-hook` + `/api/cc-hook-onboarding/patch`（前者 server-to-server，后者同源 + CORS 已挡跨源）
+- CORS 在 dev 模式接受 `localhost:5174,localhost:5175`（dev:server 通过 env var 双开），生产 single-process serve 单端口
+
+### 已知留尾（按优先级）
+
+1. **Hook catchup**：cc-hook fire-and-forget，新订阅者上线拿不到 pending PermissionRequest。修法是 server 维护 per-session pending 状态，hello frame 带初始 snapshot
+2. **多 tab 同步**：每 tab 独立 EventSource + 独立 store，PermissionBanner 不会跨 tab 同步消失
+3. **ConversationView tool pill stale refetch**：drainer 的 `fetchedRef` 一次性，不响应 `staleSince`（同 useChatNodeWorkflow 修过的同源 bug）
+4. **Permission 浏览器响应**：v∞.0 是 read-only，要在浏览器点 allow/deny 替代终端 y/n 是 v∞.1 用 SDK `canUseTool` 实现的能力
+
 ## Hover-preview / click-persist 模式（release pattern）
 
 UI 里凡是"hover 触发的视图切换"——比如鼠标停留在右侧 conversation bubble 上 canvas 自动 pan 过去、或在 canvas 卡片上停留 conversation 自动滚到对应消息——**默认走临时预览语义而不是持久切换**。否则一次误触就把用户的视图永久换走，重新定位很烦。

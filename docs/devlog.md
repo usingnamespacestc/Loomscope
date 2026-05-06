@@ -6,6 +6,147 @@
 
 ---
 
+## 2026-05-06 全天 — v0.10 收尾 + perf 加强 + v∞.0 read-only 端到端
+
+接 v0.9.2 batch 一直推到晚上把 v∞.0 真正落出来。整天 18 个 commit，按时间线拆三段。
+
+### 中午段：v0.10 收尾（小活）
+
+| commit | 内容 |
+|---|---|
+| `7424668` | localStorage GC `removeSession` action + workspace SSE `reason:"remove"` 接线。session jsonl 被 unlink → 清 in-memory + 清 `loomscope:unfold:<sid>`（含老 `loomscope:fold:<sid>`）|
+| `d14864a` | per-ChatNode `workflowViewports` Map（store 级，不写 localStorage）+ WorkFlow drill follow-on-leaf（refresh 时若 `workflowSelectedNodeId` 是新 WorkNode 父节点跟到新 leaf）|
+| `8d66351` | docs/plan.md 同步 v0.9.2 batch + B5 已 ship 标 |
+| `4770947` | docs/architecture 章节 "ChatFlow lite payload + 视口驱动懒加载"，把 v0.9.2 batch 的设计模式记成可复用经验：**长列表 + lazy fetch 的正确分层是"hook 默认 auto-fetch / 长列表 caller 显式关掉自驱"** |
+
+### 中午-晚段：v0.10 perf 加强（A / C / B / M0 / M1 / M2）
+
+针对实测发现的痛点逐个开刀：
+
+#### A · LazyMarkdownView 视口门控（`ecab1b3`）
+
+实测 37 MB session 打开后 ChatFlow 秒出但 conversation 卡 6 秒才出内容 → 客户端 markdown pipeline（remark+rehype）30 个 bubble × 150 ms 的串行渲染。LazyMarkdownView 套个 IntersectionObserver（rootMargin 1000 px），视口外渲 plain-text 占位，进入视口才跑 markdown pipeline。
+
+测试环境 happy-dom 的 IO callback 不触发，给个 `globalThis.__LOOMSCOPE_EAGER_MARKDOWN__` 测试逃生口让现有 `<strong>` 等断言不破。
+
+#### C · ChatFlowCanvas 首次 paint opacity 闸门（`6bb67ef`）
+
+打开 244 MB session 用户报"先闪过一个复杂的树形 workflow，然后才进 chatflow"——是 RF 在 fitView 之前默认 viewport 那一帧把整张 dagre 展开图全暴露了。`firstPaintReady` state 控制外层 div opacity:0→1 + 80 ms fade，fitView 落地后才显示。
+
+#### B · 持久化磁盘 cache（`b334b8b`）
+
+`~/.loomscope/cache/<sid>.json` schema=v1，atomic tmp+rename。LRU → disk → cold parse 三层。Schema 版本 / 源 mtime / size 都校验。fork closure>1 不写盘（合并语义复杂）。bench：
+
+| 文件 | cold | disk read | speedup |
+|---|---|---|---|
+| 37 MB real | 291 ms | 185 ms | 1.6× |
+| 244 MB real | 2279 ms | 1042 ms | 2.2× |
+
+cache size 77-89% of source。WorkspaceWatcher unlink → `dropDiskCache` 防止累积 dead snapshots。
+
+#### M0+M1+M2 · 增量 parser
+
+跟用户对完后定的三步走：
+
+| Milestone | commit | 内容 |
+|---|---|---|
+| **M0** parser API | `f65ecef` | `parseJsonlFileIncremental(prevState, path)` —— prevState 含 records[] + byteSize + mtimeMs + pendingFragment。append-only growth → 只读 tail；shrink/error → 全量。pendingFragment 兜 mid-write 撕裂 |
+| **M1** cache 接增量 | `74d9581` | per-session `IncrementalParseState` stash 跟 LRU 解耦（LRU 每次 mtime 改了必失效，stash 存活给 incremental 用）。loadMergedChatFlow 单 jsonl 路径接 stash，fork 路径不接 |
+| **M2** per-bucket reuse | `3e7e618` | `buildChatFlow(records, …, reuseHint?)` —— 通过 dirtyPromptIds 把没碰过的 bucket 直接复用旧 ChatNode，砍 `buildChatNode×N` 大头。pass1+pass2+linkChatNodeParents 仍全量但便宜 |
+
+bench 累计（synthetic append-1-turn）：
+
+| 文件 | 全量 | M0+M1 | M0+M1+M2 |
+|---|---|---|---|
+| 5.3 MB | 83 ms | 19 ms (2.7×) | **7 ms (11.1×)** |
+| 27 MB | 225 ms | 90 ms (2.4×) | **43 ms (5.2×)** |
+| 108 MB | 973 ms | 475 ms (2.1×) | **235 ms (4.1×)** |
+
+M2 最关键的是**property test 钉死等价不变量** —— 任意 split 点 M2 reuse 的 ChatFlow `JSON.stringify` 必须跟 full rebuild 字节相等，brute-force 走遍 fixture 每个 split。这条线挂掉就是 silent corruption。
+
+#### 实测验证段
+
+用户重启 + 硬刷新后真实测试：
+- 244 MB session 之前 cold 37s → 这次 cold 7s（A + C + 视口驱动 fetch 一起的功劳）
+- 二开 4s（disk cache 起作用）
+- 37.9 MB session **秒开**
+
+37s → 4s ≈ **9× 总加速**。值得注意：用户报的 244MB cold 37s **大头不在 server 端 parse**（curl 实测 server 全量 parse 才 2.3 s），而是**前端 lite payload 反序列化 + 1522 节点 dagre layout + fitView + markdown pipeline** —— A 砍掉 markdown / C 遮掉 dagre flash 是最关键的两刀。
+
+### 晚段：v∞.0 read-only 远程观察 4 PR
+
+终于把"用户终端跑 CC，浏览器实时画面"的故事打通。
+
+#### PR 1：hook 端点 + LOOMSCOPE_SECRET（`a437d30`）
+
+- `services/loomscopeSecret.ts` —— 64 hex per-installation secret，首次启动 `crypto.randomBytes(32)` 写 `~/.loomscope/secret` (mode 0600)；常时比对防 timing leak
+- `services/hookEventBus.ts` —— 进程内 pub/sub，跟 sseHub 解耦留接口给非 SSE 消费者（log / metrics / audit）
+- `routes/ccHook.ts` —— `POST /api/cc-hook?event=<E>` zod 校验事件 enum + body envelope，常时比对 secret，event-specific 字段进 `extras` passthrough；204 ack
+- `middleware/csrf.ts` —— bypass `/api/cc-hook` 路径（server-to-server，没 browser cookie，secret 顶上）
+
+11 个事件按 plan.md 设计：PreToolUse / PostToolUse / SubagentStart / SubagentStop / PreCompact / PostCompact / TaskCompleted / SessionStart / SessionEnd / **PermissionRequest / PermissionDenied**。
+
+#### PR 2：hookEventBus → SSE → store + PermissionBanner（`dd7b301`）
+
+- `services/hookSseForwarder.ts` —— 监听 hookEventBus，按 `payload.session_id` broadcast 到 sseHub `cc-hook` event。idempotent
+- App.tsx 的 SSE listener 加 `cc-hook` handler → `applyCcHookEvent` store action
+- `SessionState.pendingPermission` 跟踪未结的 permission（PermissionRequest 写、PermissionDenied/PostToolUse 清）
+- `components/PermissionBanner.tsx` 黄色非模态 strip，显示工具 + input 预览 + "切到终端响应"提示
+
+#### PR 3：onboarding modal + settings.json patcher（`a7b0bb5` → `246ae0c` 修）
+
+- `services/ccSettingsPatcher.ts` —— atomic tmp+rename + 完整保留第三方字段 + 拒绝 malformed JSON + idempotent
+- `routes/ccHookOnboarding.ts` —— GET status / POST patch
+- `components/HookOnboardingModal.tsx` —— 一键自动添加 / 复制配置 / 暂不开启 + shell-rc snippet + dismiss 写 localStorage 不重弹
+
+**踩坑：CC schema 第一版写错了**（`246ae0c`）—— 我直接把 action 平铺在事件数组里，CC 报"hooks: Expected array, but received undefined" 拒绝整个 settings.json。正确的是 `{ matcher, hooks: [actions] }` 双层套娃。修法是迁移路径同时认两种格式（旧错的 + 新对的）都是 ours，下次 add 直接清掉重写正确格式。
+
+> 学到的：**改用户配置文件这种 disk-mutating 操作必须有 deterministic migration test**。我加了 migration test 钉死"含我们错格式 + 第三方 flat 格式的文件，调 add 之后我们的清干净换正确格式、第三方原封不动"。但因为第一版 ship 后才发现 schema 错，用户已经被写坏 → 我直接帮用户跑了一次 migration script 修 in-place 文件 + 备份。下次类似 disk-mutating 改动得先在用户真实文件 dry-run。
+
+#### PR 4：Header 状态 chip（`ca1ee0a`）
+
+`🪝 N/11` chip，30s poll + window event 即时同步（onboarding 写完 settings.json 立刻刷新 chip，不等下次轮询）。颜色：emerald = 全配齐 / amber = 部分 / gray = 无 / rose = malformed。
+
+### 晚-夜段：bug fix 轮（CORS / staleSince）
+
+#### `7f74e34` — CORS 拒绝 dev 模式 browser POST
+
+用户点"一键自动添加"报 `cors: origin not allowed`。根因：Vite `changeOrigin: true` 改的是 `Host` 不是 `Origin`，浏览器 POST 必带 `Origin`，5175 → Hono 5174 撞上 `allowedOrigin=5174`。GET 同源不发 Origin 所以一直没事，PR 3 是首个 browser POST → 浮出来。
+
+修：`allowedOrigin` 改成接受逗号分隔列表，dev:server script 同时塞 `5174,5175`。
+
+#### `0105ee6` — useChatNodeWorkflow 不响应 staleSince（live update bug）
+
+用户测试 fine-grained event 同步时报 drill 进 running ChatNode 后 WorkFlow 永远显示"没有 WorkFlow 节点"，即使 SSE 有 invalidate。
+
+加 console.log 跟踪定位：bug 链是
+1. ConversationView drainer 在 chatNode summary 还是 0/0 时 fire fetch
+2. server 此刻返回 `{nodes:[], edges:[]}`（assistant 还没写）
+3. cache 存为 `{status:"ready", workflow:{nodes:[]}}`
+4. SSE invalidate → refreshSession 标 cache `staleSince:now`
+5. **但 useChatNodeWorkflow useEffect 短路条件 `if (cached?.status === "ready") return` 没看 staleSince** → 永远不重 fetch
+6. Hook 返回空 workflow，drill 显示空
+
+修：useEffect 在 stale 时也重 fetch（`if (cached?.status === "ready" && !cached.staleSince) return`）+ `cached?.staleSince` 入 dep array。property test 钉死"ready+stale → 必须重 fire fetch + cache 翻新后 staleSince 清"。
+
+> 学到的：**stale-while-revalidate 这种"读 + 写"两端配合的机制，写端（refreshSession 标 stale）跟读端（hook 决定是否 fetch）容易脱节**。整套 staleSince 字段是 v0.10 lazy ChatFlow B 系列引入的，但 hook 端的判定一直只看 `status==="ready"` 没看 staleSince。两边都正确独立工作，但**接口约定不闭环 = silent stale**。代码评审应当把"trigger end + handler end 是不是对得上"列成 checklist。
+
+### 整天数据
+
+- **18 commit**, 563/563 tests
+- 30+ 文件改动
+- 累计行数估计 ~3500 行
+- v0.10 + v∞.0 实质完成
+- 用户验收: 节点自增 work，cc-hook + invalidate 双路径都通
+
+### 留尾
+
+- **ConversationView 工具 pill 的 stale refetch** —— 同 `0105ee6` 同源 bug 但 ConversationView bubble 走 `disableAutoFetch=true` + drainer fetchedRef 路径，不响应 staleSince；用户验证后单独修
+- **NaN warning** —— React Flow DotPattern `cx`/`y` NaN 一千多条，疑是 dev-server hot-reload 期间的 transient state，重启 + 硬刷新后用户报消失，留观察
+- **Hook catchup** —— 现在 cc-hook 是 fire-and-forget，新订阅者上线时拿不到当前 pending 的 permission；server 维护 per-session pendingPermission 状态 + hello frame 带初始 snapshot 解决
+
+---
+
 ## 2026-05-06 上午 — v0.9.2 batch：lite payload 增强 + 数据形态 in-flight + 视口驱动 fetch
 
 接着昨晚的 v0.9.1 节奏，把 ConversationView "感觉很慢"的那串感受性问题逐一根因化拆解。最后落到一个相对干净的"hook 解耦读和 fetch + ConversationView 用 IntersectionObserver 自驱"模式。
