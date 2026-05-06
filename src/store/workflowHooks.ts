@@ -96,12 +96,33 @@ export function useChatNodeWorkflow(
   useEffect(() => {
     if (!autoFetch) return;
     if (!needsLazy) return;
-    if (cached?.status === "ready" || cached?.status === "pending") return;
-    // First access OR previous error — fire (re)load. Action dedupes
-    // against in-flight, so concurrent hooks for the same id collapse
-    // into one network round-trip.
+    // EN: refetch decision tree.
+    //   - pending: someone else's fetch in flight, wait for it
+    //   - ready + NOT stale: cache is current, no need
+    //   - ready + stale: refreshSession marked it stale because the
+    //     ChatNode summary shifted (typically the running node grew
+    //     a tool_use); we MUST refetch or the cached (often empty)
+    //     workflow stays visible forever — the original bug that
+    //     made drill view show "没有 WorkFlow 节点" indefinitely
+    //     during live updates after first being drilled into while
+    //     the summary was still 0/0.
+    //   - error / undefined: first access OR retry
+    // 中: 关键修复 —— ready 但 stale 时必须重 fetch，否则 cache 早期
+    // 抓到的空 workflow 会永远停在 drill 视图里。原 bug：drill 一个
+    // 还在跑的 ChatNode 时 cache 拿到 `{nodes:[], edges:[]}`，之后
+    // summary 长大但 workflowCache 保持 stale-ready 状态显示空。
+    if (cached?.status === "pending") return;
+    if (cached?.status === "ready" && !cached.staleSince) return;
     void load(sessionId, [chatNode.id]);
-  }, [autoFetch, needsLazy, cached?.status, load, sessionId, chatNode.id]);
+  }, [
+    autoFetch,
+    needsLazy,
+    cached?.status,
+    cached?.staleSince,
+    load,
+    sessionId,
+    chatNode.id,
+  ]);
 
   // Resolution priority: INLINE WINS when the workflow is already
   // populated. Why: workflowCache is keyed by chatNode.id, and CC's

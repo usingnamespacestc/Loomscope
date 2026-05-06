@@ -301,6 +301,79 @@ describe("useChatNodeWorkflow", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("cache=ready+stale → refires fetch (live-update fix)", async () => {
+    // EN: the fix for the user-reported "drill view shows 没有
+    // WorkFlow 节点 forever during live updates" bug. Sequence:
+    //   1. ConversationView's drainer fires loadWorkflows on a
+    //      brand-new ChatNode whose summary is 0/0 (not yet skipped
+    //      by F because assistantText is still empty)
+    //   2. server returns {nodes:[], edges:[]} (records not yet
+    //      written)
+    //   3. cache = { status:"ready", workflow:{nodes:[]}, … }
+    //   4. SSE invalidate fires → refreshSession marks the entry
+    //      stale (staleSince:now) because the new summary differs
+    //   5. **OLD BEHAVIOUR**: useEffect short-circuits on
+    //      cached.status==="ready" and never refetches → empty
+    //      workflow stays visible forever
+    //   6. NEW: refire fetch when staleSince is set
+    const cn = chatNode("h");
+    seed(flow([cn]));
+    useStore.setState((s) => {
+      const sessions = new Map(s.sessions);
+      const cur = sessions.get(SID)!;
+      const cache = new Map(cur.workflowCache);
+      cache.set("h", {
+        status: "ready",
+        workflow: {
+          summary: summary(),
+          nodes: [], // captured-while-empty case
+          edges: [],
+        },
+        error: null,
+        staleSince: Date.now(),
+      });
+      sessions.set(SID, { ...cur, workflowCache: cache });
+      return { sessions };
+    });
+
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            workflows: {
+              h: {
+                nodes: [
+                  {
+                    id: "l1",
+                    kind: "llm_call",
+                    parentUuid: null,
+                    text: "fresh",
+                    thinking: [],
+                  },
+                ],
+                edges: [],
+              },
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Probe cn={cn} onRender={() => {}} />);
+    // useEffect must fire load because cached is ready+stale.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+    // After fetch lands the cache flips to ready+!stale + populated.
+    await waitFor(() => {
+      const wf = useStore.getState().sessions.get(SID)!.workflowCache.get("h");
+      expect(wf?.status).toBe("ready");
+      expect(wf?.staleSince).toBeUndefined();
+      expect(wf?.workflow?.nodes.length).toBe(1);
+    });
+  });
+
   it("cache=pending → stays pending without firing another fetch", () => {
     const cn = chatNode("f");
     seed(flow([cn]));
