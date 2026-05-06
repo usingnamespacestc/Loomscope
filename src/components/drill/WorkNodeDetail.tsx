@@ -615,13 +615,27 @@ function computeChainPosition(
   }
   if (foundLlmPredecessor) return null; // mid-chain, not a root
 
-  // Find the most recent earlier llm_call in document order. Since
-  // walkChainBackward returned empty (= no in-chain predecessors),
-  // any earlier llm_call necessarily belongs to a different chain.
-  const nodeIdx = nodes.findIndex((n) => n.id === node.id);
+  // Find prevTail + gap evidence in TIMESTAMP order, NOT
+  // workflow.nodes array order. buildWorkflow groups nodes by kind
+  // (compact pushed to index 0, attachments appended at the end —
+  // see workflow-builder.ts), which destroys the chronological
+  // sequence the chain actually flowed in. A timestamp-sort
+  // restores the real "what happened between prev llm and this
+  // llm" interval. Without this fix, a CompactNode that lived
+  // physically before the post-compact llm_call appears at array
+  // index 0, while the post-compact llm_call lives at index 5+ —
+  // an array slice between them collects 0 evidence even though
+  // the compact obviously sits in the gap chronologically.
+  const sortedByTime = [...nodes].sort((a, b) => {
+    const ta = a.timestamp ?? "";
+    const tb = b.timestamp ?? "";
+    if (ta === tb) return 0;
+    return ta < tb ? -1 : 1;
+  });
+  const sortedNodeIdx = sortedByTime.findIndex((n) => n.id === node.id);
   let prevTail: LlmCallNode | null = null;
-  for (let i = nodeIdx - 1; i >= 0; i -= 1) {
-    const candidate = nodes[i];
+  for (let i = sortedNodeIdx - 1; i >= 0; i -= 1) {
+    const candidate = sortedByTime[i];
     if (candidate.kind === "llm_call") {
       prevTail = candidate;
       break;
@@ -632,15 +646,13 @@ function computeChainPosition(
     return { kind: "first-in-workflow" };
   }
 
-  // Collect ALL evidence between prevTail and node. CompactNode +
-  // AttachmentNode are the kinds Loomscope currently models that
-  // could plausibly correlate with a chain break (compact_boundary,
-  // attachment-based interventions). tool_call/delegate are part of
-  // normal turn shape — skipped.
-  const prevTailIdx = nodes.indexOf(prevTail);
+  // Collect ALL evidence between prevTail and node — compact +
+  // attachment in chronological order. tool_call/delegate are
+  // normal turn shape, skipped.
+  const prevTailIdx = sortedByTime.indexOf(prevTail);
   const gapEvidence: ChainGapEvidence[] = [];
-  for (let i = prevTailIdx + 1; i < nodeIdx; i += 1) {
-    const between = nodes[i];
+  for (let i = prevTailIdx + 1; i < sortedNodeIdx; i += 1) {
+    const between = sortedByTime[i];
     if (between.kind === "compact" || between.kind === "attachment") {
       gapEvidence.push(between);
     }
