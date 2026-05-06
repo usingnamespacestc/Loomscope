@@ -162,7 +162,18 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
             />
           </div>
           <div style={{ display: tab === "conversation" ? "block" : "none" }}>
-            <ConversationView sessionId={sessionId} chatFlow={chatFlow} />
+            <ConversationView
+              sessionId={sessionId}
+              chatFlow={chatFlow}
+              // In workflow drill view, lock conversation focus to the
+              // drilled ChatNode: the canvas is showing WorkNodes (not
+              // ChatNodes), so click-to-select / hover-pan have no
+              // meaningful target on the canvas. ChatFlow / sub-chatflow
+              // views keep the normal click-driven selection.
+              focusLock={
+                viewMode === "workflow" ? drilledChatNode?.id ?? null : null
+              }
+            />
           </div>
         </Suspense>
       </div>

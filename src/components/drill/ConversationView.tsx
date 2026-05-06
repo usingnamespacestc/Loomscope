@@ -49,6 +49,12 @@ import type {
 interface Props {
   sessionId: string;
   chatFlow: ChatFlow | null;
+  // When set, conversation locks focus to this ChatNodeId and disables
+  // click-to-select / hover-pan / branch picking. Used in WorkFlow
+  // drill view where the canvas is showing the WorkFlow's internal DAG
+  // (not ChatNodes), so a click on a conversation bubble has no
+  // meaningful canvas target.
+  focusLock?: string | null;
 }
 
 // Shared sentinel — Zustand uses Object.is referential equality on
@@ -82,10 +88,15 @@ const ConversationObserverContext = createContext<IntersectionObserver | null>(
   null,
 );
 
-export function ConversationView({ sessionId, chatFlow }: Props) {
-  const selectedId = useStore(
+export function ConversationView({ sessionId, chatFlow, focusLock = null }: Props) {
+  const storeSelectedId = useStore(
     (s) => s.sessions.get(sessionId)?.selectedNodeId ?? null,
   );
+  // In locked mode, focus is forced to focusLock and the global
+  // selectedNodeId is ignored for path/scroll purposes (canvas may
+  // still want it; we just don't react here).
+  const selectedId = focusLock ?? storeSelectedId;
+  const isLocked = focusLock !== null;
   const branchMemory = useStore(
     (s) => s.sessions.get(sessionId)?.branchMemory ?? EMPTY_BRANCH_MEMORY,
   );
@@ -437,6 +448,9 @@ export function ConversationView({ sessionId, chatFlow }: Props) {
   );
   const handleSelect = useCallback(
     (nid: string) => {
+      // In locked mode (workflow drill), bubbles are read-only —
+      // click does nothing. Both selection and pan are suppressed.
+      if (isLocked) return;
       skipNextScrollRef.current = true;
       setSelected(sessionId, nid);
       // EN: explicit click → persistent pan. If a hover preview was
@@ -447,7 +461,7 @@ export function ConversationView({ sessionId, chatFlow }: Props) {
       hoverReleaseRef.current = null;
       panToChatNode(nid, "click");
     },
-    [sessionId, setSelected, panToChatNode],
+    [sessionId, setSelected, panToChatNode, isLocked],
   );
   // EN: stash the hover preview's release callback. Set on dwell,
   // called from mouseLeave to restore viewport + re-fold compacts.
@@ -457,19 +471,24 @@ export function ConversationView({ sessionId, chatFlow }: Props) {
   const hoverReleaseRef = useRef<(() => void) | null>(null);
   const handleHoverDwell = useCallback(
     (nid: string) => {
+      // Hover-pan targets a ChatFlow canvas; in locked mode (workflow
+      // drill) the canvas shows WorkNodes, not ChatNodes, so panning
+      // would jump to a stale chatflow viewport behind us — suppress.
+      if (isLocked) return;
       // Release any prior preview before kicking off a new one.
       hoverReleaseRef.current?.();
       const release = panToChatNode(nid, "hover");
       hoverReleaseRef.current = typeof release === "function" ? release : null;
       setConversationHovered(nid);
     },
-    [panToChatNode, setConversationHovered],
+    [panToChatNode, setConversationHovered, isLocked],
   );
   const handleHoverEnd = useCallback(() => {
+    if (isLocked) return;
     hoverReleaseRef.current?.();
     hoverReleaseRef.current = null;
     setConversationHovered(null);
-  }, [setConversationHovered]);
+  }, [setConversationHovered, isLocked]);
 
   if (!chatFlow || path.length === 0) {
     return (
@@ -520,12 +539,18 @@ export function ConversationView({ sessionId, chatFlow }: Props) {
               isSelected={nid === selectedId}
               isDimmed={isDimmed}
               isRunning={isRunning}
+              isLocked={isLocked}
               onSelect={handleSelect}
               onHoverDwell={handleHoverDwell}
               onHoverEnd={handleHoverEnd}
               disableAutoFetch
             />
-            {fork && (
+            {/* Suppress BranchSelector in locked mode: picking a different
+                branch would change selectedNodeId in the store, but the
+                conversation path here is anchored to focusLock and would
+                NOT visibly change. Hide the chips entirely so users
+                don't see no-op controls. */}
+            {fork && !isLocked && (
               <BranchSelector
                 fork={fork}
                 byId={byId}
@@ -571,6 +596,7 @@ function MessageBubbleImpl({
   isSelected,
   isDimmed,
   isRunning,
+  isLocked,
   onSelect,
   onHoverDwell,
   onHoverEnd,
@@ -581,6 +607,10 @@ function MessageBubbleImpl({
   isSelected: boolean;
   isDimmed: boolean;
   isRunning: boolean;
+  /** Read-only mode (WorkFlow drill view): cursor reverts to default
+   * and click/hover handlers are suppressed at the parent level. We
+   * still receive the props so we can adjust visual cues. */
+  isLocked: boolean;
   onSelect: (chatNodeId: string) => void;
   onHoverDwell: (chatNodeId: string) => void;
   onHoverEnd: () => void;
@@ -747,13 +777,17 @@ function MessageBubbleImpl({
       data-selected={isSelected ? "true" : "false"}
       data-dimmed={isDimmed ? "true" : "false"}
       data-running={isRunning ? "true" : "false"}
-      onClick={handleClick}
-      onMouseEnter={startDwell}
-      onMouseLeave={cancelDwell}
+      data-locked={isLocked ? "true" : "false"}
+      onClick={isLocked ? undefined : handleClick}
+      onMouseEnter={isLocked ? undefined : startDwell}
+      onMouseLeave={isLocked ? undefined : cancelDwell}
       className={[
-        "group relative cursor-pointer pl-3 transition-all rounded-md",
+        "group relative pl-3 transition-all rounded-md",
+        isLocked ? "cursor-default" : "cursor-pointer",
         isSelected
           ? "border-l-2 border-blue-400"
+          : isLocked
+          ? "border-l-2 border-transparent"
           : "border-l-2 border-transparent hover:border-gray-200",
         isDimmed ? "opacity-40 hover:opacity-80" : "",
         // EN: emerald pulse when this bubble is the running ChatNode

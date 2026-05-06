@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
-import { CanvasPanContext } from "@/canvas/CanvasPanContext";
+import { CanvasPanContext, type PanToChatNodeFn } from "@/canvas/CanvasPanContext";
 import { ConversationView, packStartIdx } from "@/components/drill/ConversationView";
 import { useStore } from "@/store/index";
 import type { ChatFlow, ChatNode } from "@/data/types";
@@ -497,5 +497,89 @@ describe("ConversationView — content rendering", () => {
     );
     expect(container.textContent).toContain("claude-opus-4-7");
     expect(container.textContent).toMatch(/8 tok/);
+  });
+});
+
+describe("ConversationView — focusLock (workflow drill read-only mode)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function renderLocked(
+    panFn: PanToChatNodeFn | null,
+    cf: ChatFlow,
+    storeSelectedId: string | null,
+    focusLock: string | null,
+  ) {
+    seed(cf, storeSelectedId);
+    const ref = { current: panFn };
+    return render(
+      <CanvasPanContext.Provider value={{ ref }}>
+        <ConversationView sessionId={SID} chatFlow={cf} focusLock={focusLock} />
+      </CanvasPanContext.Provider>,
+    );
+  }
+
+  it("focusLock overrides storeSelectedId for path resolution + dim line", () => {
+    // a → b → c → d. store selectedId=a (would normally render only a
+    // selected, b/c/d dimmed). focusLock=c → dim line shifts to c (a/b/c
+    // not dimmed; d dimmed). Verifies that focusLock wins over store.
+    const cf = flow([cn("a", null), cn("b", "a"), cn("c", "b"), cn("d", "c")]);
+    renderLocked(null, cf, "a", "c");
+    expect(screen.getByTestId("conversation-bubble-a").dataset.dimmed).toBe("false");
+    expect(screen.getByTestId("conversation-bubble-b").dataset.dimmed).toBe("false");
+    expect(screen.getByTestId("conversation-bubble-c").dataset.dimmed).toBe("false");
+    expect(screen.getByTestId("conversation-bubble-d").dataset.dimmed).toBe("true");
+    // Selection ring lands on c (the locked focus), not a.
+    expect(screen.getByTestId("conversation-bubble-c").dataset.selected).toBe("true");
+    expect(screen.getByTestId("conversation-bubble-a").dataset.selected).toBe("false");
+  });
+
+  it("clicking a bubble in locked mode does NOT mutate store selectedNodeId", () => {
+    const cf = flow([cn("a", null), cn("b", "a"), cn("c", "b")]);
+    renderLocked(null, cf, "c", "c");
+    fireEvent.click(screen.getByTestId("conversation-bubble-a"));
+    // Store untouched — locked mode swallows the click.
+    expect(useStore.getState().sessions.get(SID)?.selectedNodeId).toBe("c");
+  });
+
+  it("hover dwell in locked mode does NOT fire panToChatNode", () => {
+    const panSpy = vi.fn();
+    const cf = flow([cn("a", null), cn("b", "a")]);
+    renderLocked(panSpy, cf, "b", "b");
+    fireEvent.mouseEnter(screen.getByTestId("conversation-bubble-a"));
+    vi.advanceTimersByTime(500); // well past 250ms dwell threshold
+    expect(panSpy).not.toHaveBeenCalled();
+  });
+
+  it("BranchSelector is suppressed in locked mode (would be a no-op control)", () => {
+    // a → b (fork) → c1 + c2. Without focusLock branch selector renders;
+    // with focusLock it must not.
+    const cf = flow([
+      cn("a", null),
+      cn("b", "a"),
+      cn("c1", "b"),
+      cn("c2", "b"),
+    ]);
+    renderLocked(null, cf, "c1", "c1");
+    expect(screen.queryByTestId("branch-selector-b")).toBeNull();
+  });
+
+  it("locked bubbles carry data-locked=true and cursor-default styling", () => {
+    const cf = flow([cn("a", null), cn("b", "a")]);
+    renderLocked(null, cf, "b", "b");
+    const bubble = screen.getByTestId("conversation-bubble-b");
+    expect(bubble.dataset.locked).toBe("true");
+    // Tailwind class hint — survives the bubble being read-only.
+    expect(bubble.className).toContain("cursor-default");
+    expect(bubble.className).not.toContain("cursor-pointer");
+  });
+
+  it("non-locked mode still passes data-locked=false and keeps cursor-pointer", () => {
+    const cf = flow([cn("a", null), cn("b", "a")]);
+    seed(cf, "b");
+    render(<ConversationView sessionId={SID} chatFlow={cf} />);
+    const bubble = screen.getByTestId("conversation-bubble-b");
+    expect(bubble.dataset.locked).toBe("false");
+    expect(bubble.className).toContain("cursor-pointer");
   });
 });
