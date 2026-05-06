@@ -1028,6 +1028,30 @@ function ChatFlowCanvas({ sessionId }: { sessionId: string }) {
 
 不要把 RF 的 nodes 持久化到 Loomscope store——RF 自管，重新渲染时由 chatFlow 派生。
 
+## Parser: msg_id merge for split assistant records (B, shipped 2026-05-06)
+
+**Problem**: CC writes one assistant jsonl record per content block, but all records from the same API response share `message.id`. A response with `[thinking, tool_use, text]` becomes 3 records carrying:
+
+- a unique top-level `uuid`
+- the SAME `message.id`
+- envelope fields (model / usage / stop_reason / requestId) copied per record
+- exactly ONE block in `content[]`
+- an internal-chain `parentUuid` (record N's parent = record N-1's uuid)
+
+Pre-B `buildWorkflow` built one `LlmCallNode` per record → drilling into a "thinking-only" or "tool_use-only" record showed near-empty detail (Text: 空 + Thinking 1 block internal empty + Usage). User repro 2026-05-06: drilled into 89fcac1d → almost nothing useful, while sibling d342cc4f had the actual `tool_use(Bash)`.
+
+**Solution**: `buildWorkflow` opens with `groupAssistantsByMessageId(records)` → `buildMergedLlmCall(group)` per group → one logical `LlmCallNode` per API call. Information strictly preserved (union of all blocks); intra-group internal-chain edges collapse; chainCount becomes semantic.
+
+**Edge wiring**: `recordUuidToMergedId: Map<string, string>` (every record uuid → its group's canonical id = first record's uuid). `ToolCallNode.parentUuid` (= the assistantUuid of the record it physically lived in) gets remapped to the merged llm.id so downstream consumers (`computeChainCount`, `resolveDelegate`'s record-uuid → cn.id walks) resolve correctly.
+
+**Disk cache**: `chatFlowDiskCache.SCHEMA_VERSION` bumped 1 → 2. Old v1 caches have N split nodes for what's now N=1 merged; bumping forces re-parse.
+
+**Real-session verification** (a02f707f, chatNode 832d4beb): pre-B `llmCount=16` → post-B `llmCount=8` (each API call was 2 records on average). `toolCount=7` unchanged (tool_uses are independent WorkNodes). `chainCount=2` (semantically meaningful — was inflated by split records pre-B).
+
+**Property tests** in `parse/jsonl.test.ts`: merged content union / multi tool_use spawn / no self-loops / singleton fallback equivalence / chainCount stability / tool_use parentUuid resolution. The buildSplitAssistantTurn helper synthesises CC-shaped split records for fixture work.
+
+What we explicitly don't do: change `LlmCallNode.id` semantic beyond "first record's uuid"; expose `messageId` as a separate field (it's effectively `node.id` post-merge); change `ToolCallNode.id` (still the tool_use.id from the API).
+
 ## ChatFlow lite payload + 视口驱动懒加载
 
 **lite shape**：top-level `/api/sessions/<sid>` 端点把 `workflow.nodes` / `workflow.edges` 剥空，只保留服务端预算好的 `workflow.summary`（≈ 14 % 总 JSON 体积）。`workflow.nodes` 通过 `/api/sessions/<sid>/chatnodes/workflows?ids=<...>` 按需取，缓存在 Zustand 的 `workflowCache`（`Map<chatNodeId, { status, workflow, error, staleSince? }>`）。`/subagents` 端点保持 full-fat（inline `workflow.nodes` 非空）—— sub-agent ChatFlow 一次性返回，不走 lite 路径。

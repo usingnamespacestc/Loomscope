@@ -6,6 +6,58 @@
 
 ---
 
+## 2026-05-06 夜 — B (parser msg_id merge) ship + bilingual README + multi-tab triage close
+
+接 v∞.0 ship + ConversationView stale fix + Hook catchup + 多 tab 实测之后，把白天用户反馈的"WorkNodeDetail 空壳节点"问题（B）落地，顺手收尾一些遗留事项。
+
+### B (parser msg_id merge) — 三段 commit
+
+设计 doc 先行 (`docs/design-msgid-merge.md`，ship 后删除 fold 进 architecture)，用户预审通过后实施：
+
+| commit | 内容 |
+|---|---|
+| `94403e8` step 1 | `groupAssistantsByMessageId` + `buildMergedLlmCall` 在 `workflow-builder.ts`。带 10 个 isolated unit tests 覆盖 group 行为（shares-mid 合并 / null-id singletons / order 保持 / non-assistant 忽略）+ merged build（thinking + text union / singleton 等价 / text concat 顺序 / stopReason last-non-empty / tool_use 不进 llm body / empty 抛错）|
+| `63b683b` step 2 | 接进 `buildWorkflow`：`recordUuidToMergedId` 索引 + 边 remap + 6 个 property test + disk cache `SCHEMA_VERSION` 1→2 |
+| `<this> ` step 3 | docs fold + 删 design doc |
+
+**根因**：CC 把一次 API response 拆成多条 jsonl record，每条只装一个 content block 但共享 `message.id`。pre-B parser 给每条 record 建一个 LlmCallNode → drill 进 thinking-only / tool_use-only 的 "split" record 看到 detail 几乎为空。
+
+**修法**：按 `message.id` 聚合 → 一次 API call = 一个逻辑 LlmCallNode。信息严格并集（thinking[] / text concat / envelope 取共享值），intra-group 的 CC writer-internal parent 链自然 collapse。
+
+**真实数据验证**（a02f707f / 832d4beb chatNode，就是用户报问题那条）：
+- BEFORE: `llmCount=16, toolCount=7`
+- AFTER: `llmCount=8, toolCount=7, chainCount=2`
+
+llmCount 正好减半（每个 API call 平均拆 2 条），toolCount 不变，chainCount 终于语义化。
+
+**风险点处理**：
+1. **下游 record.uuid → cn.id 引用**：`linkChatNodeParents` / `resolvePromptId` 走 record uuid 不受影响；`resolveDelegate` 走 ToolCallNode.parentUuid（已 remap 到 mergedId）；`computeChainCount` 用 Set 成员不受 id 来源影响 — property test #5 + #6 钉死
+2. **disk cache schema 形态变了**：bump SCHEMA_VERSION 1→2，老 v1 cache 自动失效
+3. **chainCount 在用户已有 sessions 上会下降**：这是修复，不是 regression。devlog + commit 中文档化
+
+**走过的 detour**：第一次 wire 进 buildWorkflow 后 `buildLlmCall` 只剩 test 引用 → tsc 报"declared but never read" → 我把它整段删了，因为 buildMergedLlmCall([r]) 自然 cover singleton。
+
+### Bilingual README + design doc + screenshots
+
+- `README.md` 重写 + 增"Why Loomscope"（vs 终端 CC / claude.ai/code / IDE 插件的对比表）+ 4 张 Playwright 截图
+- `README.zh-CN.md` 中文 mirror，header link 互通
+- `docs/design-msgid-merge.md` PRE-IMPLEMENTATION 设计 doc（B step 3 ship 时删掉 fold 进 architecture）
+- `docs/screenshots/` 1080p × 2x dpi headless playwright 抓的代表性截图
+
+### Multi-tab triage close
+
+3-tab 同 session 实测（host Chrome via CDP + WSL headless 双路验证）+ 7-tab EventSource 上限测试（撞 Chrome HTTP/1.1 6 限）。
+
+结论：1-3 tab 完美工作；4+ tab 撞 EventSource 上限（每 tab 占 2 = session + workspace SSE，3 tab = 6 上限）。修法（HTTP/2 / BroadcastChannel leader 选举）工作量大、需求小，**接受现状 + README 警告**。
+
+### 教训补充
+
+1. **parse 改动同时是数据形态改动**：disk cache、in-memory LRU、客户端 store 都可能持有"老形态"快照。bump SCHEMA_VERSION 是最可靠的"清掉过去"动作；只是改 cache key 的 mtime 不够（cache 内容也变了形态）。
+2. **设计 doc 先行 + 用户预审 + 真实数据后验**：B 的 600 行改动按 design doc 走得很顺，没踩坑；纸面 review + 实测 832d4beb 数字符合预测两层确认 = 高置信度 ship。
+3. **"buildLlmCall delegates to buildMergedLlmCall([r])"这种 backward-compat shim 通常没必要保留**：tsc unused-var 报警直接告诉你它没真起作用，删掉就完事。
+
+---
+
 ## 2026-05-06 全天 — v0.10 收尾 + perf 加强 + v∞.0 read-only 端到端
 
 接 v0.9.2 batch 一直推到晚上把 v∞.0 真正落出来。整天 18 个 commit，按时间线拆三段。
