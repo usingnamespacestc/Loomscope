@@ -418,12 +418,29 @@ export function buildCompactNode(
   const meta = boundary?.compactMetadata ?? user.compactMetadata;
   const summary =
     typeof user.message?.content === "string" ? user.message.content : "";
+  // PR 2.4-C: route CompactNode.parentUuid past the (invisible)
+  // boundary record. CC writes compact_boundary with parentUuid=null
+  // and logicalParentUuid pointing at the pre-compact tail (the user
+  // record that carried the last tool_result before compaction). The
+  // synthetic compactSummary user record points its parentUuid at
+  // the boundary, which is then dangling for chain-walk purposes
+  // since the boundary itself isn't a WorkNode and (when its
+  // parentUuid=null) doesn't even surface in chainParentByUuid.
+  // Setting CompactNode.parentUuid = the resolved pre-compact tail
+  // uuid lets layoutWorkflow draw a continuation edge from the prior
+  // tool_call/llm_call into the CompactNode (semantically correct —
+  // the compact directly continues the prior work) and lets the
+  // front-end chain walk hop through into chain history without
+  // needing a raw-record map.
+  const preCompactTailUuid =
+    boundary?.logicalParentUuid ?? user.logicalParentUuid ?? null;
+  const userParent = user.parentUuid ?? null;
   return {
     id: user.uuid ?? "",
     kind: "compact",
-    parentUuid: user.parentUuid ?? null,
+    parentUuid: preCompactTailUuid ?? userParent,
     boundaryUuid: boundary?.uuid,
-    logicalParentUuid: boundary?.logicalParentUuid ?? user.logicalParentUuid ?? undefined,
+    logicalParentUuid: preCompactTailUuid ?? undefined,
     trigger: meta?.trigger,
     preTokens: typeof meta?.preTokens === "number" ? meta.preTokens : undefined,
     preCompactDiscoveredTools: meta?.preCompactDiscoveredTools,

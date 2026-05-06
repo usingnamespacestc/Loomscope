@@ -809,7 +809,16 @@ function buildChatNode(
   const chainParentByUuid = new Map<string, string>();
   for (const [uuid, ir] of index) {
     if (ir.type === "progress") continue;
-    if (ir.parentUuid) chainParentByUuid.set(uuid, ir.parentUuid);
+    // PR 2.4-C: compact_boundary records carry parentUuid=null and
+    // express their chain continuation through logicalParentUuid
+    // (= pre-compact tail). Use the logicalParentUuid as the
+    // effective transit parent so chain walks don't dead-end at
+    // the boundary.
+    const effectiveParent =
+      ir.type === "system" && ir.subtype === "compact_boundary"
+        ? ir.logicalParentUuid ?? ir.parentUuid
+        : ir.parentUuid;
+    if (effectiveParent) chainParentByUuid.set(uuid, effectiveParent);
   }
   // v0.10 polish (lazy ChatFlow B1): pre-compute summary stats so the
   // lite ChatFlow endpoint can ship them inline. ~100-200B per
