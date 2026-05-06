@@ -615,27 +615,14 @@ function computeChainPosition(
   }
   if (foundLlmPredecessor) return null; // mid-chain, not a root
 
-  // Find prevTail + gap evidence in TIMESTAMP order, NOT
-  // workflow.nodes array order. buildWorkflow groups nodes by kind
-  // (compact pushed to index 0, attachments appended at the end —
-  // see workflow-builder.ts), which destroys the chronological
-  // sequence the chain actually flowed in. A timestamp-sort
-  // restores the real "what happened between prev llm and this
-  // llm" interval. Without this fix, a CompactNode that lived
-  // physically before the post-compact llm_call appears at array
-  // index 0, while the post-compact llm_call lives at index 5+ —
-  // an array slice between them collects 0 evidence even though
-  // the compact obviously sits in the gap chronologically.
-  const sortedByTime = [...nodes].sort((a, b) => {
-    const ta = a.timestamp ?? "";
-    const tb = b.timestamp ?? "";
-    if (ta === tb) return 0;
-    return ta < tb ? -1 : 1;
-  });
-  const sortedNodeIdx = sortedByTime.findIndex((n) => n.id === node.id);
+  // workflow.nodes is sorted chronologically by buildWorkflow (see
+  // workflow-builder.ts tail), so a plain array slice is the right
+  // way to find prev tail + gap evidence — earlier we needed an
+  // ad-hoc timestamp resort because nodes was grouped by kind.
+  const nodeIdx = nodes.findIndex((n) => n.id === node.id);
   let prevTail: LlmCallNode | null = null;
-  for (let i = sortedNodeIdx - 1; i >= 0; i -= 1) {
-    const candidate = sortedByTime[i];
+  for (let i = nodeIdx - 1; i >= 0; i -= 1) {
+    const candidate = nodes[i];
     if (candidate.kind === "llm_call") {
       prevTail = candidate;
       break;
@@ -646,13 +633,10 @@ function computeChainPosition(
     return { kind: "first-in-workflow" };
   }
 
-  // Collect ALL evidence between prevTail and node — compact +
-  // attachment in chronological order. tool_call/delegate are
-  // normal turn shape, skipped.
-  const prevTailIdx = sortedByTime.indexOf(prevTail);
+  const prevTailIdx = nodes.indexOf(prevTail);
   const gapEvidence: ChainGapEvidence[] = [];
-  for (let i = prevTailIdx + 1; i < sortedNodeIdx; i += 1) {
-    const between = sortedByTime[i];
+  for (let i = prevTailIdx + 1; i < nodeIdx; i += 1) {
+    const between = nodes[i];
     if (between.kind === "compact" || between.kind === "attachment") {
       gapEvidence.push(between);
     }

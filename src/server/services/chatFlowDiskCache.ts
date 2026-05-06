@@ -62,8 +62,10 @@ import type { ChatFlow } from "@/data/types";
 // 中: 任何 ChatNode / WorkNode / WorkflowSummary / ChatFlow 形状变更
 // 都要 bump 这个版本号；旧 cache 自动失效，不会被新代码当合法数据
 // 解开。v2 = B msg_id merge 后 LlmCallNode 粒度从 per-record 变为
-// per-API-call，老 v1 cache 形态不再匹配新 parser，强制重 parse。
-const SCHEMA_VERSION = 2;
+// per-API-call。v3 = workflow.nodes 现在按 timestamp chronological
+// 排序（之前 buildWorkflow 按 kind 分组，破坏 chain 拓扑顺序），
+// 老 v2 cache 顺序不一致，强制重 parse。
+const SCHEMA_VERSION = 3;
 
 interface DiskCacheEnvelope {
   schemaVersion: number;

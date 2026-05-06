@@ -408,6 +408,23 @@ export function buildWorkflow(
     if (att) nodes.push(att);
   }
 
+  // Sort the final nodes array by timestamp so downstream consumers
+  // can rely on document order. The push order above groups by kind
+  // (compact first, then llm/tool, then attachments) which matches
+  // CC's reading flow but NOT the jsonl chronological order. Several
+  // downstream features need true chronological order (chain_position
+  // gap-evidence collection between two llm_calls being the
+  // motivating case — a CompactNode pushed at index 0 chronologically
+  // lives in the middle of the turn). Stable sort with empty
+  // timestamps preserves push order on ties so legacy fixtures
+  // without timestamps still behave deterministically.
+  nodes.sort((a, b) => {
+    const ta = a.timestamp ?? "";
+    const tb = b.timestamp ?? "";
+    if (ta === tb) return 0;
+    return ta < tb ? -1 : 1;
+  });
+
   return { nodes, edges };
 }
 
