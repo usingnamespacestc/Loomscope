@@ -1,32 +1,128 @@
 # Loomscope
 
-Visual viewer for Claude Code session transcripts (`.jsonl`). Renders the linear transcript file as a DAG canvas of turns, tool calls, and sub-agent invocations — same display family as [Agentloom](https://github.com/usingnamespacestc/Agentloom), adapted to Claude Code's data model.
+**Visual viewer for Claude Code session transcripts.** Renders the linear `~/.claude/projects/<...>/<sid>.jsonl` file as a DAG canvas of turns, tool calls, sub-agents, forks, and compacts. Read-only by design, lives alongside terminal CC without conflict.
 
-> Read-only by design (v0). Live observation + interactive control land in v∞.
+[中文版 / Chinese](./README.zh-CN.md)
+
+![ChatFlow canvas](docs/screenshots/02-chatflow-canvas.png)
+
+> **Status (2026-05-06)** — v0.10 (polished read-only viewer) + v∞.0 (live observation + CC settings.json hooks + PermissionRequest banner) shipped. v∞.1 (Loomscope-driven sessions via Agent SDK) is next.
+
+## Why Loomscope
+
+Claude Code is a powerful agent CLI, but its transcript reading experience is **scrollback only**. As soon as a session has more than a few turns — let alone a 256 MB session that compacts a dozen times, spawns sub-agents, and gets forked via `/branch` — answering simple questions becomes painful:
+
+- *Which tools did the agent run this turn?* → grep through scroll
+- *What did sub-agent #3 actually do?* → open sidecar `.jsonl`, read raw
+- *Where did this branch diverge from the original session?* → mentally diff two files
+- *What's CC waiting for right now?* → switch back to terminal
+- *Last week I asked Claude about X, which session was that?* → no answer
+
+Loomscope exists to answer these as **structural views** rather than text searches.
+
+### Compared to alternatives
+
+| | Terminal CC (`claude`) | claude.ai/code | IDE extensions | **Loomscope** |
+|---|---|---|---|---|
+| Linear scrollback | ✓ | ✓ | ✓ | ✓ (in conversation panel) |
+| **DAG view of tool calls** | ✗ | ✗ | ✗ | ✓ |
+| **Sub-agent inner trace expanded as nested ChatFlow** | ✗ | ✗ | ✗ | ✓ |
+| **Fork tree** (`/branch` + restore) | ✗ | ✗ | ✗ | ✓ |
+| Cross-session sidebar | ✗ | partial | partial | ✓ |
+| Live tail (jsonl appends) | n/a | ✓ | ✓ | ✓ |
+| **Permission visibility in browser** | terminal y/n | terminal y/n | terminal y/n | ✓ banner |
+| **Compact range fold + drill** | ✗ | ✗ | ✗ | ✓ |
+| Terminal-free workflow | ✗ | partial | partial | v∞.1 (in progress) |
+
+The CC CLI is the canonical agent runtime; Loomscope is a **read-only graphical reader** sitting alongside it. They don't fight — both watch the same jsonl files. Run `claude` in your terminal as usual, open Loomscope in a browser to inspect / observe.
 
 ## What it shows
 
-- **ChatFlow canvas** — every user prompt + assistant turn in the session as a node; forks (`/branch` / mid-session restore) render as DAG branches; compact summaries fold inline; hover over a card to pan, click to drill in.
-- **WorkFlow canvas** — drill into a turn to see the inner tool-call graph (`llm_call → tool_call → llm_call`); sub-agents (`Task` / `Agent` delegations) expand into nested ChatFlows recursively.
-- **Conversation panel** — Claude-App-style chat bubbles for the focused linear path; markdown-rendered with syntax-highlighted code blocks, expandable tool pills, branch selectors at fork points.
-- **Live tail** — chokidar + SSE picks up jsonl appends within ~80 ms; the canvas adds new ChatNodes / WorkNodes as they land. Selection auto-follows the leaf when you're sitting on it.
-- **Permission banner** *(v∞.0)* — when CC asks for a tool-permission confirmation in the terminal, a yellow strip appears in the browser so you know why the session looks paused.
+### 1 · Two-layer DAG canvas
+
+`ChatFlow` (one node per turn) drilling into `WorkFlow` (one node per `llm_call` / `tool_call` / `delegate` inside that turn). Sub-agents recursively expand into their own ChatFlow.
+
+![Sidebar + ChatFlow canvas](docs/screenshots/02-chatflow-canvas.png)
+
+### 2 · Conversation panel
+
+Claude-App-style chat bubbles for the focused linear path. Markdown rendered with syntax-highlighted code blocks. Tool calls show as expandable pills under each assistant message. Branch selectors appear inline at fork points.
+
+![Conversation panel](docs/screenshots/03-conversation-panel.png)
+
+### 3 · Header status chips
+
+Left: session metadata (id / cwd / git branch / time range / file path). Right: hook configuration status (`🪝 11/11`), live SSE indicator, language toggle.
+
+![Header](docs/screenshots/05-header-chips.png)
+
+### 4 · Sidebar — every CC project at a glance
+
+Workspaces listed by `cwd`, expandable to show all sessions in each. Live-updating: new jsonl files appearing on disk show up without manual refresh.
+
+![Sidebar](docs/screenshots/01-sidebar-landing.png)
 
 ## What's shipped
 
-Detailed history in [`docs/plan.md`](docs/plan.md) and [`docs/devlog.md`](docs/devlog.md).
+Ordered by user-facing capability rather than version. Per-version commit references in [`docs/plan.md`](docs/plan.md); chronological notes in [`docs/devlog.md`](docs/devlog.md).
 
-| Version | Highlights |
-|---|---|
-| v0.1 | Two-pass JSONL parser, 5 WorkNode kinds, 256 MB session loads in ~2 s |
-| v0.2-0.4 | Hono backend, Zustand store, dagre LR layout, drill panel + 5 node-detail views, chunked tool-result lazy-load |
-| v0.5 | Sub-agent real nesting via sidecar `subagents/agent-X.jsonl` |
-| v0.6 | Data-model unification (NodeBase + ChatNode/WorkNode), recursive sub-ChatFlow |
-| v0.7 | Compact handling — file-history-snapshot binding via messageId, pre-compact range fold |
-| v0.8 | Fork browsing — `/branch`-spawned forks merged into one ChatFlow with a fork tree view |
-| v0.9 | File-tail spike: chokidar + SSE live tail, sidecar watch, workspace scanner, header live indicator |
-| v0.10 | Lazy ChatFlow B1-B5 (`workflow.nodes` lazy-fetch), markdown viewport-gated render, viewport-driven workflow fetch + lookahead, M0+M1+M2 incremental parser, persistent disk cache |
-| v∞.0 | CC `settings.json` HTTP hooks → SSE; `/api/cc-hook` endpoint with per-installation secret; `PermissionRequest` banner; `~/.claude/settings.json` patcher + onboarding modal; Header hook-status chip |
+### View
+
+- Two-layer DAG canvas (ChatFlow → WorkFlow drill)
+- 5 WorkNode kinds (`llm_call` / `tool_call` / `delegate` / `compact` / `attachment`) with type-specific cards + detail panels
+- Conversation panel with chat-bubble layout, expandable tool pills, branch selectors at forks
+- Compact range inline-fold with default-folded behaviour and per-session unfold persistence
+- Multi-session sidebar grouped by project (cwd) with live discovery of new sessions
+- Fork tree (`/branch`-spawned multi-jsonl + `restore`-spawned in-session siblings)
+- Sub-agent recursive nested expansion (drill into a `delegate` WorkNode → opens that sub-agent's full ChatFlow)
+- Hover-to-pan / click-to-persist navigation between conversation and canvas
+
+### Live (v∞.0)
+
+- chokidar file watcher + per-session SSE — jsonl appends propagate to canvas in ~80 ms
+- CC `settings.json` HTTP hooks integration — 11 events: `PreToolUse` / `PostToolUse` / `SubagentStart` / `SubagentStop` / `PreCompact` / `PostCompact` / `TaskCompleted` / `SessionStart` / `SessionEnd` / `PermissionRequest` / `PermissionDenied`
+- `PermissionRequest` banner — the only signal not in the jsonl, surfaced in browser when CC pauses for terminal y/n
+- Per-installation `LOOMSCOPE_SECRET` (64 hex), persisted to `~/.loomscope/secret`, hook header verified in constant time
+- One-click `~/.claude/settings.json` patcher with atomic write preserving all third-party config
+- Hook catchup — server tracks pending PermissionRequest, late-joining browser tabs see it via SSE snapshot on subscribe
+
+### Performance
+
+- Lazy lite ChatFlow payload — `workflow.nodes`/`edges` stripped from default response, fetched on demand. 25 MB session opens in 26 ms (vs 340 ms cold full payload, 87 % byte reduction)
+- IntersectionObserver-driven workflow fetch with 1000 px lookahead — only fetches what the user is about to see
+- Persistent disk cache `~/.loomscope/cache/<sid>.json` — 244 MB session 2nd open in ~1 s vs 2.3 s cold
+- Incremental parser (M0+M1+M2) — SSE-triggered refresh on 108 MB session 973 ms full → 235 ms incremental (4.1×)
+- Viewport-gated `LazyMarkdownView` — bubble markdown rendered only when scrolled into view, kills the 5-6 s "wait for conversation" stutter on large sessions
+
+### Quality of life
+
+- i18n EN / 中文 with header toggle (state in `localStorage`)
+- Onboarding modal walks first-time users through hook setup
+- localStorage GC on session deletion
+- Per-ChatNode WorkFlow viewport stash (zoom/pan preserved across drill in/out)
+- Follow-on-leaf — selection auto-advances when a new ChatNode is the current focus's child during live updates
+- Stick-to-bottom in conversation panel (chat-app convention)
+
+## Roadmap
+
+### Immediate next
+
+**B — parser msg_id merge.** CC writes one assistant jsonl record per content block (all sharing `message.id`). Loomscope currently builds one `LlmCallNode` per record → drill into a "thinking-only" or "tool_use-only" record shows almost-empty detail. Merging records by `message.id` produces one logical `LlmCallNode` per API call. Design doc: [`docs/design-msgid-merge.md`](docs/design-msgid-merge.md). ~600 LOC.
+
+### v∞ — live writes (interactive control)
+
+The path from "graphical reader" to "graphical CC client":
+
+- **v∞.1** — Loomscope spawns new CC sessions via [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk)'s `query()`. Per-tool-use permission decision returns through SDK's `canUseTool` callback → **the user clicks ✓ Allow / ✗ Deny in browser** instead of typing y/n in terminal. Adds capabilities terminal CC doesn't have: edit tool input before allowing, allow-list per session, attach a reason on deny that CC's next turn sees.
+- **v∞.2** — composer input box at the bottom of the conversation panel; submitted prompts continue the active session via SDK `query({ resume: sessionId })`. Prerequisite: mtime-based advisory lock to prevent terminal-CC + Loomscope dual-write conflicts.
+- **v∞.3** — fork from any ChatNode (including assistants and sibling branches), powered by SDK's `resumeSessionAt: messageId`. **CC's terminal can only fork from leaves**; Loomscope unlocks the full DAG as fork-able. The "120 % of CC" capability.
+
+### v1.0 release polish
+
+- bin entry + `npx loomscope` packaging
+- esbuild-bundled server (avoid `tsx` runtime dep)
+- README screenshots + GIF demos (this file is a starting frame)
+- Auto session-picker on first launch
 
 ## Run
 
@@ -39,53 +135,37 @@ npm run dev    # frontend http://localhost:5175 (Vite proxies /api → backend o
 
 `npm run dev` boots both the Hono backend (`tsx watch src/server/cli.ts`) and the Vite frontend dev server. The frontend's `/api/*` requests are proxied to the backend so everything works from one origin.
 
-For a single-process production-ish run (one Hono serving both API + built frontend on port 5174):
+For a single-process production-ish run:
 
 ```sh
 npm run build      # vite build → dist/
-npm run start      # tsx src/server/cli.ts (auto-detects dist/ and serves it)
+npm run start      # tsx src/server/cli.ts (auto-detects dist/ + serves it on :5174)
 ```
 
-### Open a session
+### Wire CC hooks (recommended)
 
-The sidebar lists every Claude Code project under `~/.claude/projects/` with a session count per project. Click a project to expand its sessions, click a session to render. The sidebar is live — new jsonl files appearing on disk show up without manual refresh.
+On first launch Loomscope detects missing hooks in `~/.claude/settings.json` and offers a modal:
 
-### Wire CC hooks (optional, recommended)
+- **One-click auto-add** writes the 11 hook entries atomically (preserves every other key + every third-party hook on the same event names).
+- **Copy + paste** shows the JSON snippet for manual integration.
 
-Loomscope's "live tail" already picks up everything in the jsonl. The `settings.json` hooks add what's NOT in the jsonl — most importantly **PermissionRequest** events that show up as a banner in the browser when CC pauses for terminal y/n confirmation.
-
-On first launch Loomscope detects missing hooks and pops a modal:
-
-- **One-click auto-add** writes Loomscope's hook entries into `~/.claude/settings.json` atomically (preserves every other key + every third-party hook on the same event names).
-- **Copy + paste** shows the JSON snippet so you can merge it manually.
-- **暂不开启** dismisses with a localStorage flag so you don't get pestered.
-
-Either path needs a `LOOMSCOPE_SECRET` shell export — the modal generates the secret on first launch, persists to `~/.loomscope/secret`, and shows the exact line to paste into your `.zshrc` / `.bashrc`. CC's `allowedEnvVars` whitelist substitutes it into the hook header at fire time, defending against same-host hook forgery.
-
-The Header chip (`🪝 11/11`) shows status at a glance.
+Both paths need a `LOOMSCOPE_SECRET` exported in your shell rc — the modal generates and shows you the exact line. CC's `allowedEnvVars` whitelist substitutes it into the hook header at fire time, defending against same-host hook forgery.
 
 ### Multi-tab caveat (≤ 3 tabs per host)
 
-Each Loomscope tab opens 2 SSE EventSource connections (one per-session, one workspace-wide). Chrome and Firefox cap at **6 EventSource per origin** under HTTP/1.1 — so you can comfortably run **3 tabs same Loomscope origin**, but at the 4th tab the new SSE channels queue indefinitely and that tab won't fully load.
-
-Practical bound: 1-3 tabs work as expected (live updates flow to all of them). At 4+ tabs the latest tab(s) lose live updates. Tested + measured 2026-05-06.
-
-If you need more parallel views in the future, options are:
-- HTTP/2 (no per-origin connection cap) — needs Vite + Hono TLS configuration
-- BroadcastChannel-based leader election: one tab owns the SSE connection, others receive forwarded events through a shared in-browser channel — significant rewrite
-
-Neither is shipped; deferred to a v∞.x release if real demand surfaces.
+Chrome / Firefox cap at 6 EventSource per origin under HTTP/1.1; each Loomscope tab opens 2 → 3 tabs is the practical limit. Tested 2026-05-06. HTTP/2 or BroadcastChannel-based leader election would lift this; both deferred until real demand.
 
 ## Architecture
 
-Mode A (single-user local) is the default. Backend binds to `127.0.0.1:5174`; CORS is strict same-origin; the CC hook endpoint uses a per-installation secret instead of CSRF (server-to-server fire path). For remote viewing, terminate at the local machine and tunnel — Tailscale, SSH `-L`, or Cloudflare Tunnel are all clean fits.
+Mode A (single-user local) is the default. Backend binds to `127.0.0.1:5174`; CORS is strict same-origin; the CC hook endpoint uses a per-installation secret instead of CSRF (server-to-server fire path). For remote viewing, run Loomscope on your dev machine and tunnel — Tailscale, SSH `-L`, or Cloudflare Tunnel are all clean fits.
 
 Detailed designs in `docs/`:
-- [design-data-model.md](docs/design-data-model.md) — JSONL → ChatNode / WorkNode mapping, sidecar mechanics, fork semantics
-- [design-architecture.md](docs/design-architecture.md) — Hono routes, Zustand slices, SSE wiring, hook event flow, security model
-- [design-visual-language.md](docs/design-visual-language.md) — node visual conventions
-- [plan.md](docs/plan.md) — version-by-version roadmap
-- [devlog.md](docs/devlog.md) — chronological dev notes
+
+- [`design-data-model.md`](docs/design-data-model.md) — JSONL → ChatNode / WorkNode mapping, sidecar mechanics, fork semantics, the sub-agent uuid-sharing trap
+- [`design-architecture.md`](docs/design-architecture.md) — Hono routes, Zustand slices, SSE wiring, v∞.0 hook pipe, security model
+- [`design-visual-language.md`](docs/design-visual-language.md) — node visual conventions, edge kinds, hover-pan release pattern
+- [`plan.md`](docs/plan.md) — version-by-version roadmap
+- [`devlog.md`](docs/devlog.md) — chronological dev notes (engineering lessons + bug post-mortems)
 
 ## Stack
 
@@ -94,13 +174,9 @@ Vite 8 + React 18 + TypeScript 5.6 + Tailwind 3 + `@xyflow/react` 12 + `@dagrejs
 ## Tests
 
 ```sh
-npm test          # 559 tests
+npm test          # 573 tests
 npm run typecheck
 ```
-
-## Status
-
-v0.10 is the current "polished read-only viewer" line. v∞.0 read-only remote observation + permission visibility is shipped. Live writes (v∞.1 new session / v∞.2 leaf continuation / v∞.3 mid-graph fork via Agent SDK) are the next major phase.
 
 ## License
 
