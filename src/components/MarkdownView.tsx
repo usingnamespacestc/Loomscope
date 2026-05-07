@@ -199,6 +199,17 @@ function LazyMarkdownViewImpl({ children, components, className }: Props) {
     const obs = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {
+          // Capture placeholder height synchronously BEFORE flipping
+          // to markdown render. The ResizeObserver above also writes
+          // this ref, but races IntersectionObserver — when a bubble
+          // is already within rootMargin at first render, the IO
+          // callback can fire before the ResizeObserver has its first
+          // measurement. clientHeight here is synchronous and
+          // post-layout, so it's the correct value.
+          if (ref.current) {
+            const h = ref.current.clientHeight;
+            if (h > 0) placeholderHeightRef.current = h;
+          }
           setVisible(true);
           obs.disconnect();
         }
