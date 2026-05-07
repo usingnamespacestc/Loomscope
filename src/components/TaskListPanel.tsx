@@ -168,7 +168,7 @@ export function TaskListPanel({ sessionId }: Props) {
   return (
     <div
       data-testid="task-list-panel-expanded"
-      className="absolute bottom-3 right-3 z-20 flex max-h-[50%] w-72 flex-col rounded-md border border-gray-200 bg-white/95 shadow-md"
+      className="absolute bottom-3 right-3 z-20 flex max-h-[37.5%] w-[27rem] flex-col rounded-md border border-gray-200 bg-white/95 shadow-md"
     >
       <header className="flex items-center justify-between border-b border-gray-100 px-2 py-1">
         <div className="text-[11px] text-gray-700">
