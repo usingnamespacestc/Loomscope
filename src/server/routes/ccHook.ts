@@ -52,9 +52,10 @@ const QuerySchema = z.object({
 });
 
 export interface CcHookRouteOptions {
-  /** Per-installation secret. Loaded by the boot script via
-   * `getOrCreateSecret()` and passed in here. */
-  secret: string;
+  /** Accessor returning the current secret. Reading on every request
+   * (rather than closing over a static string) lets `rotateSecret()`
+   * take effect mid-run without reconstructing the Hono app. */
+  getSecret: () => string;
 }
 
 export function ccHookRouter(opts: CcHookRouteOptions) {
@@ -78,7 +79,7 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
       // strings (guards against the comparison short-circuiting on
       // `undefined !== string`, which can leak presence vs absence).
       const provided = c.req.header("x-loomscope-secret") ?? "";
-      if (!timingSafeEqualHex(provided, opts.secret)) {
+      if (!timingSafeEqualHex(provided, opts.getSecret())) {
         return c.json({ error: "invalid secret" }, 403);
       }
 

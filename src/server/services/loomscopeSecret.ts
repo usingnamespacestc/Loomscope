@@ -34,10 +34,18 @@ const SECRET_BYTES = 32;
 const SECRET_HEX_LEN = SECRET_BYTES * 2;
 
 let secretPathOverride: string | null = null;
+// Module-level cache of the active secret. The hook handler + onboarding
+// route close over `getCurrentSecret()` rather than a static value, so
+// `rotateSecret()` swaps in a fresh value mid-run and the next hook
+// fire validates against the new one.
+let currentSecret: string | null = null;
 
 /** Test helper. */
 export function _setSecretPathForTests(p: string | null): void {
   secretPathOverride = p;
+  // Wipe the in-memory cache so the next getOrCreateSecret() re-reads
+  // (or generates) under the new path.
+  currentSecret = null;
 }
 
 function secretPath(): string {
@@ -59,6 +67,7 @@ export async function getOrCreateSecret(): Promise<string> {
   try {
     const raw = (await fsp.readFile(p, "utf8")).trim();
     if (raw.length === SECRET_HEX_LEN && /^[0-9a-f]+$/i.test(raw)) {
+      currentSecret = raw;
       return raw;
     }
     // Wrong length / non-hex — assume corruption, regenerate.
@@ -81,6 +90,43 @@ export async function getOrCreateSecret(): Promise<string> {
       }. Hooks will reject after this process exits.`,
     );
   }
+  currentSecret = fresh;
+  return fresh;
+}
+
+/**
+ * Returns the current in-memory secret. Throws if `getOrCreateSecret`
+ * hasn't been called yet (boot order bug — should never happen at
+ * runtime). Routes call this on every request so a mid-run
+ * `rotateSecret()` takes effect immediately without reconstructing
+ * the Hono app.
+ */
+export function getCurrentSecret(): string {
+  if (!currentSecret) {
+    throw new Error(
+      "loomscopeSecret: getCurrentSecret() called before getOrCreateSecret()",
+    );
+  }
+  return currentSecret;
+}
+
+/**
+ * Generate a fresh secret + persist + swap into module state.
+ * Returns the new value. After this resolves, every subsequent
+ * `getCurrentSecret()` returns the new secret; in-flight CC hook
+ * fires using the OLD secret will reject 403 until the user updates
+ * `LOOMSCOPE_SECRET` in their shell rc and restarts CC.
+ *
+ * Failure mode: persistence error → throws (unlike `getOrCreateSecret`
+ * which tolerates it). The caller is an explicit user action; surface
+ * the failure rather than swallow it.
+ */
+export async function rotateSecret(): Promise<string> {
+  const fresh = crypto.randomBytes(SECRET_BYTES).toString("hex");
+  const p = secretPath();
+  await fsp.mkdir(path.dirname(p), { recursive: true, mode: 0o700 });
+  await fsp.writeFile(p, fresh, { encoding: "utf8", mode: 0o600 });
+  currentSecret = fresh;
   return fresh;
 }
 

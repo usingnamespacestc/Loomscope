@@ -16,6 +16,11 @@ import {
   HOOK_EVENTS_LIST,
   _setSettingsPathForTests,
 } from "@/server/services/ccSettingsPatcher";
+import {
+  _setSecretPathForTests,
+  getCurrentSecret,
+  getOrCreateSecret,
+} from "@/server/services/loomscopeSecret";
 
 let tmpRoot: string;
 let app: ReturnType<typeof createApp>;
@@ -190,5 +195,85 @@ describe("POST /api/cc-hook-onboarding/patch", () => {
       body: JSON.stringify({ mode: "add" }),
     });
     expect(res.status).toBe(200);
+  });
+});
+
+// Secret rotation route — uses the real loomscopeSecret module so
+// `getCurrentSecret` reflects rotations. We swap the secret-file
+// path to a tmp location so production `~/.loomscope/secret` isn't
+// touched.
+describe("POST /api/cc-hook-onboarding/rotate-secret", () => {
+  let secretTmpDir: string;
+  let secretFile: string;
+  let rotatingApp: ReturnType<typeof createApp>;
+
+  beforeEach(async () => {
+    secretTmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "loomscope-rotate-"),
+    );
+    secretFile = path.join(secretTmpDir, "secret");
+    _setSecretPathForTests(secretFile);
+    // Prime the in-memory secret cache from an empty file → fresh
+    // secret generated + persisted.
+    await getOrCreateSecret();
+    // Re-create the app so it wires the live `getCurrentSecret`
+    // accessor (the outer `app` was constructed with a static
+    // SECRET; we want to drive the rotation path through the real
+    // loomscopeSecret module).
+    rotatingApp = createApp({
+      rootDir: tmpRoot,
+      csrfToken: "csrf-token",
+      allowedOrigin: "http://localhost:5174",
+      hookSecret: getCurrentSecret,
+    });
+  });
+
+  afterEach(async () => {
+    _setSecretPathForTests(null);
+    await fs.rm(secretTmpDir, { recursive: true, force: true });
+  });
+
+  it("returns the post-rotation status with a NEW shellRcSnippet (different from pre-rotation)", async () => {
+    const before = (await (
+      await rotatingApp.request("/api/cc-hook-onboarding/status")
+    ).json()) as { shellRcSnippet: string };
+
+    const res = await rotatingApp.request(
+      "/api/cc-hook-onboarding/rotate-secret",
+      { method: "POST" },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      shellRcSnippet: string;
+      pasteableJson: string;
+      configured: string[];
+    };
+    expect(body.shellRcSnippet).not.toBe(before.shellRcSnippet);
+    expect(body.shellRcSnippet).toMatch(/^export LOOMSCOPE_SECRET=[a-f0-9]{64}$/);
+    expect(body.pasteableJson).toContain("X-Loomscope-Secret");
+    expect(Array.isArray(body.configured)).toBe(true);
+  });
+
+  it("subsequent /status reads the rotated secret (accessor pattern verified end-to-end)", async () => {
+    const rotateRes = await rotatingApp.request(
+      "/api/cc-hook-onboarding/rotate-secret",
+      { method: "POST" },
+    );
+    const rotated = (await rotateRes.json()) as { shellRcSnippet: string };
+
+    const after = (await (
+      await rotatingApp.request("/api/cc-hook-onboarding/status")
+    ).json()) as { shellRcSnippet: string };
+
+    expect(after.shellRcSnippet).toBe(rotated.shellRcSnippet);
+  });
+
+  it("persists the new value to disk", async () => {
+    await rotatingApp.request("/api/cc-hook-onboarding/rotate-secret", {
+      method: "POST",
+    });
+    const onDisk = (await fs.readFile(secretFile, "utf8")).trim();
+    expect(onDisk).toMatch(/^[a-f0-9]{64}$/);
+    expect(onDisk).toBe(getCurrentSecret());
   });
 });

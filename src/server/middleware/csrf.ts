@@ -27,6 +27,7 @@ import type { MiddlewareHandler } from "hono";
 const CSRF_BYPASS_PATHS = new Set([
   "/api/cc-hook",
   "/api/cc-hook-onboarding/patch",
+  "/api/cc-hook-onboarding/rotate-secret",
 ]);
 
 export function csrfMiddleware(token: string): MiddlewareHandler {

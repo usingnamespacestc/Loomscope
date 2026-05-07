@@ -16,15 +16,15 @@ import {
   getHookStatus,
   removeLoomscopeHooks,
 } from "@/server/services/ccSettingsPatcher";
+import { rotateSecret } from "@/server/services/loomscopeSecret";
 
 export interface CcHookOnboardingRouteOptions {
   /** Loomscope port. Used to construct hook URLs the patcher writes
    * into settings.json + identify our existing entries on read. */
   port: number;
-  /** Per-installation hook secret. Returned (read-only) so the
-   * frontend can show the user where it came from for the
-   * `LOOMSCOPE_SECRET` shell-rc snippet. NOT modifiable via API. */
-  hookSecret: string;
+  /** Accessor returning the current secret. Mirrors the ccHook route
+   * pattern so a mid-run `rotateSecret()` is visible immediately. */
+  getHookSecret: () => string;
 }
 
 export function ccHookOnboardingRouter(opts: CcHookOnboardingRouteOptions) {
@@ -41,13 +41,41 @@ export function ccHookOnboardingRouter(opts: CcHookOnboardingRouteOptions) {
         // should use the same value across hosts (or set per-host).
         // We surface a ready-to-paste line rather than just the
         // value so users don't have to know the export syntax.
-        shellRcSnippet: `export LOOMSCOPE_SECRET=${opts.hookSecret}`,
+        shellRcSnippet: `export LOOMSCOPE_SECRET=${opts.getHookSecret()}`,
         pasteableJson: buildPasteableSnippet(opts.port),
       });
     } catch (err) {
       return c.json(
         {
           error: "failed to read settings.json",
+          detail: err instanceof Error ? err.message : String(err),
+        },
+        500,
+      );
+    }
+  });
+
+  // POST /api/cc-hook-onboarding/rotate-secret — generate a fresh
+  // 64-hex secret + persist + swap into the in-memory accessor.
+  // Returns the post-rotation status payload (same shape as /status).
+  // Side effect: every CC session whose `LOOMSCOPE_SECRET` env var
+  // still has the old value will start hitting 403 — the user must
+  // update the shell rc + restart their terminal/CC for hooks to
+  // resume working. The status response surfaces the new shellRc
+  // snippet so the user can copy-and-paste it immediately.
+  app.post("/rotate-secret", async (c) => {
+    try {
+      await rotateSecret();
+      const status = await getHookStatus(opts.port);
+      return c.json({
+        ...status,
+        shellRcSnippet: `export LOOMSCOPE_SECRET=${opts.getHookSecret()}`,
+        pasteableJson: buildPasteableSnippet(opts.port),
+      });
+    } catch (err) {
+      return c.json(
+        {
+          error: "rotate-secret failed",
           detail: err instanceof Error ? err.message : String(err),
         },
         500,

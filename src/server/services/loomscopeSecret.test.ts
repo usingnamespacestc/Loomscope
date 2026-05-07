@@ -9,8 +9,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   _setSecretPathForTests,
+  getCurrentSecret,
   getOrCreateSecret,
   readSecretIfExists,
+  rotateSecret,
   timingSafeEqualHex,
 } from "@/server/services/loomscopeSecret";
 
@@ -61,6 +63,45 @@ describe("getOrCreateSecret", () => {
     const s = await getOrCreateSecret();
     expect(/^[0-9a-f]{64}$/.test(s)).toBe(true);
     expect(s).not.toBe("z".repeat(64));
+  });
+});
+
+describe("getCurrentSecret + rotateSecret", () => {
+  it("getCurrentSecret throws when called before getOrCreateSecret has primed the cache", () => {
+    // _setSecretPathForTests in beforeEach also resets the in-memory
+    // cache; this test relies on that.
+    expect(() => getCurrentSecret()).toThrow(
+      /getCurrentSecret\(\) called before getOrCreateSecret/,
+    );
+  });
+
+  it("getCurrentSecret reflects the value primed by getOrCreateSecret", async () => {
+    const created = await getOrCreateSecret();
+    expect(getCurrentSecret()).toBe(created);
+  });
+
+  it("rotateSecret returns a fresh 64-hex secret + persists it + updates the in-memory cache", async () => {
+    const original = await getOrCreateSecret();
+    const rotated = await rotateSecret();
+
+    expect(rotated).toHaveLength(64);
+    expect(/^[0-9a-f]{64}$/.test(rotated)).toBe(true);
+    expect(rotated).not.toBe(original);
+
+    // File on disk reflects the new value.
+    const onDisk = (await fs.readFile(secretFile, "utf8")).trim();
+    expect(onDisk).toBe(rotated);
+
+    // In-memory cache now returns the rotated value, NOT the original.
+    expect(getCurrentSecret()).toBe(rotated);
+  });
+
+  it("rotateSecret called twice in a row produces two distinct secrets", async () => {
+    await getOrCreateSecret();
+    const a = await rotateSecret();
+    const b = await rotateSecret();
+    expect(a).not.toBe(b);
+    expect(getCurrentSecret()).toBe(b);
   });
 });
 

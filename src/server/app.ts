@@ -23,7 +23,12 @@ export interface AppOptions {
   // `X-Loomscope-Secret`. Boot script generates / loads via
   // `getOrCreateSecret()`. Required because the CSRF bypass for the
   // hook path leaves it unauthenticated otherwise.
-  hookSecret: string;
+  //
+  // v0.11: accepted as a pure string OR an accessor. Production
+  // wires `getCurrentSecret` so `rotateSecret()` (Settings UI →
+  // Hooks tab → 重新生成) takes effect mid-run; tests pass a static
+  // string for hermeticity. Internally normalised to an accessor.
+  hookSecret: string | (() => string);
   // v1.0 ship prep: when set, Hono serves a production frontend
   // bundle from this directory at the root path. `index.html` is
   // returned for any non-API path so the SPA router (if we ever
@@ -35,6 +40,11 @@ export interface AppOptions {
 }
 
 export function createApp(opts: AppOptions) {
+  const getHookSecret =
+    typeof opts.hookSecret === "function"
+      ? opts.hookSecret
+      : (() => opts.hookSecret as string);
+
   const app = new Hono();
   app.use("*", corsMiddleware(opts.allowedOrigin));
   app.use("*", csrfMiddleware(opts.csrfToken));
@@ -54,7 +64,7 @@ export function createApp(opts: AppOptions) {
   app.route("/api/workspaces", workspacesRouter({ rootDir: opts.rootDir }));
   app.route("/api/sessions", sessionsRouter({ rootDir: opts.rootDir }));
   app.route("/api/search", searchRouter({ rootDir: opts.rootDir }));
-  app.route("/api/cc-hook", ccHookRouter({ secret: opts.hookSecret }));
+  app.route("/api/cc-hook", ccHookRouter({ getSecret: getHookSecret }));
   // v∞.0 PR 3: parse allowedOrigin to recover the listening port —
   // settings.json hook URLs are constructed against that port. If
   // the URL is malformed (custom deploys), fall back to 5174 which
@@ -63,7 +73,7 @@ export function createApp(opts: AppOptions) {
   const port = parsePortFromOrigin(opts.allowedOrigin) ?? 5174;
   app.route(
     "/api/cc-hook-onboarding",
-    ccHookOnboardingRouter({ port, hookSecret: opts.hookSecret }),
+    ccHookOnboardingRouter({ port, getHookSecret }),
   );
 
   // v1.0 ship prep: production-mode static frontend serving. Mount

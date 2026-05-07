@@ -8,7 +8,10 @@ import * as path from "node:path";
 import { serve } from "@hono/node-server";
 
 import { createApp, parseArgs } from "@/server/index";
-import { getOrCreateSecret } from "@/server/services/loomscopeSecret";
+import {
+  getCurrentSecret,
+  getOrCreateSecret,
+} from "@/server/services/loomscopeSecret";
 
 async function main(): Promise<void> {
   // Drop the `node`/`tsx` and script paths — commander expects the user
@@ -24,7 +27,9 @@ async function main(): Promise<void> {
   // hook fire time); onboarding (PR 3) walks the user through both
   // setup steps. Failing to read/write is non-fatal — see service
   // for graceful-degradation semantics.
-  const hookSecret = await getOrCreateSecret();
+  // Prime the in-memory cache; routes use `getCurrentSecret` so a
+  // mid-run rotate-secret takes effect without restart.
+  await getOrCreateSecret();
 
   // v1.0 ship prep: detect a built frontend bundle. If `dist/` exists
   // next to the cwd, serve it (production mode = single process for
@@ -42,7 +47,7 @@ async function main(): Promise<void> {
     rootDir: cli.rootDir,
     csrfToken,
     allowedOrigin,
-    hookSecret,
+    hookSecret: getCurrentSecret,
     staticDir,
   });
 

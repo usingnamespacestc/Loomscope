@@ -138,4 +138,52 @@ describe("SettingsModal", () => {
       screen.getByText(/"hooks":\{"\.\.\."/),
     ).toBeTruthy();
   });
+
+  it("Rotate secret: button shows confirm UI; cancel reverts; confirm fires POST + updates snippet", async () => {
+    let rotateCalled = false;
+    vi.spyOn(global, "fetch").mockImplementation(async (url, init) => {
+      const u = String(url);
+      if (u.includes("/status")) {
+        return new Response(JSON.stringify(mockStatus), { status: 200 });
+      }
+      if (u.includes("/rotate-secret")) {
+        rotateCalled = true;
+        const method = (init as RequestInit | undefined)?.method ?? "GET";
+        if (method !== "POST") return new Response("nope", { status: 405 });
+        return new Response(
+          JSON.stringify({
+            ...mockStatus,
+            shellRcSnippet: "export LOOMSCOPE_SECRET=newsecret456",
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("nope", { status: 404 });
+    });
+
+    render(<SettingsModal open={true} onClose={() => undefined} />);
+    const rotateBtn = await screen.findByTestId(
+      "settings-hooks-rotate-secret",
+    );
+    expect(
+      screen.queryByTestId("settings-hooks-rotate-confirm"),
+    ).toBeNull();
+
+    fireEvent.click(rotateBtn);
+    expect(screen.getByTestId("settings-hooks-rotate-cancel")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("settings-hooks-rotate-cancel"));
+    expect(
+      screen.queryByTestId("settings-hooks-rotate-confirm"),
+    ).toBeNull();
+    expect(rotateCalled).toBe(false);
+
+    fireEvent.click(screen.getByTestId("settings-hooks-rotate-secret"));
+    fireEvent.click(screen.getByTestId("settings-hooks-rotate-confirm"));
+    await waitFor(() => {
+      expect(rotateCalled).toBe(true);
+      expect(
+        screen.getByText(/export LOOMSCOPE_SECRET=newsecret456/),
+      ).toBeTruthy();
+    });
+  });
 });

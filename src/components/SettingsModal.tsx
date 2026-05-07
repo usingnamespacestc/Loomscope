@@ -104,16 +104,20 @@ interface HookStatus {
 
 const STATUS_URL = "/api/cc-hook-onboarding/status";
 const PATCH_URL = "/api/cc-hook-onboarding/patch";
+const ROTATE_URL = "/api/cc-hook-onboarding/rotate-secret";
 
 function HooksPanel() {
   const { t } = useTranslation();
   const [status, setStatus] = useState<HookStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [working, setWorking] = useState<"add" | "remove" | null>(null);
+  const [working, setWorking] = useState<"add" | "remove" | "rotate" | null>(
+    null,
+  );
   const [showSnippet, setShowSnippet] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "secret" | "json">(
     "idle",
   );
+  const [rotateConfirm, setRotateConfirm] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -153,6 +157,29 @@ function HooksPanel() {
       const fresh = (await res.json()) as HookStatus;
       setStatus((prev) => ({ ...(prev ?? fresh), ...fresh }));
       // Bump the Header HookStatusChip immediately.
+      window.dispatchEvent(new CustomEvent("loomscope:hook-status-refresh"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const rotate = async () => {
+    setWorking("rotate");
+    setError(null);
+    try {
+      const res = await fetch(ROTATE_URL, { method: "POST" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        setError(body.error ?? `HTTP ${res.status}`);
+        return;
+      }
+      const fresh = (await res.json()) as HookStatus;
+      setStatus(fresh);
+      setRotateConfirm(false);
       window.dispatchEvent(new CustomEvent("loomscope:hook-status-refresh"));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -270,6 +297,43 @@ function HooksPanel() {
             {copyState === "secret" ? "✓" : "📋"}
           </button>
         </div>
+        {!rotateConfirm ? (
+          <button
+            type="button"
+            onClick={() => setRotateConfirm(true)}
+            data-testid="settings-hooks-rotate-secret"
+            disabled={working !== null}
+            className="text-[12px] text-gray-500 hover:text-gray-800"
+          >
+            {t("settings.hooks.btn_rotate_secret")}
+          </button>
+        ) : (
+          <div className="rounded border border-amber-200 bg-amber-50 p-2 space-y-2 text-[12px] text-amber-900">
+            <p>⚠ {t("settings.hooks.rotate_warning")}</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void rotate()}
+                disabled={working !== null}
+                data-testid="settings-hooks-rotate-confirm"
+                className="rounded bg-amber-600 px-3 py-1 text-[12px] text-white hover:bg-amber-700 disabled:bg-amber-300"
+              >
+                {working === "rotate"
+                  ? t("settings.hooks.btn_rotating")
+                  : t("settings.hooks.btn_rotate_confirm")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setRotateConfirm(false)}
+                disabled={working !== null}
+                data-testid="settings-hooks-rotate-cancel"
+                className="rounded border border-gray-300 bg-white px-3 py-1 text-[12px] text-gray-700 hover:bg-gray-50"
+              >
+                {t("settings.hooks.btn_rotate_cancel")}
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="space-y-2">
