@@ -138,7 +138,9 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
           if typography stops setting `pre { overflow-x: auto }` this
           would start clipping code blocks instead of letting them
           scroll within. */}
-      <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-3">
+      <div
+        className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-3 [overflow-anchor:auto]"
+      >
         {/* Suspense fallback covers the first-render fetch of the
             lazy markdown chunk (~80 KB gz). Subsequent tab switches
             are cached.

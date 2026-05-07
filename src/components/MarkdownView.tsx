@@ -167,7 +167,17 @@ function LazyMarkdownViewImpl({ children, components, className }: Props) {
           obs.disconnect();
         }
       },
-      { rootMargin: "1000px 0px 1000px 0px" },
+      // EN (v0.11): larger lookahead than v0.10's 1000px. The
+      // placeholder→markdown swap changes bubble height (code blocks,
+      // headings, list margins all differ) — when this happens close
+      // to the viewport, scrolling-up users see content above shift,
+      // appearing as flicker. 2500px gives the pipeline ~2.5 viewports
+      // worth of head start, so by the time the bubble enters view it
+      // has stabilised at its real height. Cost: a few more bubbles
+      // pre-rendered upfront, but each is amortised over real reads.
+      // 中: lookahead 1000→2500，让 pipeline 提早 ~2.5 个视口跑完，
+      // 用户滚进去时 bubble 高度已稳定，避免上方/下方布局跳动。
+      { rootMargin: "2500px 0px 2500px 0px" },
     );
     obs.observe(el);
     return () => obs.disconnect();
@@ -186,8 +196,18 @@ function LazyMarkdownViewImpl({ children, components, className }: Props) {
   // long-line behaviour. Visual: code fences / headers show as raw
   // `# heading` / ` ``` ` markup briefly — acceptable for a placeholder
   // the user only sees when scrolling fast.
+  //
+  // `[overflow-anchor:auto]` (defensive): default browser behaviour,
+  // but having it explicitly on each bubble guarantees the scroll
+  // anchor algorithm picks one of them when content above viewport
+  // changes height — keeps scroll position stable across the
+  // placeholder→markdown swap.
   return (
-    <div ref={ref} className={className} data-loomscope-lazy-md="pending">
+    <div
+      ref={ref}
+      className={`${className ?? ""} [overflow-anchor:auto]`}
+      data-loomscope-lazy-md="pending"
+    >
       <div className="whitespace-pre-wrap break-words">{children}</div>
     </div>
   );
