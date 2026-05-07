@@ -37,6 +37,16 @@ export const useStore = create<LoomscopeStore>()(
         pinnedWorkspaces: state.pinnedWorkspaces,
         hiddenWorkspaces: state.hiddenWorkspaces,
         focusedWorkspace: state.focusedWorkspace,
+        // v0.11: persist last-active session so refresh lands the
+        // user back on the same session (not the empty landing). The
+        // sessions Map itself isn't persisted (full ChatFlow data,
+        // re-fetched on load); App.tsx's existing
+        //   useEffect → if activeId && !session → loadSession(activeId)
+        // catches the rehydrated id and restores the canvas. If the
+        // session was deleted from disk while we were away,
+        // loadSession sets session.error and the user sees a clean
+        // hint to pick a new one.
+        activeSessionId: state.activeSessionId,
       }),
     },
   ),
