@@ -47,6 +47,7 @@ describe("Header", () => {
       workflowCache: new Map(),
       workflowViewports: new Map(),
       pendingPermission: null,
+      lastNotification: null,
       currentTurn: null,
       lastTurnHookAt: 0,
         isLoading: false,

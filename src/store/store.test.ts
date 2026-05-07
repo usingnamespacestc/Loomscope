@@ -325,6 +325,30 @@ describe("Session slice", () => {
       expect(s.lastTurnHookAt).toBe(now);
     });
 
+    it("Notification stashes message + notificationType into lastNotification (data path only — no UI consumer yet)", () => {
+      useStore.getState().toggleFold(SID, "_seed_");
+      const now = 1_700_000_000_000;
+      const realNow = Date.now;
+      Date.now = () => now;
+      try {
+        useStore.getState().applyCcHookEvent(
+          SID,
+          "Notification",
+          payload({
+            message: "Claude is waiting for your input",
+            notification_type: "idle_prompt",
+          }),
+        );
+      } finally {
+        Date.now = realNow;
+      }
+      const ln = useStore.getState().sessions.get(SID)!.lastNotification;
+      expect(ln).not.toBeNull();
+      expect(ln?.message).toBe("Claude is waiting for your input");
+      expect(ln?.notificationType).toBe("idle_prompt");
+      expect(ln?.receivedAt).toBe(now);
+    });
+
     it("Stop closes currentTurn but keeps lastTurnHookAt fresh (so trust window stays open)", () => {
       useStore.getState().toggleFold(SID, "_seed_");
       // Open a turn, then close it.

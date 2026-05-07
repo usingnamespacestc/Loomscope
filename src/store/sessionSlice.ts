@@ -29,6 +29,7 @@ function blankSessionState(): SessionState {
     pendingPermission: null,
     currentTurn: null,
     lastTurnHookAt: 0,
+    lastNotification: null,
     isLoading: false,
     error: null,
     lastUpdated: 0,
@@ -579,8 +580,33 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     } else if (event === "Stop") {
       next = { ...next, currentTurn: null, lastTurnHookAt: Date.now() };
     }
+    // v0.11: Notification — capture into state for future UI use.
+    // No active consumer yet; the data is here so v∞.1 (composer
+    // input box) can light up when `idle_prompt` fires, etc.
+    if (event === "Notification") {
+      const ex = payload.extras;
+      next = {
+        ...next,
+        lastNotification: {
+          message: typeof ex.message === "string" ? ex.message : "",
+          notificationType:
+            typeof ex.notification_type === "string"
+              ? ex.notification_type
+              : "unknown",
+          receivedAt: Date.now(),
+        },
+      };
+    }
     updated.set(sessionId, next);
     set({ sessions: updated });
+    // TaskCreated: live push to TaskListPanel — beat the fs.watch
+    // debounce (~50-200ms) by triggering refreshTasks the moment the
+    // hook arrives. fs.watch is still wired, so without this hook the
+    // panel just updates a beat slower; with it, the new task row
+    // appears within ~5ms.
+    if (event === "TaskCreated") {
+      void get().refreshTasks(sessionId);
+    }
   },
 
   setActiveSession: (id) => {

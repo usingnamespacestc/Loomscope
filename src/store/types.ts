@@ -219,6 +219,19 @@ export interface SessionState {
   // 中: 最近一次 UserPromptSubmit/Stop 到达的时间。判定用户有没有
   // 接这俩 hook：30 分钟内有过 = 信任 currentTurn；没过 = 回落老逻辑。
   lastTurnHookAt: number;
+  // EN: most recent Notification hook fire — `notificationType`
+  // includes `idle_prompt` (CC waiting for user input >60s),
+  // `auth_success`, and a few MCP/swarm-specific kinds. Wired
+  // through to state for future UI consumption (idle indicator on
+  // Header, focus-on-composer in v∞.1, etc.); current builds don't
+  // surface this yet.
+  // 中: 最近一次 Notification hook。先把数据通路打通，UI 消费等
+  // v∞.1 输入框上线再做。
+  lastNotification: {
+    message: string;
+    notificationType: string;
+    receivedAt: number;
+  } | null;
   isLoading: boolean;
   error: string | null;
   lastUpdated: number;

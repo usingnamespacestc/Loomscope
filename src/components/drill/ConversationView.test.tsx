@@ -73,6 +73,7 @@ function seed(cf: ChatFlow, selectedNodeId: string | null = null): void {
       workflowCache: new Map(),
       workflowViewports: new Map(),
       pendingPermission: null,
+      lastNotification: null,
       currentTurn: null,
       lastTurnHookAt: 0,
       isLoading: false,
