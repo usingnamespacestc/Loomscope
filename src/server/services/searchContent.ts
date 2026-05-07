@@ -58,6 +58,11 @@ export interface ContentSearchHit {
   /** When the hit lives inside a sub-agent jsonl, this is its agent
    *  id (the SidecarLoader naming `agent-<id>`). null = main jsonl. */
   subAgentId?: string;
+  /** Wall-clock timestamp of the matching record. Drives the
+   *  newest-first sort applied before the result is trimmed to
+   *  `limit`. Empty string for records lacking timestamp (shouldn't
+   *  happen in real CC jsonls but defensive). */
+  timestamp: string;
 }
 
 export interface ContentSearchResult {
@@ -81,6 +86,10 @@ const DEFAULT_LIMIT = 50;
 const DEFAULT_MAX_BYTES = 512 * 1024 * 1024; // 512 MB
 const SNIPPET_CONTEXT_CHARS = 80;
 const TOOL_RESULT_PREVIEW_CHARS = 500;
+// Safety cap on hits collected before sorting. Without this a session
+// with thousands of matches could OOM. 5000 hits × ~300 bytes/hit ≈
+// 1.5 MB, comfortable.
+const COLLECT_CAP = 5_000;
 
 /** Find first match offset of `needle` in `haystack`. */
 function indexOf(
@@ -230,6 +239,7 @@ function* matchRecord(
 ): Generator<ContentSearchHit> {
   const recordUuid = (r as { uuid?: string }).uuid ?? "";
   const promptId = (r as { promptId?: string }).promptId ?? "";
+  const timestamp = (r as { timestamp?: string }).timestamp ?? "";
   // Resolved chatNodeId — for assistant/tool_result records that
   // lack their own promptId, the caller should resolve via
   // parentUuid hop. For v1 we only emit hits whose record carries
@@ -237,7 +247,7 @@ function* matchRecord(
   // attributed via best-effort fallback to record.parentUuid (caller
   // filters/coalesces in the UI).
   if (r.type === "user") {
-    yield* matchUserRecord(r, q, caseSensitive, recordUuid, promptId, subAgentId);
+    yield* matchUserRecord(r, q, caseSensitive, recordUuid, promptId, subAgentId, timestamp);
     return;
   }
   if (r.type === "assistant") {
@@ -251,6 +261,7 @@ function* matchRecord(
       // logic will refine on the click jump.
       ((r as { parentUuid?: string | null }).parentUuid ?? "") || "",
       subAgentId,
+      timestamp,
     );
     return;
   }
@@ -264,6 +275,7 @@ function* matchUserRecord(
   recordUuid: string,
   promptId: string,
   subAgentId: string | undefined,
+  timestamp: string,
 ): Generator<ContentSearchHit> {
   const msg = (r as { message?: { content?: unknown } }).message;
   if (!msg) return;
@@ -280,6 +292,7 @@ function* matchUserRecord(
         matchStart: s.matchStart,
         matchEnd: s.matchEnd,
         ...(subAgentId ? { subAgentId } : {}),
+        timestamp,
       };
     }
     return;
@@ -300,6 +313,7 @@ function* matchUserRecord(
           matchStart: s.matchStart,
           matchEnd: s.matchEnd,
           ...(subAgentId ? { subAgentId } : {}),
+          timestamp,
         };
       }
     } else if (b.type === "tool_result") {
@@ -318,6 +332,7 @@ function* matchUserRecord(
           matchStart: s.matchStart,
           matchEnd: s.matchEnd,
           ...(subAgentId ? { subAgentId } : {}),
+          timestamp,
         };
       }
     }
@@ -331,6 +346,7 @@ function* matchAssistantRecord(
   recordUuid: string,
   parentUuidHint: string,
   subAgentId: string | undefined,
+  timestamp: string,
 ): Generator<ContentSearchHit> {
   const msg = (r as { message?: { content?: unknown } }).message;
   if (!msg) return;
@@ -358,6 +374,7 @@ function* matchAssistantRecord(
           matchStart: s.matchStart,
           matchEnd: s.matchEnd,
           ...(subAgentId ? { subAgentId } : {}),
+          timestamp,
         };
       }
     } else if (b.type === "thinking" && typeof b.thinking === "string") {
@@ -372,6 +389,7 @@ function* matchAssistantRecord(
           matchStart: s.matchStart,
           matchEnd: s.matchEnd,
           ...(subAgentId ? { subAgentId } : {}),
+          timestamp,
         };
       }
     } else if (b.type === "tool_use") {
@@ -390,6 +408,7 @@ function* matchAssistantRecord(
           matchStart: s.matchStart,
           matchEnd: s.matchEnd,
           ...(subAgentId ? { subAgentId } : {}),
+          timestamp,
         };
       }
     }
@@ -429,8 +448,10 @@ export async function searchSessionContent(args: {
   // Pass 1: build uuid → promptId map for parent resolution. Cheap
   // (~150 KB for 1500-record sessions). Done per jsonl since each
   // jsonl is a self-contained namespace.
+  // Pass 2: scan + collect ALL hits up to COLLECT_CAP. We can't
+  // early-stop at `limit` because the user wants newest-first
+  // ordering — that requires knowing all hits before trimming.
   const mainMaps = await buildUuidToPromptId(args.mainJsonlPath);
-  // Main jsonl first
   for await (const hit of scanJsonl({
     jsonlPath: args.mainJsonlPath,
     q,
@@ -441,7 +462,7 @@ export async function searchSessionContent(args: {
   })) {
     scannedRecords += 1;
     hits.push(hit);
-    if (hits.length >= limit) {
+    if (hits.length >= COLLECT_CAP) {
       truncated = true;
       break;
     }
@@ -461,7 +482,7 @@ export async function searchSessionContent(args: {
       })) {
         scannedRecords += 1;
         hits.push(hit);
-        if (hits.length >= limit) {
+        if (hits.length >= COLLECT_CAP) {
           truncated = true;
           break;
         }
@@ -469,9 +490,21 @@ export async function searchSessionContent(args: {
     }
   }
 
+  // Sort newest-first by record timestamp, then trim to `limit`.
+  // Truncation flag flips on if either (a) we hit COLLECT_CAP during
+  // scan or (b) we collected > limit (= user can refine to see more).
+  hits.sort((a, b) => {
+    if (a.timestamp === b.timestamp) return 0;
+    if (!a.timestamp) return 1;
+    if (!b.timestamp) return -1;
+    return a.timestamp < b.timestamp ? 1 : -1;
+  });
+  const trimmedTruncated = truncated || hits.length > limit;
+  const trimmed = hits.slice(0, limit);
+
   return {
-    hits,
-    truncated,
+    hits: trimmed,
+    truncated: trimmedTruncated,
     scannedRecords,
     durationMs: Date.now() - start,
   };

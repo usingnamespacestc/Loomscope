@@ -216,6 +216,7 @@ describe("searchSessionContent", () => {
         type: "user",
         uuid: `u${i}`,
         promptId: `cn${i}`,
+        timestamp: `2026-05-07T01:${String(i).padStart(2, "0")}:00Z`,
         message: { role: "user", content: `repeat NEEDLE ${i}` },
       });
     }
@@ -227,6 +228,42 @@ describe("searchSessionContent", () => {
     });
     expect(r.hits).toHaveLength(10);
     expect(r.truncated).toBe(true);
+  });
+
+  it("sorts hits newest-first by record timestamp", async () => {
+    await writeJsonl(mainJsonl, [
+      {
+        type: "user",
+        uuid: "u-old",
+        promptId: "cn-old",
+        timestamp: "2026-05-01T00:00:00Z",
+        message: { role: "user", content: "FIND_ME oldest" },
+      },
+      {
+        type: "user",
+        uuid: "u-mid",
+        promptId: "cn-mid",
+        timestamp: "2026-05-04T00:00:00Z",
+        message: { role: "user", content: "FIND_ME middle" },
+      },
+      {
+        type: "user",
+        uuid: "u-new",
+        promptId: "cn-new",
+        timestamp: "2026-05-07T00:00:00Z",
+        message: { role: "user", content: "FIND_ME newest" },
+      },
+    ]);
+    const r = await searchSessionContent({
+      mainJsonlPath: mainJsonl,
+      sidecarJsonlPaths: [],
+      options: { q: "FIND_ME" },
+    });
+    expect(r.hits.map((h) => h.recordUuid)).toEqual([
+      "u-new",
+      "u-mid",
+      "u-old",
+    ]);
   });
 
   it("scans sub-agent sidecar jsonls; hits get subAgentId", async () => {
