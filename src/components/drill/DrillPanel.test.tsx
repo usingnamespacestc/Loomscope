@@ -193,7 +193,12 @@ describe("DrillPanel 2-tab strip (v0.8 M3)", () => {
       />,
     );
     // Default Conversation tab — wait for the lazy chunk to load.
-    await screen.findByTestId("conversation-view");
+    // v0.11: EffectiveContextView also renders a ConversationView
+    // inside its own tab body, so two `conversation-view` elements
+    // exist once both lazy chunks resolve. Wait via findAll then
+    // assert at least one is present (we don't care which order
+    // they appear).
+    await screen.findAllByTestId("conversation-view");
     // Switch to Detail tab.
     fireEvent.click(screen.getByTestId("drill-panel-tab-detail"));
     expect(useStore.getState().drillPanelTab).toBe("detail");
@@ -203,9 +208,12 @@ describe("DrillPanel 2-tab strip (v0.8 M3)", () => {
     // asserting unmounted.
     const detailEl = await screen.findByTestId("chat-node-detail");
     expect(detailEl).toBeTruthy();
-    expect((detailEl.parentElement as HTMLElement).style.display).toBe("block");
-    const convEl = screen.getByTestId("conversation-view");
-    expect((convEl.parentElement as HTMLElement).style.display).toBe("none");
+    expect(
+      screen.getByTestId("drill-panel-body-detail").style.display,
+    ).toBe("block");
+    expect(
+      screen.getByTestId("drill-panel-body-conversation").style.display,
+    ).toBe("none");
     expect(
       screen.getByTestId("drill-panel-tab-detail").dataset.active,
     ).toBe("true");

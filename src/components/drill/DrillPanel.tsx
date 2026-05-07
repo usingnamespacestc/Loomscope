@@ -166,7 +166,10 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
             pipeline runs once per chatNode change, not per tab
             switch. */}
         <Suspense fallback={<LazyFallback />}>
-          <div style={{ display: tab === "detail" ? "block" : "none" }}>
+          <div
+            data-testid="drill-panel-body-detail"
+            style={{ display: tab === "detail" ? "block" : "none" }}
+          >
             <DetailTabContent
               sessionId={sessionId}
               chatFlow={chatFlow}
@@ -174,7 +177,10 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
               drilledChatNode={drilledChatNode}
             />
           </div>
-          <div style={{ display: tab === "conversation" ? "block" : "none" }}>
+          <div
+            data-testid="drill-panel-body-conversation"
+            style={{ display: tab === "conversation" ? "block" : "none" }}
+          >
             <ConversationView
               sessionId={sessionId}
               chatFlow={chatFlow}
@@ -189,6 +195,7 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
             />
           </div>
           <div
+            data-testid="drill-panel-body-effective-context"
             style={{
               display: tab === "effective_context" ? "block" : "none",
             }}
@@ -200,7 +207,10 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
               drilledChatNode={drilledChatNode}
             />
           </div>
-          <div style={{ display: tab === "git" ? "block" : "none" }}>
+          <div
+            data-testid="drill-panel-body-git"
+            style={{ display: tab === "git" ? "block" : "none" }}
+          >
             <GitTabContent
               sessionId={sessionId}
               chatFlow={chatFlow}

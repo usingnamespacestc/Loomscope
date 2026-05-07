@@ -56,6 +56,44 @@ export interface EffectiveContextSegment {
   isHybridAncestor?: boolean;
 }
 
+/**
+ * Return the ChatNode id at which the Effective Context view's
+ * conversation slice should START. ConversationView's
+ * `headCutoffChatNodeId` prop slices its resolved path from this id
+ * (inclusive) onward; everything upstream is hidden.
+ *
+ * Rules:
+ * - Pure compact target → return target id (renders just the compact
+ *   bubble; downstream's POV).
+ * - Otherwise walk parentChatNodeId chain backward from target (NOT
+ *   inclusive of target). Return the FIRST compact-effective node hit
+ *   (= latest one in display order, since the walk goes leaf-to-root).
+ *   `compact-effective` = `isCompactSummary` OR `hasInnerCompact`.
+ * - No compact-effective ancestor → return null (no truncation).
+ */
+export function findEffectiveContextCutoff(
+  chatFlow: ChatFlow,
+  targetChatNodeId: string,
+): string | null {
+  const byId = new Map(chatFlow.chatNodes.map((c) => [c.id, c]));
+  const target = byId.get(targetChatNodeId);
+  if (!target) return null;
+  if (target.isCompactSummary && !target.hasInnerCompact) {
+    return target.id;
+  }
+  let curId: string | null = target.parentChatNodeId;
+  let safety = chatFlow.chatNodes.length + 1;
+  while (curId !== null && safety-- > 0) {
+    const node = byId.get(curId);
+    if (!node) break;
+    if (node.isCompactSummary || node.hasInnerCompact) {
+      return node.id;
+    }
+    curId = node.parentChatNodeId;
+  }
+  return null;
+}
+
 export function buildEffectiveContext(
   chatFlow: ChatFlow,
   targetChatNodeId: string,

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { buildEffectiveContext } from "@/components/drill/effectiveContext";
+import {
+  buildEffectiveContext,
+  findEffectiveContextCutoff,
+} from "@/components/drill/effectiveContext";
 import type { ChatFlow, ChatNode } from "@/data/types";
 
 const SID = "00000000-0000-4000-8000-0000000000ee";
@@ -230,5 +233,71 @@ describe("buildEffectiveContext", () => {
     expect(segs).toEqual([
       { kind: "current_turn", sourceChatNodeId: "target", summaryText: "" },
     ]);
+  });
+});
+
+describe("findEffectiveContextCutoff", () => {
+  it("no compact in chain → null", () => {
+    const cf = chatFlow([
+      chatNode("a", null),
+      chatNode("b", "a"),
+      chatNode("target", "b"),
+    ]);
+    expect(findEffectiveContextCutoff(cf, "target")).toBeNull();
+  });
+
+  it("single compact in chain → returns compact id", () => {
+    const cf = chatFlow([
+      chatNode("a", null),
+      chatNode("b", "a", { isCompactSummary: true }),
+      chatNode("target", "b"),
+    ]);
+    expect(findEffectiveContextCutoff(cf, "target")).toBe("b");
+  });
+
+  it("multiple compacts → returns the LATEST (closest to target)", () => {
+    const cf = chatFlow([
+      chatNode("a", null),
+      chatNode("b", "a", { isCompactSummary: true }),
+      chatNode("c", "b"),
+      chatNode("d", "c", { isCompactSummary: true }),
+      chatNode("e", "d"),
+      chatNode("target", "e"),
+    ]);
+    expect(findEffectiveContextCutoff(cf, "target")).toBe("d");
+  });
+
+  it("hybrid in chain counts as a cutoff", () => {
+    const cf = chatFlow([
+      chatNode("a", null),
+      chatNode("h", "a", { hasInnerCompact: true }),
+      chatNode("target", "h"),
+    ]);
+    expect(findEffectiveContextCutoff(cf, "target")).toBe("h");
+  });
+
+  it("pure compact target → returns target id (renders just the compact bubble)", () => {
+    const cf = chatFlow([
+      chatNode("a", null),
+      chatNode("compact-target", "a", { isCompactSummary: true }),
+    ]);
+    expect(findEffectiveContextCutoff(cf, "compact-target")).toBe(
+      "compact-target",
+    );
+  });
+
+  it("hybrid target → does NOT cut at itself, walks ancestors", () => {
+    // target's inner compact happens AFTER its context entry.
+    const cf = chatFlow([
+      chatNode("a", null),
+      chatNode("b", "a"),
+      chatNode("target", "b", { hasInnerCompact: true }),
+    ]);
+    expect(findEffectiveContextCutoff(cf, "target")).toBeNull();
+  });
+
+  it("missing target → null (graceful)", () => {
+    const cf = chatFlow([chatNode("a", null)]);
+    expect(findEffectiveContextCutoff(cf, "nope")).toBeNull();
   });
 });

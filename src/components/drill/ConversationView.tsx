@@ -56,6 +56,15 @@ interface Props {
   // (not ChatNodes), so a click on a conversation bubble has no
   // meaningful canvas target.
   focusLock?: string | null;
+  // v0.11: optional head-cutoff. When set, the resolved path is sliced
+  // to start at this ChatNode id (inclusive). Anything above is dropped
+  // from rendering — every other behavior (forks past the cutoff,
+  // selectedIndex, scroll, hover-pan, search-pulse) is preserved.
+  // Used by the Effective Context tab to hide ancestors that CC's
+  // auto-compact has truncated from the LLM's actual context. Falls
+  // through unchanged when null / when the cutoff id isn't on the
+  // resolved path.
+  headCutoffChatNodeId?: string | null;
 }
 
 // Shared sentinel — Zustand uses Object.is referential equality on
@@ -89,7 +98,12 @@ const ConversationObserverContext = createContext<IntersectionObserver | null>(
   null,
 );
 
-export function ConversationView({ sessionId, chatFlow, focusLock = null }: Props) {
+export function ConversationView({
+  sessionId,
+  chatFlow,
+  focusLock = null,
+  headCutoffChatNodeId = null,
+}: Props) {
   const storeSelectedId = useStore(
     (s) => s.sessions.get(sessionId)?.selectedNodeId ?? null,
   );
@@ -109,10 +123,27 @@ export function ConversationView({ sessionId, chatFlow, focusLock = null }: Prop
   const sessionLive = useSessionLiveness(sessionId);
   const latestRunningId = useLatestChatNodeId(sessionId);
 
-  const { path, forks, selectedIndex } = useMemo(
-    () => resolvePath(chatFlow, selectedId),
-    [chatFlow, selectedId],
-  );
+  const { path, forks, selectedIndex } = useMemo(() => {
+    const resolved = resolvePath(chatFlow, selectedId);
+    if (!headCutoffChatNodeId) return resolved;
+    const cutIdx = resolved.path.indexOf(headCutoffChatNodeId);
+    if (cutIdx <= 0) return resolved;
+    // Slice at the cutoff (inclusive) and drop forks that lived above.
+    // selectedIndex shifts left by cutIdx; if the selection lived ABOVE
+    // the cutoff (rare — Effective Context only sets this when focused
+    // is at or below the cutoff), clamp to the cutoff itself so the
+    // dim-past-selection logic doesn't dim the whole visible slice.
+    const slicedPath = resolved.path.slice(cutIdx);
+    const slicedForks = resolved.forks.filter(
+      (f) => slicedPath.indexOf(f.nodeId) >= 0,
+    );
+    const slicedSelectedIdx = Math.max(0, resolved.selectedIndex - cutIdx);
+    return {
+      path: slicedPath,
+      forks: slicedForks,
+      selectedIndex: slicedSelectedIdx,
+    };
+  }, [chatFlow, selectedId, headCutoffChatNodeId]);
   const forkAt = useMemo(() => new Map(forks.map((f) => [f.nodeId, f])), [forks]);
   const byId = useMemo(
     () =>
