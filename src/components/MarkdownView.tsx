@@ -17,7 +17,7 @@
  * text — running the full markdown pipeline on 1500+ ChatNode cards
  * would cost more than it surfaces.
  */
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
@@ -147,6 +147,40 @@ function shouldStartEager(): boolean {
   return false;
 }
 
+// EN (v0.11): estimate the eventual markdown render height from the
+// raw source text. Both the placeholder and the real `<MarkdownView>`
+// get this as `min-height`, so the placeholder→markdown swap doesn't
+// reflow when the estimate is reasonably accurate. Tuned to be
+// slightly CONSERVATIVE (overshoot) — small visual gap below content
+// is much less jarring than a height jump that pushes upper bubbles.
+//
+// Heuristics (per real-data inspection of CC outputs):
+//   LINE_PX          ~21 (13px text * 1.625 leading-relaxed)
+//   CODE_BLOCK_PAIR  ~16 (top + bottom padding the code block adds
+//                          beyond the raw lines the placeholder shows)
+//   HEADING_EXTRA    ~12 (font-size bump from 13px to ~18px for h2)
+//
+// 中: 用源 markdown 估算渲染后高度。占位符 + 真 markdown 共用 min-
+// height；估算偏高一点，swap 时不会跳。代码块/标题这些在 markdown
+// pipeline 后会膨胀的元素加额外像素。
+const LINE_PX = 21;
+const CODE_BLOCK_PAIR_OVERHEAD_PX = 16;
+const HEADING_EXTRA_PX = 12;
+
+function estimateMarkdownHeight(text: string): number {
+  if (typeof text !== "string" || text.length === 0) return 0;
+  const lines = text.split("\n");
+  const codeBlockPairs = Math.floor(
+    (text.match(/^```/gm) ?? []).length / 2,
+  );
+  const headings = (text.match(/^#{1,6}\s/gm) ?? []).length;
+  return (
+    lines.length * LINE_PX +
+    codeBlockPairs * CODE_BLOCK_PAIR_OVERHEAD_PX +
+    headings * HEADING_EXTRA_PX
+  );
+}
+
 function LazyMarkdownViewImpl({ children, components, className }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
   // First-render decision: eager in tests / SSR; viewport-gated in
@@ -155,6 +189,14 @@ function LazyMarkdownViewImpl({ children, components, className }: Props) {
   // and lose any internal state (none today, but defensive).
   const eagerOnMount = useRef(shouldStartEager());
   const [visible, setVisible] = useState(eagerOnMount.current);
+  // v0.11: pre-compute estimated final height. Used as min-height on
+  // both placeholder + real-markdown wrappers so the swap is height-
+  // neutral. Memoise on text content — heuristic is cheap (regex +
+  // split) but avoids recomputing on parent re-renders.
+  const minHeight = useMemo(
+    () => (typeof children === "string" ? estimateMarkdownHeight(children) : 0),
+    [children],
+  );
 
   useEffect(() => {
     if (visible) return;
@@ -184,10 +226,18 @@ function LazyMarkdownViewImpl({ children, components, className }: Props) {
   }, [visible]);
 
   if (visible) {
+    // Wrap real markdown in a min-height anchor so the height matches
+    // the placeholder estimate — placeholder→markdown swap doesn't
+    // change the bubble's outer dimension.
     return (
-      <MarkdownView className={className} components={components}>
-        {children}
-      </MarkdownView>
+      <div
+        style={minHeight > 0 ? { minHeight } : undefined}
+        className="[overflow-anchor:auto]"
+      >
+        <MarkdownView className={className} components={components}>
+          {children}
+        </MarkdownView>
+      </div>
     );
   }
   // Plain-text placeholder. Same outer wrapper shape (className) so
@@ -207,10 +257,15 @@ function LazyMarkdownViewImpl({ children, components, className }: Props) {
       ref={ref}
       className={`${className ?? ""} [overflow-anchor:auto]`}
       data-loomscope-lazy-md="pending"
+      style={minHeight > 0 ? { minHeight } : undefined}
     >
       <div className="whitespace-pre-wrap break-words">{children}</div>
     </div>
   );
 }
+
+// Test-only: expose the heuristic so unit tests can assert specific
+// content shapes produce expected estimated heights.
+export const _estimateMarkdownHeightForTests = estimateMarkdownHeight;
 
 export const LazyMarkdownView = memo(LazyMarkdownViewImpl);

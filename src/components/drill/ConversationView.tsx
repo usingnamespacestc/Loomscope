@@ -904,7 +904,7 @@ function MessageBubbleImpl({
               {Array.from({ length: pendingToolSkeletonCount }).map((_, i) => (
                 <div
                   key={i}
-                  className="rounded border border-gray-200 bg-gray-50/40 h-[26px]"
+                  className="rounded border border-gray-200 bg-gray-50/40 h-[28px]"
                 />
               ))}
             </div>
