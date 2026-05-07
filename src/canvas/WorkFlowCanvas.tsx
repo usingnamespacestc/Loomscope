@@ -135,14 +135,34 @@ function CanvasInner({ chatNode, sessionId }: WorkFlowCanvasProps) {
     }
     return set;
   }, [nodes]);
+  // v0.11: while the turn is open (parentRunning), bridge the brief
+  // gap between a tool_call's resultBlock landing and the next
+  // llm_call/tool_call appearing — during that window NO WorkNode is
+  // data-shape "incomplete", so without this the inflow edge would
+  // momentarily stop animating mid-turn. Fix: any leaf WorkNode (no
+  // outgoing edge) gets its incoming edge lit while the turn is open.
+  // This keeps the dashed flow continuous through tool→tool transitions
+  // and only switches targets when the next leaf takes over.
+  const leafWorkNodeIds = useMemo(() => {
+    const hasOut = new Set<string>();
+    for (const e of rawEdges) hasOut.add(e.source);
+    const leaves = new Set<string>();
+    for (const n of rawNodes) {
+      if (!hasOut.has(n.id)) leaves.add(n.id);
+    }
+    return leaves;
+  }, [rawNodes, rawEdges]);
   const edges = useMemo(
     () =>
-      rawEdges.map((e) =>
-        runningWorkNodeIds.has(e.target)
+      rawEdges.map((e) => {
+        const inflowAnimated =
+          runningWorkNodeIds.has(e.target) ||
+          (parentRunning && leafWorkNodeIds.has(e.target));
+        return inflowAnimated
           ? { ...e, data: { ...(e.data ?? {}), running: true } }
-          : e,
-      ),
-    [rawEdges, runningWorkNodeIds],
+          : e;
+      }),
+    [rawEdges, runningWorkNodeIds, leafWorkNodeIds, parentRunning],
   );
   const setSelected = useStore((s) => s.setWorkflowSelected);
 
