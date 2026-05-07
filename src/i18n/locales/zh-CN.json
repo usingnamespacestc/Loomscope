@@ -115,5 +115,10 @@
   "language": {
     "zh": "中",
     "en": "EN"
+  },
+  "task_list": {
+    "title": "Tasks",
+    "tooltip_expand": "展开 CC TaskList（点击收起）",
+    "tooltip_collapse": "收起"
   }
 }

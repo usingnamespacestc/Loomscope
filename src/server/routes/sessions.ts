@@ -43,6 +43,7 @@ import {
   subscriberCount,
   type SseSubscriber,
 } from "@/server/services/sseHub";
+import { readTasksForSession } from "@/server/services/taskList";
 import type { ChatFlow } from "@/data/types";
 
 // Heartbeat cadence. Two reasons it exists:
@@ -453,6 +454,20 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
 
       const body: SubAgentResponse = { agentId, subdir: subdir ?? null, chatFlow, meta };
       return c.json(body);
+    },
+  );
+
+  // CC TaskList: read-only mirror of `~/.claude/tasks/<sid>/*.json` (the
+  // TaskCreate/TaskUpdate per-session todo list, separate from the
+  // jsonl event stream). Mirrors the schema in CC's `utils/tasks.ts`.
+  // Empty array when CC never invoked TaskCreate for this session.
+  app.get(
+    "/:id/tasks",
+    zValidator("param", z.object({ id: z.string().regex(SESSION_ID_RE) })),
+    async (c) => {
+      const { id } = c.req.valid("param");
+      const tasks = await readTasksForSession(id);
+      return c.json({ tasks });
     },
   );
 

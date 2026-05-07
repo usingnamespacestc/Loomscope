@@ -8,6 +8,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import type { LoomscopeStore } from "@/store/types";
 import { createLiveEventSlice } from "@/store/liveEventSlice";
 import { createSessionSlice } from "@/store/sessionSlice";
+import { createTaskListSlice } from "@/store/taskListSlice";
 import { createUISlice } from "@/store/uiSlice";
 import { createWorkspaceSlice } from "@/store/workspaceSlice";
 
@@ -18,6 +19,7 @@ export const useStore = create<LoomscopeStore>()(
       ...createWorkspaceSlice(set, get, api),
       ...createSessionSlice(set, get, api),
       ...createLiveEventSlice(set, get, api),
+      ...createTaskListSlice(set, get, api),
     }),
     {
       name: "loomscope:state",

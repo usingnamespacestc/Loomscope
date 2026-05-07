@@ -20,6 +20,7 @@ import { WorkFlowPanProvider } from "@/canvas/WorkFlowPanContext";
 import { ConversationScrollProvider } from "@/canvas/ConversationScrollContext";
 import { ChatFlowCanvas } from "@/canvas/ChatFlowCanvas";
 import { WorkFlowCanvas } from "@/canvas/WorkFlowCanvas";
+import { TaskListPanel } from "@/components/TaskListPanel";
 import { DrillPanel } from "@/components/drill/DrillPanel";
 import { Header } from "@/components/Header";
 import { HookOnboardingModal } from "@/components/HookOnboardingModal";
@@ -46,6 +47,17 @@ export default function App() {
       void useStore.getState().loadSession(activeId);
     }
   }, [activeId, session]);
+
+  // CC TaskList: load on session activation, drop on switch-away.
+  // The SSE handler below pushes refreshes via `kind: "tasks"`.
+  useEffect(() => {
+    if (!activeId) return;
+    void useStore.getState().loadTasks(activeId);
+    return () => {
+      // Don't clear on unmount — user may switch back; cache survives.
+      // (clearTasks is exposed for explicit session-removal flows.)
+    };
+  }, [activeId]);
 
   // v0.9 file-tail spike: subscribe to the active session's SSE event
   // stream. On `invalidate`, call refreshSession — re-fetches lite
@@ -74,7 +86,10 @@ export default function App() {
           // v0.9.1: server now classifies the change source. Older
           // payloads without `kind` are treated as main (back compat
           // for any in-flight stream during deploy).
-          kind?: "main" | "subagent";
+          //
+          // v0.11: `tasks` added — the per-session
+          // `~/.claude/tasks/<sid>/*.json` directory changed.
+          kind?: "main" | "subagent" | "tasks";
           agentId?: string;
           subdir?: string | null;
         };
@@ -83,9 +98,14 @@ export default function App() {
         // (useSessionLiveness) flip into active state. Both main
         // and subagent invalidates count as "session is alive".
         // 中: 任何一种 invalidate 都算 session 活跃信号；让 liveness
-        // hook 进入 active 显示动画。
-        useStore.getState().markSessionActivity(activeId);
-        if (payload.kind === "subagent" && payload.agentId) {
+        // hook 进入 active 显示动画。Task list churn alone is
+        // not a session-running signal — skip the activity bump.
+        if (payload.kind !== "tasks") {
+          useStore.getState().markSessionActivity(activeId);
+        }
+        if (payload.kind === "tasks") {
+          void useStore.getState().refreshTasks(activeId);
+        } else if (payload.kind === "subagent" && payload.agentId) {
           void useStore
             .getState()
             .refreshSubAgent(
@@ -269,6 +289,9 @@ export default function App() {
               <ChatFlowCanvas chatFlow={view.chatFlow} sessionId={activeId} />
               <DrillBreadcrumb sessionId={activeId} frames={view.frameLabels} />
             </>
+          )}
+          {activeId && session?.chatFlow && (
+            <TaskListPanel sessionId={activeId} />
           )}
         </main>
         {activeId && session?.chatFlow && drillScopeChatFlow && (

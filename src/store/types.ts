@@ -378,4 +378,40 @@ export interface LiveEventSlice {
   unsubscribeSession: (sessionId: string) => void;
 }
 
-export type LoomscopeStore = UISlice & WorkspaceSlice & SessionSlice & LiveEventSlice;
+// CC TaskList — read-only mirror of `~/.claude/tasks/<sid>/*.json`,
+// sourced from the `GET /api/sessions/:id/tasks` endpoint. Updates are
+// driven by the existing per-session SSE channel via `kind: "tasks"`
+// invalidate events.
+export type CcTaskStatus = "pending" | "in_progress" | "completed";
+export interface CcTask {
+  id: string;
+  subject: string;
+  description: string;
+  activeForm?: string;
+  owner?: string;
+  status: CcTaskStatus;
+  blocks: string[];
+  blockedBy: string[];
+  metadata?: Record<string, unknown>;
+}
+export interface TaskListSlice {
+  /** sessionId → tasks (sorted by numeric id ascending). */
+  tasksBySession: Map<string, CcTask[]>;
+  /** Inflight controller per session — last-write-wins on race. */
+  taskFetchControllers: Map<string, AbortController>;
+  /** Bottom-right panel collapsed/expanded toggle (UI pref). */
+  taskListPanelCollapsed: boolean;
+  setTaskListPanelCollapsed: (collapsed: boolean) => void;
+  /** Idempotent: fetch + cache tasks for a session. */
+  loadTasks: (sessionId: string) => Promise<void>;
+  /** SSE-driven refresh — same network call as load, no debounce. */
+  refreshTasks: (sessionId: string) => Promise<void>;
+  /** Drop cache for a session (called on session unmount / removal). */
+  clearTasks: (sessionId: string) => void;
+}
+
+export type LoomscopeStore = UISlice &
+  WorkspaceSlice &
+  SessionSlice &
+  LiveEventSlice &
+  TaskListSlice;

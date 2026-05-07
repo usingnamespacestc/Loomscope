@@ -49,8 +49,9 @@ import { FSWatcher, watch } from "chokidar";
 import { parseAgentId } from "@/parse/sidecar";
 import { invalidateSession } from "@/server/services/chatFlowCache";
 import { broadcast } from "@/server/services/sseHub";
+import { tasksDirFor } from "@/server/services/taskList";
 
-type WatchedPathKind = "main" | "sidecar-dir";
+type WatchedPathKind = "main" | "sidecar-dir" | "tasks-dir";
 
 let watcher: FSWatcher | null = null;
 
@@ -98,13 +99,22 @@ function ensureWatcher(): FSWatcher {
   // sub-agent shows up as `add`, subsequent appends as `change`.
   watcher.on("change", (filePath: string) => handleEvent(filePath, "change"));
   watcher.on("add", (filePath: string) => handleEvent(filePath, "add"));
+  // Tasks under `~/.claude/tasks/<sid>/` get unlinked when CC's
+  // `deleteTask` flow runs (or status "deleted"). Surface that as a
+  // tasks-kind invalidate too. unlink on a main jsonl or sidecar
+  // means the session was nuked — handled elsewhere; we route through
+  // the same dispatcher.
+  watcher.on("unlink", (filePath: string) => handleEvent(filePath, "unlink"));
   watcher.on("error", (err) => {
     console.error("[sessionWatcher] chokidar error:", err);
   });
   return watcher;
 }
 
-function handleEvent(filePath: string, reason: "change" | "add"): void {
+function handleEvent(
+  filePath: string,
+  reason: "change" | "add" | "unlink",
+): void {
   // Direct hit: this is a main-jsonl path we explicitly watched.
   const directOwners = pathToSessions.get(filePath);
   if (directOwners && pathKind.get(filePath) === "main") {
@@ -116,6 +126,28 @@ function handleEvent(filePath: string, reason: "change" | "add"): void {
       });
     }
     return;
+  }
+
+  // Tasks-dir: any file under a watched `~/.claude/tasks/<sid>` dir
+  // counts. CC writes one json file per task atomically (rename), so
+  // change/add/unlink all surface as add/change events on the dir.
+  // Skip hidden dotfiles (`.lock`, `.highwatermark`) — task list state
+  // doesn't change for those.
+  const taskFilename = path.basename(filePath);
+  if (taskFilename.endsWith(".json") && !taskFilename.startsWith(".")) {
+    for (const [dir, kind] of pathKind) {
+      if (kind !== "tasks-dir") continue;
+      if (!filePath.startsWith(dir + path.sep)) continue;
+      const sessions = pathToSessions.get(dir);
+      if (!sessions || sessions.size === 0) continue;
+      for (const sessionId of sessions) {
+        broadcast(sessionId, {
+          event: "invalidate",
+          data: { sessionId, kind: "tasks", reason, path: filePath },
+        });
+      }
+      return;
+    }
   }
 
   // Otherwise, check if `filePath` lies under any watched sidecar dir.
@@ -198,6 +230,11 @@ export function watchSessionClosure(
     addPath(sessionId, p, "main", owned);
     addPath(sessionId, sidecarSubagentsDir(p), "sidecar-dir", owned);
   }
+  // CC TaskList lives at `~/.claude/tasks/<sid>` (default — sessionId
+  // doubles as taskListId). Watching it lets task add/edit/delete
+  // surface as a `kind: "tasks"` SSE invalidate. Dir may not exist
+  // for sessions that never used TaskCreate; chokidar tolerates that.
+  addPath(sessionId, tasksDirFor(sessionId), "tasks-dir", owned);
 }
 
 /**

@@ -115,5 +115,10 @@
   "language": {
     "zh": "中",
     "en": "EN"
+  },
+  "task_list": {
+    "title": "Tasks",
+    "tooltip_expand": "Expand CC TaskList (click to collapse)",
+    "tooltip_collapse": "Collapse"
   }
 }
