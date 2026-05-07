@@ -668,6 +668,8 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
   setGitFileFocusFromWorkflow: (file) =>
     set({ gitFileFocusFromWorkflow: file }),
   setGitFileHoverFromPanel: (file) => set({ gitFileHoverFromPanel: file }),
+  searchHighlight: null,
+  setSearchHighlight: (h) => set({ searchHighlight: h }),
 
   setSelected: (sessionId, nodeId) => {
     const updated = new Map(get().sessions);

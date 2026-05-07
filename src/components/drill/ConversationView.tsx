@@ -243,6 +243,25 @@ export function ConversationView({ sessionId, chatFlow, focusLock = null }: Prop
     });
   }, [selectedId, chatFlow?.id, scrollToBubble, isLocked, drillTab]);
 
+  // v0.11 Phase 2 — session-search jump highlight. SessionSearchBar
+  // sets store.searchHighlight; we scroll the matching ChatNode's
+  // bubble into view + apply a 1.5s pulse outline. record-uuid level
+  // pinpoint TBD (current architecture pinpoints by ChatNode id).
+  const searchHighlight = useStore((s) => s.searchHighlight);
+  const [pulsedChatNodeId, setPulsedChatNodeId] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!searchHighlight) return;
+    if (searchHighlight.sessionId !== sessionId) return;
+    if (drillTab !== "conversation") return;
+    const cnId = searchHighlight.chatNodeId;
+    scrollToBubble(cnId, { smooth: true, block: "center" });
+    setPulsedChatNodeId(cnId);
+    const t = window.setTimeout(() => setPulsedChatNodeId(null), 1500);
+    return () => window.clearTimeout(t);
+  }, [searchHighlight, sessionId, drillTab, scrollToBubble]);
+
   // EN: stick-to-bottom pattern (chat app convention). On session
   // open, all bubbles render with text from summary.assistantText
   // (v0.9.2 a) but tool pills lazy-load → bubble heights grow over
@@ -564,6 +583,7 @@ export function ConversationView({ sessionId, chatFlow, focusLock = null }: Prop
               isDimmed={isDimmed}
               isRunning={isRunning}
               isLocked={isLocked}
+              isSearchPulsed={nid === pulsedChatNodeId}
               onSelect={handleSelect}
               onHoverDwell={handleHoverDwell}
               onHoverEnd={handleHoverEnd}
@@ -621,6 +641,7 @@ function MessageBubbleImpl({
   isDimmed,
   isRunning,
   isLocked,
+  isSearchPulsed = false,
   onSelect,
   onHoverDwell,
   onHoverEnd,
@@ -635,6 +656,9 @@ function MessageBubbleImpl({
    * and click/hover handlers are suppressed at the parent level. We
    * still receive the props so we can adjust visual cues. */
   isLocked: boolean;
+  /** v0.11 Phase 2: 1.5s yellow outline pulse when this bubble was
+   * just jumped to from session search. Reset by the parent. */
+  isSearchPulsed?: boolean;
   onSelect: (chatNodeId: string) => void;
   onHoverDwell: (chatNodeId: string) => void;
   onHoverEnd: () => void;
@@ -809,6 +833,16 @@ function MessageBubbleImpl({
       data-dimmed={isDimmed ? "true" : "false"}
       data-running={isRunning ? "true" : "false"}
       data-locked={isLocked ? "true" : "false"}
+      style={
+        isSearchPulsed
+          ? {
+              outline: "3px solid rgb(250 204 21)",
+              outlineOffset: "4px",
+              borderRadius: "8px",
+              transition: "outline 0.4s ease-out",
+            }
+          : undefined
+      }
       onClick={isLocked ? undefined : handleClick}
       onMouseEnter={isLocked ? undefined : startDwell}
       onMouseLeave={isLocked ? undefined : cancelDwell}

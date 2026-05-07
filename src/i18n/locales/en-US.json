@@ -129,6 +129,13 @@
     "zh": "中",
     "en": "EN"
   },
+  "session_search": {
+    "placeholder": "Search in this session…",
+    "no_results": "(no matches)",
+    "truncated_hint": "Results truncated — refine your query",
+    "case_toggle_tooltip": "Case-sensitive",
+    "clear_tooltip": "Clear"
+  },
   "task_list": {
     "title": "Tasks",
     "tooltip_expand": "Expand CC TaskList (click to collapse)",

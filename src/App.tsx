@@ -21,6 +21,7 @@ import { ConversationScrollProvider } from "@/canvas/ConversationScrollContext";
 import { ChatFlowCanvas } from "@/canvas/ChatFlowCanvas";
 import { WorkFlowCanvas } from "@/canvas/WorkFlowCanvas";
 import { TaskListPanel } from "@/components/TaskListPanel";
+import { SessionSearchBar } from "@/components/SessionSearchBar";
 import { DrillPanel } from "@/components/drill/DrillPanel";
 import { Header } from "@/components/Header";
 import { HookOnboardingModal } from "@/components/HookOnboardingModal";
@@ -292,6 +293,9 @@ export default function App() {
           )}
           {activeId && session?.chatFlow && (
             <TaskListPanel sessionId={activeId} />
+          )}
+          {activeId && session?.chatFlow && (
+            <SessionSearchBar sessionId={activeId} />
           )}
         </main>
         {activeId && session?.chatFlow && drillScopeChatFlow && (

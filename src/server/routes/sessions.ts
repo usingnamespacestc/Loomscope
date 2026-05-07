@@ -45,6 +45,7 @@ import {
 } from "@/server/services/sseHub";
 import { readTasksForSession } from "@/server/services/taskList";
 import { gitShow, gitShowFiles } from "@/server/services/gitDiff";
+import { searchSessionContent } from "@/server/services/searchContent";
 import type { ChatFlow } from "@/data/types";
 
 // Heartbeat cadence. Two reasons it exists:
@@ -566,6 +567,57 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
       const r = await gitShowFiles({ repo, sha });
       if (!r.ok) return c.json(r, r.code === "not-a-repo" ? 404 : 400);
       return c.json({ ok: true, files: r.files });
+    },
+  );
+
+  // v0.11 Phase 2 — session-content search. Linear grep over the
+  // session's main jsonl + sidecar sub-agent jsonls. UI calls this
+  // on debounced input; first-pass returns first 50 matches.
+  app.get(
+    "/:id/search/content",
+    zValidator("param", z.object({ id: z.string().regex(SESSION_ID_RE) })),
+    zValidator(
+      "query",
+      z.object({
+        q: z.string().min(1).max(200),
+        cs: z.enum(["0", "1"]).optional(), // case-sensitive flag
+        limit: z.coerce.number().int().min(1).max(200).optional(),
+      }),
+    ),
+    async (c) => {
+      const { id } = c.req.valid("param");
+      const { q, cs, limit } = c.req.valid("query");
+      const jsonlPath = await locateSessionJsonl(opts.rootDir, id);
+      if (!jsonlPath) return c.json({ error: "session not found" }, 404);
+      // Sub-agent sidecar jsonls (under `<sid>/subagents/`)
+      const sidecarDir = sidecarSubagentsDir(jsonlPath);
+      const sidecarJsonlPaths: Array<{ path: string; agentId: string }> = [];
+      try {
+        const entries = await fsp.readdir(sidecarDir, { withFileTypes: true });
+        for (const e of entries) {
+          if (!e.isFile()) continue;
+          if (!e.name.startsWith("agent-") || !e.name.endsWith(".jsonl")) {
+            continue;
+          }
+          const agentId = e.name.slice("agent-".length, -".jsonl".length);
+          sidecarJsonlPaths.push({
+            path: path.join(sidecarDir, e.name),
+            agentId,
+          });
+        }
+      } catch {
+        // No sidecar dir = no sub-agents; main jsonl only.
+      }
+      const result = await searchSessionContent({
+        mainJsonlPath: jsonlPath,
+        sidecarJsonlPaths,
+        options: {
+          q,
+          caseSensitive: cs === "1",
+          limit,
+        },
+      });
+      return c.json(result);
     },
   );
 

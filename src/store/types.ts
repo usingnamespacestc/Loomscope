@@ -405,6 +405,20 @@ export interface SessionSlice {
   setGitFileHoverFromWorkflow: (file: string | null) => void;
   setGitFileFocusFromWorkflow: (file: string | null) => void;
   setGitFileHoverFromPanel: (file: string | null) => void;
+  // v0.11 Phase 2 — session search jump target. ConversationView
+  // subscribes; on a value change it scrolls the matching record into
+  // view and pulses a highlight for ~1.5 s. `receivedAt` is included
+  // so the same record clicked twice still pulses the second time
+  // (object identity changes).
+  searchHighlight: {
+    sessionId: string;
+    recordUuid: string;
+    chatNodeId: string;
+    query: string;
+    caseSensitive: boolean;
+    receivedAt: number;
+  } | null;
+  setSearchHighlight: (h: SessionSlice["searchHighlight"]) => void;
 }
 
 // ─── Live event slice ────────────────────────────────────────────────────────

@@ -129,6 +129,13 @@
     "zh": "中",
     "en": "EN"
   },
+  "session_search": {
+    "placeholder": "搜索本 session 内容…",
+    "no_results": "(无匹配)",
+    "truncated_hint": "结果已截断，请输入更具体的关键词",
+    "case_toggle_tooltip": "区分大小写",
+    "clear_tooltip": "清空"
+  },
   "task_list": {
     "title": "Tasks",
     "tooltip_expand": "展开 CC TaskList（点击收起）",
