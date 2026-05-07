@@ -67,7 +67,18 @@
   "drill_panel": {
     "tab_detail": "详情",
     "tab_conversation": "对话",
+    "tab_effective_context": "实际上下文",
     "tab_git": "变更"
+  },
+  "effective_context": {
+    "placeholder_no_node": "选个 ChatNode 看它实际收到的上下文（auto-compact 截断后）",
+    "intro": "下面这一段，是被选中节点 LLM 调用实际看到的上下文。CC 在链上插入的 compact 节点（含 hybrid「内含压缩」节点）会把上游内容替换为 summaryText。",
+    "label_compact_summary": "压缩摘要 — 替代上方原文",
+    "label_compact_target": "压缩摘要（本节点内容）",
+    "label_ancestor": "祖先节点",
+    "label_current_turn": "当前节点",
+    "no_summary": "(本节点未携带 summaryText)",
+    "missing_node": "找不到节点 {{id}}（chatFlow 里不存在）"
   },
   "git_panel": {
     "placeholder_no_node": "选个 ChatNode 看本节点 git commit 历史",

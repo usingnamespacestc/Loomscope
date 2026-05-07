@@ -13,7 +13,11 @@ import type { AgentMetadata } from "@/parse/sidecar";
 // survives reload. per-session preferences would have needed a
 // separate persistence path; the global pref matches user intent
 // (tab choice is about the panel's role, not about the session).
-export type DrillPanelTab = "detail" | "conversation" | "git";
+export type DrillPanelTab =
+  | "detail"
+  | "conversation"
+  | "effective_context"
+  | "git";
 
 export interface UISlice {
   sidebarWidth: number;

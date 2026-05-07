@@ -44,6 +44,11 @@ const GitDiffPanel = lazy(() =>
     default: m.GitDiffPanel,
   })),
 );
+const EffectiveContextView = lazy(() =>
+  import("@/components/drill/EffectiveContextView").then((m) => ({
+    default: m.EffectiveContextView,
+  })),
+);
 import { useStore } from "@/store/index";
 import type { ChatFlow, ChatNode, WorkNode } from "@/data/types";
 import type { DrillPanelTab } from "@/store/types";
@@ -183,6 +188,18 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
               }
             />
           </div>
+          <div
+            style={{
+              display: tab === "effective_context" ? "block" : "none",
+            }}
+          >
+            <EffectiveContextView
+              sessionId={sessionId}
+              chatFlow={chatFlow}
+              viewMode={viewMode}
+              drilledChatNode={drilledChatNode}
+            />
+          </div>
           <div style={{ display: tab === "git" ? "block" : "none" }}>
             <GitTabContent
               sessionId={sessionId}
@@ -255,6 +272,12 @@ function TabStrip({
         onClick={() => onSelect("conversation")}
         testId="drill-panel-tab-conversation"
         label={t("drill_panel.tab_conversation")}
+      />
+      <TabButton
+        active={activeTab === "effective_context"}
+        onClick={() => onSelect("effective_context")}
+        testId="drill-panel-tab-effective-context"
+        label={t("drill_panel.tab_effective_context")}
       />
       <TabButton
         active={activeTab === "git"}

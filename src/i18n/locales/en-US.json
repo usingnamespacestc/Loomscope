@@ -67,7 +67,18 @@
   "drill_panel": {
     "tab_detail": "Detail",
     "tab_conversation": "Conversation",
+    "tab_effective_context": "Effective context",
     "tab_git": "Git"
+  },
+  "effective_context": {
+    "placeholder_no_node": "Pick a ChatNode to see the inbound context it actually receives (after auto-compact truncation)",
+    "intro": "Below is the context the selected node's LLM call actually sees. Compact ChatNodes in the chain (including hybrid \"inner-compact\" nodes) replace upstream content with their summaryText.",
+    "label_compact_summary": "Compact summary — replaces upstream",
+    "label_compact_target": "Compact summary (this node's content)",
+    "label_ancestor": "Ancestor",
+    "label_current_turn": "Current",
+    "no_summary": "(no summaryText on this node)",
+    "missing_node": "Node {{id}} not found in chatFlow"
   },
   "git_panel": {
     "placeholder_no_node": "Pick a ChatNode to see its git commit history",
