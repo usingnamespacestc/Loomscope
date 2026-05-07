@@ -68,6 +68,24 @@
     "tab_detail": "详情",
     "tab_conversation": "对话"
   },
+  "sidebar_search": {
+    "mode_filter": "过滤",
+    "mode_filter_aria": "过滤 session",
+    "mode_jump": "跳转",
+    "mode_jump_aria": "按 id 跳转",
+    "placeholder_filter": "过滤 session（即时）",
+    "placeholder_jump": "粘贴 id（按回车跳转）",
+    "search_button_aria": "搜索",
+    "tooltip_filter": "过滤 session：输入文字或 id prefix 即时过滤 sidebar 列表",
+    "tooltip_jump": "按 id 跳转：粘贴完整 UUID 或 8+ 字符 hex prefix，按回车搜索。命中 session / ChatNode / WorkNode 后跳转 + canvas focus",
+    "results_heading": "节点匹配",
+    "no_results": "未找到匹配 id。请检查 prefix 或输入更长的字符",
+    "too_short": "需要至少 8 个 hex 字符才能搜索",
+    "invalid_input": "只能输入 hex 字符（含 -）",
+    "truncated_hint": "仅显示前 10 个，请输入更长 prefix",
+    "loading": "搜索中…",
+    "back_to_sessions": "← 返回 session 列表"
+  },
   "placeholders": {
     "no_text_output": "(无文本输出)",
     "empty": "(空)",

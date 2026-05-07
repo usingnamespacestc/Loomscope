@@ -68,6 +68,24 @@
     "tab_detail": "Detail",
     "tab_conversation": "Conversation"
   },
+  "sidebar_search": {
+    "mode_filter": "Filter",
+    "mode_filter_aria": "Filter sessions",
+    "mode_jump": "Jump",
+    "mode_jump_aria": "Jump by id",
+    "placeholder_filter": "Filter sessions (live)",
+    "placeholder_jump": "Paste id (Enter to jump)",
+    "search_button_aria": "Search",
+    "tooltip_filter": "Filter sessions: type any text or id prefix to narrow the list. Live as you type.",
+    "tooltip_jump": "Jump by id: paste a full UUID or 8+ char hex prefix and press Enter. Matches sessions, ChatNodes, and WorkNodes.",
+    "results_heading": "Node matches",
+    "no_results": "No id match. Check the prefix or try a longer one.",
+    "too_short": "Need 8+ hex characters to search.",
+    "invalid_input": "Only hex characters (and dashes) allowed.",
+    "truncated_hint": "Showing first 10 — narrow the prefix to refine.",
+    "loading": "Searching…",
+    "back_to_sessions": "← Back to sessions"
+  },
   "placeholders": {
     "no_text_output": "(no text output)",
     "empty": "(empty)",

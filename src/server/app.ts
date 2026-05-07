@@ -9,6 +9,7 @@ import { corsMiddleware } from "@/server/middleware/cors";
 import { csrfMiddleware } from "@/server/middleware/csrf";
 import { ccHookRouter } from "@/server/routes/ccHook";
 import { ccHookOnboardingRouter } from "@/server/routes/ccHookOnboarding";
+import { searchRouter } from "@/server/routes/search";
 import { sessionsRouter } from "@/server/routes/sessions";
 import { workspacesRouter } from "@/server/routes/workspaces";
 import { initHookSseForwarder } from "@/server/services/hookSseForwarder";
@@ -52,6 +53,7 @@ export function createApp(opts: AppOptions) {
 
   app.route("/api/workspaces", workspacesRouter({ rootDir: opts.rootDir }));
   app.route("/api/sessions", sessionsRouter({ rootDir: opts.rootDir }));
+  app.route("/api/search", searchRouter({ rootDir: opts.rootDir }));
   app.route("/api/cc-hook", ccHookRouter({ secret: opts.hookSecret }));
   // v∞.0 PR 3: parse allowedOrigin to recover the listening port —
   // settings.json hook URLs are constructed against that port. If
