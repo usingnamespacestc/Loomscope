@@ -87,7 +87,7 @@
     "mode_jump": "跳转",
     "mode_jump_aria": "按 id 跳转",
     "placeholder_filter": "过滤 session（即时）",
-    "placeholder_jump": "粘贴 id（按回车跳转）",
+    "placeholder_jump": "粘贴 session id / ChatNode id / WorkNode id…（回车跳转）",
     "search_button_aria": "搜索",
     "tooltip_filter": "过滤 session：输入文字或 id prefix 即时过滤 sidebar 列表",
     "tooltip_jump": "按 id 跳转：粘贴完整 UUID 或 8+ 字符 hex prefix，按回车搜索。命中 session / ChatNode / WorkNode 后跳转 + canvas focus",

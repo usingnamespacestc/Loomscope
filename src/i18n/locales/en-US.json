@@ -87,7 +87,7 @@
     "mode_jump": "Jump",
     "mode_jump_aria": "Jump by id",
     "placeholder_filter": "Filter sessions (live)",
-    "placeholder_jump": "Paste id (Enter to jump)",
+    "placeholder_jump": "Paste session id / ChatNode id / WorkNode id… (Enter to jump)",
     "search_button_aria": "Search",
     "tooltip_filter": "Filter sessions: type any text or id prefix to narrow the list. Live as you type.",
     "tooltip_jump": "Jump by id: paste a full UUID or 8+ char hex prefix and press Enter. Matches sessions, ChatNodes, and WorkNodes.",
