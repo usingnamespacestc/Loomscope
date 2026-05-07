@@ -662,6 +662,8 @@ function seedSession(): void {
       workflowCache: new Map(),
       workflowViewports: new Map(),
       pendingPermission: null,
+      currentTurn: null,
+      lastTurnHookAt: 0,
       isLoading: false,
       error: null,
       lastUpdated: 0,

@@ -149,6 +149,8 @@
       "events": {
         "PreToolUse": "Before each tool call",
         "PostToolUse": "After each tool call returns",
+        "UserPromptSubmit": "When the user submits a prompt — drives the card/edge animation start",
+        "Stop": "When the assistant finishes a turn — drives the card/edge animation stop",
         "SubagentStart": "When a sub-agent is spawned",
         "SubagentStop": "When a sub-agent finishes",
         "PreCompact": "Before auto-compact runs",

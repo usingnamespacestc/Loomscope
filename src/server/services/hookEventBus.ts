@@ -18,6 +18,8 @@
 export const HOOK_EVENTS = [
   "PreToolUse",
   "PostToolUse",
+  "UserPromptSubmit",
+  "Stop",
   "SubagentStart",
   "SubagentStop",
   "PreCompact",

@@ -198,6 +198,27 @@ export interface SessionState {
     permissionMode?: string;
     receivedAt: number;
   } | null;
+  // v0.11: hook-driven turn window. UserPromptSubmit sets this to
+  // { startedAt: now }; Stop clears it. When non-null, the session is
+  // canonically "running" — drives card pulse + edge dashed flow
+  // animations through useIsChatNodeRunning. Falls back to fs.watch +
+  // hasInFlightWork when these hooks aren't wired (Settings → Hooks
+  // → uncheck UserPromptSubmit/Stop). Stale-cleared by liveness hook
+  // if older than ~10 minutes (covers a missed Stop fire).
+  // 中: hook 驱动的 turn 窗口。UserPromptSubmit 时 set，Stop 时 clear。
+  // 非 null = "正在跑" 的权威信号；用户没勾这俩 hook 时回落到旧逻辑。
+  // 10 分钟内没收到 Stop 则视为 stale 自动清除（防止 hook 丢一次卡死）。
+  currentTurn: { startedAt: number } | null;
+  // EN: epoch-ms of the most recent UserPromptSubmit OR Stop hook
+  // delivery. Lets `useSessionTurnRunning` detect whether the user
+  // has these hooks wired at all — if 0 OR older than 30 min, the
+  // hook is presumed absent/disabled and the legacy fallback (live +
+  // hasInFlight) drives the animation. When fresh, currentTurn is
+  // authoritative — Stop must turn off the animation precisely, not
+  // wait for the 5s live-decay to expire.
+  // 中: 最近一次 UserPromptSubmit/Stop 到达的时间。判定用户有没有
+  // 接这俩 hook：30 分钟内有过 = 信任 currentTurn；没过 = 回落老逻辑。
+  lastTurnHookAt: number;
   isLoading: boolean;
   error: string | null;
   lastUpdated: number;

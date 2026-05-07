@@ -113,6 +113,8 @@ const ROTATE_URL = "/api/cc-hook-onboarding/rotate-secret";
 const HOOK_EVENT_NAMES = [
   "PreToolUse",
   "PostToolUse",
+  "UserPromptSubmit",
+  "Stop",
   "SubagentStart",
   "SubagentStop",
   "PreCompact",

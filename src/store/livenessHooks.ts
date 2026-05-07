@@ -94,32 +94,96 @@ export function useLatestChatNodeId(sessionId: string): string | null {
   });
 }
 
+// v0.11: hook-trust window. If we received UserPromptSubmit OR Stop
+// within this window, currentTurn is the authoritative running flag
+// — Stop turning currentTurn off must immediately stop the animation
+// without waiting for the 5s live-decay window to expire. Older than
+// the window = the hooks are presumed unconfigured (or stale) and we
+// fall back to the legacy fs.watch + hasInFlight heuristic.
+const HOOK_TRUST_WINDOW_MS = 30 * 60 * 1000;
+// Defensive watchdog for a missed Stop. If a turn started > this many
+// ms ago without a Stop closing it, treat as not-running. Very
+// generous — typical turns are seconds to a few minutes; multi-hour
+// streaming is exceptionally rare.
+const TURN_STALE_WINDOW_MS = 10 * 60 * 1000;
+
 /**
- * EN (v0.9.2): combined selector for ChatNode-level running state.
+ * EN (v0.11): hook-driven turn-window running state for the session.
+ * Returns:
+ *   trust   true when UserPromptSubmit/Stop hooks have fired recently
+ *           — caller can treat `running` as authoritative.
+ *   running true when currentTurn is set + fresher than the stale
+ *           watchdog window.
+ *
+ * Tick effect mirrors useSessionLiveness so the hook re-evaluates +
+ * eventually returns false even with no new state changes (covers
+ * stale-Stop and out-of-trust transitions).
+ *
+ * 中: hook 驱动的 turn-window 运行态。trust 表示 UserPromptSubmit/
+ * Stop 最近 30 分钟内有过事件——调用方可以把 running 当成权威；
+ * 否则 running 总返回 false，调用方走老 fallback。
+ */
+export function useSessionTurnRunning(sessionId: string): {
+  trust: boolean;
+  running: boolean;
+} {
+  const currentTurnStartedAt = useStore(
+    (s) => s.sessions.get(sessionId)?.currentTurn?.startedAt ?? 0,
+  );
+  const lastTurnHookAt = useStore(
+    (s) => s.sessions.get(sessionId)?.lastTurnHookAt ?? 0,
+  );
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (lastTurnHookAt === 0 && currentTurnStartedAt === 0) return;
+    // Re-evaluate on the earliest threshold crossing of either
+    // window. Cap interval at 60s so we don't sit waiting half an
+    // hour on a single timer.
+    const now = Date.now();
+    const trustExpiry =
+      lastTurnHookAt > 0 ? lastTurnHookAt + HOOK_TRUST_WINDOW_MS : Infinity;
+    const turnExpiry =
+      currentTurnStartedAt > 0
+        ? currentTurnStartedAt + TURN_STALE_WINDOW_MS
+        : Infinity;
+    const next = Math.min(trustExpiry, turnExpiry);
+    if (next === Infinity || next <= now) return;
+    const id = window.setTimeout(
+      () => setTick((t) => t + 1),
+      Math.min(60_000, Math.max(50, next - now + 50)),
+    );
+    return () => window.clearTimeout(id);
+  }, [currentTurnStartedAt, lastTurnHookAt, tick]);
+  const now = Date.now();
+  const trust =
+    lastTurnHookAt > 0 && now - lastTurnHookAt < HOOK_TRUST_WINDOW_MS;
+  const running =
+    currentTurnStartedAt > 0 &&
+    now - currentTurnStartedAt < TURN_STALE_WINDOW_MS;
+  return { trust, running };
+}
+
+/**
+ * EN (v0.11): combined selector for ChatNode-level running state.
  * Animation gates on:
  *   1. chatNodeId is the chronologically latest ChatNode (no
- *      historical orphan animations)
- *   2. EITHER (a) summary.hasInFlightWork is true (data shape says
- *      a tool_call lacks resultBlock OR final llm_call lacks
- *      stopReason — even if mtime hasn't ticked in 30s during a
- *      long Bash, this stays true), OR (b) sessionLive (recent SSE
- *      invalidate within 5s — covers the brief gap between
- *      tool_result write and next assistant llm_call write where
- *      data shape says "all done" but session is still actively
- *      generating).
+ *      historical orphan animations).
+ *   2. PRIMARY (when UserPromptSubmit/Stop hooks are wired):
+ *      `currentTurn != null` — turns on at UserPromptSubmit, off at
+ *      Stop, strictly synchronized for both card pulse and edge
+ *      dashed flow.
+ *   3. FALLBACK (when hooks are absent or stale): legacy v0.9.2
+ *      heuristic — `summary.hasInFlightWork` (data-shape) OR
+ *      `sessionLive` (5s decay since last fs.watch invalidate).
  *
- * Replaces the v0.9.1 mtime-only heuristic, which incorrectly
- * flipped off during long-running tools (mtime didn't tick because
- * no new records were being written).
- *
- * 中: ChatNode 运行态判定。门: (1) 是最新 ChatNode；(2) 数据形态有
- * 在飞工作 OR session 5s 内有过 SSE invalidate。比 v0.9.1 单纯 mtime
- * 准——长 Bash 期间 mtime 不变但 hasInFlightWork=true 持续亮。
+ * 中: ChatNode 运行态判定。门: (1) 是最新 ChatNode；(2) 接了 hook 就
+ * 用 currentTurn；没接就回落老的 hasInFlight + 5s decay。
  */
 export function useIsChatNodeRunning(
   sessionId: string,
   chatNodeId: string,
 ): boolean {
+  const { trust, running: turnRunning } = useSessionTurnRunning(sessionId);
   const live = useSessionLiveness(sessionId);
   const latest = useLatestChatNodeId(sessionId);
   const hasInFlight = useStore((s) => {
@@ -129,6 +193,7 @@ export function useIsChatNodeRunning(
     return cn?.workflow.summary?.hasInFlightWork === true;
   });
   if (latest !== chatNodeId) return false;
+  if (trust) return turnRunning;
   return hasInFlight || live;
 }
 

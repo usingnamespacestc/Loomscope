@@ -149,6 +149,8 @@
       "events": {
         "PreToolUse": "工具调用前触发",
         "PostToolUse": "工具调用返回后触发",
+        "UserPromptSubmit": "用户提交 prompt 时触发——驱动卡片/边动画的「开始」信号",
+        "Stop": "助手完成一轮回答时触发——驱动卡片/边动画的「停止」信号",
         "SubagentStart": "派生 sub-agent 时触发",
         "SubagentStop": "sub-agent 完成时触发",
         "PreCompact": "auto-compact 开始前触发",

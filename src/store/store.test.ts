@@ -307,6 +307,43 @@ describe("Session slice", () => {
         useStore.getState().applyCcHookEvent("missing", "PreToolUse", payload({})),
       ).not.toThrow();
     });
+
+    it("UserPromptSubmit opens currentTurn + bumps lastTurnHookAt", () => {
+      useStore.getState().toggleFold(SID, "_seed_");
+      const now = 1_000_000_000_000;
+      const realNow = Date.now;
+      Date.now = () => now;
+      try {
+        useStore
+          .getState()
+          .applyCcHookEvent(SID, "UserPromptSubmit", payload({}));
+      } finally {
+        Date.now = realNow;
+      }
+      const s = useStore.getState().sessions.get(SID)!;
+      expect(s.currentTurn).toEqual({ startedAt: now });
+      expect(s.lastTurnHookAt).toBe(now);
+    });
+
+    it("Stop closes currentTurn but keeps lastTurnHookAt fresh (so trust window stays open)", () => {
+      useStore.getState().toggleFold(SID, "_seed_");
+      // Open a turn, then close it.
+      useStore
+        .getState()
+        .applyCcHookEvent(SID, "UserPromptSubmit", payload({}));
+      expect(useStore.getState().sessions.get(SID)!.currentTurn).not.toBeNull();
+      const stopAt = 1_000_000_500_000;
+      const realNow = Date.now;
+      Date.now = () => stopAt;
+      try {
+        useStore.getState().applyCcHookEvent(SID, "Stop", payload({}));
+      } finally {
+        Date.now = realNow;
+      }
+      const s = useStore.getState().sessions.get(SID)!;
+      expect(s.currentTurn).toBeNull();
+      expect(s.lastTurnHookAt).toBe(stopAt);
+    });
   });
 });
 

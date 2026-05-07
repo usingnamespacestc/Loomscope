@@ -27,6 +27,8 @@ function blankSessionState(): SessionState {
     workflowCache: new Map<string, WorkflowCacheEntry>(),
     workflowViewports: new Map<string, { x: number; y: number; zoom: number }>(),
     pendingPermission: null,
+    currentTurn: null,
+    lastTurnHookAt: 0,
     isLoading: false,
     error: null,
     lastUpdated: 0,
@@ -559,6 +561,23 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       // ran (= permission was granted), so any pending banner is now
       // stale. Both clear the slot.
       if (next.pendingPermission) next = { ...next, pendingPermission: null };
+    }
+    // v0.11: turn-window state. UserPromptSubmit opens it, Stop closes
+    // it. When non-null, useIsChatNodeRunning treats the latest
+    // ChatNode as canonically running — both card pulse + edge dashed
+    // flow gate on the same boolean, so they're strictly synchronized
+    // (vs. the v0.9 split where pulse followed fs.watch and edges
+    // followed PreToolUse, drifting visibly out of phase). Both
+    // events also bump `lastTurnHookAt` so the liveness hook can tell
+    // these hooks are actively wired vs. unconfigured.
+    if (event === "UserPromptSubmit") {
+      next = {
+        ...next,
+        currentTurn: { startedAt: Date.now() },
+        lastTurnHookAt: Date.now(),
+      };
+    } else if (event === "Stop") {
+      next = { ...next, currentTurn: null, lastTurnHookAt: Date.now() };
     }
     updated.set(sessionId, next);
     set({ sessions: updated });
