@@ -176,6 +176,29 @@ describe("detectGitCommits", () => {
     expect(out[0].sha).toBe("bcdef12");
   });
 
+  it("regex performance: long `git ... no-commit` commands return fast (no catastrophic backtracking)", () => {
+    // Pre-fix, this command (long flag list with `git` start but no
+    // `commit` end) ran the matcher into hours-long backtracking.
+    // Post-fix, the substring test is linear; 1000 such commands
+    // should take < 100 ms in total.
+    const longCmd =
+      "git -c user.name=Alice " +
+      "--global ".repeat(50) +
+      "config core.editor=vim";
+    const nodes: ToolCallNode[] = [];
+    for (let i = 0; i < 1000; i++) {
+      nodes.push(tc({ id: `t-${i}`, input: { command: longCmd } }));
+    }
+    const start = Date.now();
+    const out = detectGitCommits({
+      workflow: wf(...nodes),
+      cwdByToolUseUuid: new Map(nodes.map((n) => [n.id, "/r"])),
+    });
+    const elapsed = Date.now() - start;
+    expect(out).toEqual([]);
+    expect(elapsed).toBeLessThan(500);
+  });
+
   it("recognises root-commit annotated output `[branch (root-commit) SHA]`", () => {
     const node = tc({
       id: "t-root",

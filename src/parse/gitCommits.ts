@@ -38,15 +38,30 @@ import type { GitCommitRef, ToolCallNode, WorkFlow } from "@/data/types";
 const COMMIT_OUTPUT_RE =
   /^\[(?:[\w/.-]+|detached HEAD)(?:\s+\(root-commit\))?\s+([0-9a-f]{4,40})\]\s*(.*?)$/m;
 
-// Match `git ... commit ...` allowing arbitrary intervening flags +
-// flag-args (-C path, -c key=val, --quiet, etc.). False positive
-// risk: `git config a.b commit` contains "commit" as a value, but
-// (a) we second-gate on the result containing a `[branch SHA]` line
-// which `git config` doesn't emit, and (b) such commands are rare.
-const GIT_COMMIT_CMD_RE = /\bgit\b(?:\s+[-\w./=]+(?:\s+\S+)?)*\s+commit\b/;
+// Match `git ... commit ...`. Earlier we tried a structured pattern
+// allowing flags + flag-args between `git` and `commit`, but that
+// regex had nested quantifiers (`(?:\s+[-\w./=]+(?:\s+\S+)?)*`) that
+// caused CATASTROPHIC BACKTRACKING on commands like
+// `git config --global a.b ...` (any long `git ...` without
+// `commit` at the end pinned the parser at 100% CPU for >3 s per
+// command — 1500 ChatNodes × ~10 Bash each → server hung for
+// minutes on first parse). Rewrite using two simple `\b...\b`
+// substring tests against ONE token-level scan: cheap, linear,
+// false positives caught by the second-gate (`[branch SHA]` line
+// in result, which non-commit git subcommands don't emit).
+function commandLooksLikeGitCommit(cmd: string): boolean {
+  // Bound: only scan first ~8K of command. CC commands occasionally
+  // pipe huge here-docs; the `git ... commit ...` pattern lives near
+  // the start.
+  const head = cmd.length > 8192 ? cmd.slice(0, 8192) : cmd;
+  return /\bgit\b/.test(head) && /\bcommit\b/.test(head);
+}
 
-// Capture `-C <path>` flag (path can be quoted or unquoted).
-const GIT_C_FLAG_RE = /\bgit\b(?:\s+-c\s+\S+)*\s+-C\s+(?:"([^"]+)"|'([^']+)'|(\S+))/;
+// Capture `-C <path>` flag (path can be quoted or unquoted). Use
+// `(?:^|\s)` instead of `\b` because `\b` doesn't match between two
+// non-word chars (space and `-`), and we want to anchor on a real
+// shell-token boundary not a regex word boundary.
+const GIT_C_FLAG_RE = /(?:^|\s)-C\s+(?:"([^"]+)"|'([^']+)'|(\S+))/;
 
 // Capture leading `cd <path> &&` segment. Only the immediately-
 // preceding `cd` counts (multiple cd's in one chain are rare and
@@ -69,7 +84,7 @@ export function detectGitCommits(input: DetectInput): GitCommitRef[] {
     if (tc.toolName !== "Bash") continue;
     const inp = (tc.input ?? {}) as Record<string, unknown>;
     const cmd = typeof inp.command === "string" ? inp.command : "";
-    if (!cmd || !GIT_COMMIT_CMD_RE.test(cmd)) continue;
+    if (!cmd || !commandLooksLikeGitCommit(cmd)) continue;
     const sha = extractCommitShaFromResult(tc);
     if (!sha) continue;
     const subject = extractSubjectFromResult(tc);
