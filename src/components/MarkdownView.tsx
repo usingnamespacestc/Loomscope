@@ -17,7 +17,7 @@
  * text — running the full markdown pipeline on 1500+ ChatNode cards
  * would cost more than it surfaces.
  */
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
@@ -147,39 +147,23 @@ function shouldStartEager(): boolean {
   return false;
 }
 
-// EN (v0.11): estimate the eventual markdown render height from the
-// raw source text. Both the placeholder and the real `<MarkdownView>`
-// get this as `min-height`, so the placeholder→markdown swap doesn't
-// reflow when the estimate is reasonably accurate. Tuned to be
-// slightly CONSERVATIVE (overshoot) — small visual gap below content
-// is much less jarring than a height jump that pushes upper bubbles.
+// v0.11 (revised): static heuristics on raw markdown source can't
+// account for visual line-wrapping (a 4510-char paragraph wraps to
+// ~157 visual lines, but split('\n').length only sees the logical
+// breaks). Probed real bubble heights vs the heuristic in headless
+// chromium: estimate undershot real by 2-10× on prose-heavy CC
+// outputs. Replaced with ResizeObserver-based measurement of the
+// placeholder render: by the time the IntersectionObserver flips
+// `visible=true`, we've stashed the placeholder's actual rendered
+// height into a ref. The markdown wrapper then uses that as
+// min-height, so swap is height-stable for prose (where real ≈
+// placeholder) and only grows by the small structural delta when
+// real has code blocks / headings (placeholder shows them as raw
+// markup, real renders them taller).
 //
-// Heuristics (per real-data inspection of CC outputs):
-//   LINE_PX          ~21 (13px text * 1.625 leading-relaxed)
-//   CODE_BLOCK_PAIR  ~16 (top + bottom padding the code block adds
-//                          beyond the raw lines the placeholder shows)
-//   HEADING_EXTRA    ~12 (font-size bump from 13px to ~18px for h2)
-//
-// 中: 用源 markdown 估算渲染后高度。占位符 + 真 markdown 共用 min-
-// height；估算偏高一点，swap 时不会跳。代码块/标题这些在 markdown
-// pipeline 后会膨胀的元素加额外像素。
-const LINE_PX = 21;
-const CODE_BLOCK_PAIR_OVERHEAD_PX = 16;
-const HEADING_EXTRA_PX = 12;
-
-function estimateMarkdownHeight(text: string): number {
-  if (typeof text !== "string" || text.length === 0) return 0;
-  const lines = text.split("\n");
-  const codeBlockPairs = Math.floor(
-    (text.match(/^```/gm) ?? []).length / 2,
-  );
-  const headings = (text.match(/^#{1,6}\s/gm) ?? []).length;
-  return (
-    lines.length * LINE_PX +
-    codeBlockPairs * CODE_BLOCK_PAIR_OVERHEAD_PX +
-    headings * HEADING_EXTRA_PX
-  );
-}
+// 中: 静态字符串估算无法计算视觉换行；改成 ResizeObserver 测占位符
+// 实际渲染高度，markdown 切换时拿这个高度做 min-height。prose 内容
+// swap 几乎无变化；含代码块/标题的内容只增加少量结构 delta。
 
 function LazyMarkdownViewImpl({ children, components, className }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -189,14 +173,24 @@ function LazyMarkdownViewImpl({ children, components, className }: Props) {
   // and lose any internal state (none today, but defensive).
   const eagerOnMount = useRef(shouldStartEager());
   const [visible, setVisible] = useState(eagerOnMount.current);
-  // v0.11: pre-compute estimated final height. Used as min-height on
-  // both placeholder + real-markdown wrappers so the swap is height-
-  // neutral. Memoise on text content — heuristic is cheap (regex +
-  // split) but avoids recomputing on parent re-renders.
-  const minHeight = useMemo(
-    () => (typeof children === "string" ? estimateMarkdownHeight(children) : 0),
-    [children],
-  );
+  // v0.11: stash the placeholder's measured height. Once IntersectionObserver
+  // flips `visible=true` and the markdown render takes over, we apply this
+  // as min-height to keep the bubble's outer dimension stable across the
+  // swap. Updated continuously while placeholder is mounted (ResizeObserver)
+  // so panel-resize / DPR changes don't desync.
+  const placeholderHeightRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (visible) return;
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const h = el.clientHeight;
+      if (h > 0) placeholderHeightRef.current = h;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [visible]);
 
   useEffect(() => {
     if (visible) return;
@@ -226,12 +220,15 @@ function LazyMarkdownViewImpl({ children, components, className }: Props) {
   }, [visible]);
 
   if (visible) {
-    // Wrap real markdown in a min-height anchor so the height matches
-    // the placeholder estimate — placeholder→markdown swap doesn't
-    // change the bubble's outer dimension.
+    // Wrap real markdown in a min-height anchor matching the
+    // placeholder's last measured height — the swap is height-stable
+    // for prose and only grows by structural delta (code-block
+    // padding, heading font-size) when real markdown actually
+    // expands.
+    const minH = placeholderHeightRef.current;
     return (
       <div
-        style={minHeight > 0 ? { minHeight } : undefined}
+        style={minH > 0 ? { minHeight: minH } : undefined}
         className="[overflow-anchor:auto]"
       >
         <MarkdownView className={className} components={components}>
@@ -257,15 +254,10 @@ function LazyMarkdownViewImpl({ children, components, className }: Props) {
       ref={ref}
       className={`${className ?? ""} [overflow-anchor:auto]`}
       data-loomscope-lazy-md="pending"
-      style={minHeight > 0 ? { minHeight } : undefined}
     >
       <div className="whitespace-pre-wrap break-words">{children}</div>
     </div>
   );
 }
-
-// Test-only: expose the heuristic so unit tests can assert specific
-// content shapes produce expected estimated heights.
-export const _estimateMarkdownHeightForTests = estimateMarkdownHeight;
 
 export const LazyMarkdownView = memo(LazyMarkdownViewImpl);
