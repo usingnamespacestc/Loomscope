@@ -64,9 +64,74 @@ export function subscribeHooks(fn: HookListener): () => void {
   };
 }
 
+// ────────────────────────────────────────────────────────────────────
+// Dedup window
+// ────────────────────────────────────────────────────────────────────
+//
+// Why: Loomscope keeps two parallel hook-delivery paths (settings.json
+// HTTP fired by the CC binary + SDK programmatic JS callbacks fired
+// by `options.hooks` for SDK-spawned CC). Both paths legitimately
+// reach this bus. With both paths enabled — the default for SDK CC —
+// every hook fires twice within ~50-200ms, so listeners would render
+// double banners / double activity bumps.
+//
+// Strategy: derive a per-event dedup key, drop second arrivals within
+// `DEDUP_TTL_MS` of the first.
+//
+// Key derivation:
+//   - When `extras.tool_use_id` is present (PreToolUse / PostToolUse /
+//     PostToolUseFailure) → exact key = `${sid}:${event}:${tool_use_id}`.
+//     Both paths carry the same tool_use_id for the same logical tool
+//     call, so this is a precise match.
+//   - Otherwise (UserPromptSubmit / Stop / SessionStart / etc — these
+//     have no per-fire id) → coarse-bucket key by 1-second timestamp:
+//     `${sid}:${event}:${Math.floor(Date.now()/1000)}`. SDK + HTTP
+//     paths are ~100ms apart so they fall in the same second the vast
+//     majority of the time. Edge case: rapid genuine succession across
+//     a second boundary stays distinct, which is the right call —
+//     legit successive hooks shouldn't be merged.
+//
+// TTL: 2s. Generous enough for any conceivable HTTP-path delay; short
+// enough that the recent-keys map stays small.
+//
+// GC: opportunistic when map size > GC_THRESHOLD; sweeps entries
+// older than TTL. No timer (no event loop pressure).
+const DEDUP_TTL_MS = 2000;
+const GC_THRESHOLD = 1024;
+const recentKeys = new Map<string, number>();
+let suppressedCount = 0;
+
+function deriveDedupKey(event: HookEventName, payload: HookEnvelope): string {
+  const tuid = payload.extras?.tool_use_id;
+  if (typeof tuid === "string" && tuid.length > 0) {
+    return `${payload.session_id}:${event}:${tuid}`;
+  }
+  return `${payload.session_id}:${event}:${Math.floor(Date.now() / 1000)}`;
+}
+
+function gcOldKeys(now: number): void {
+  for (const [k, v] of recentKeys) {
+    if (now - v >= DEDUP_TTL_MS) recentKeys.delete(k);
+  }
+}
+
 /** Publish a hook event. Errors thrown by listeners are caught + logged
- * so a misbehaving consumer can't kill the route handler. */
+ * so a misbehaving consumer can't kill the route handler.
+ *
+ * Dedups against recent keys (see comment block above). When a
+ * duplicate is suppressed, returns silently — no listener fires + the
+ * suppressedCount metric increments.
+ */
 export function publishHook(event: HookEventName, payload: HookEnvelope): void {
+  const key = deriveDedupKey(event, payload);
+  const now = Date.now();
+  const last = recentKeys.get(key);
+  if (last !== undefined && now - last < DEDUP_TTL_MS) {
+    suppressedCount++;
+    return;
+  }
+  recentKeys.set(key, now);
+  if (recentKeys.size > GC_THRESHOLD) gcOldKeys(now);
   for (const fn of listeners) {
     try {
       fn(event, payload);
@@ -74,6 +139,20 @@ export function publishHook(event: HookEventName, payload: HookEnvelope): void {
       console.error("[loomscope] hook listener error:", err);
     }
   }
+}
+
+/** Test helper — also useful for diagnostics if we ever want a
+ *  /metrics-style endpoint to surface this count. */
+export function _suppressedDupCountForTests(): number {
+  return suppressedCount;
+}
+
+/** Test helper — wipe dedup state (NOT touched by
+ *  `_resetHookBusForTests` since that one only clears listeners; some
+ *  tests want listeners intact across runs but a clean dedup). */
+export function _resetDedupForTests(): void {
+  recentKeys.clear();
+  suppressedCount = 0;
 }
 
 /** Test helper. */

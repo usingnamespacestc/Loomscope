@@ -23,6 +23,8 @@ const patchSchema = z.object({
     .enum(["default", "acceptEdits", "bypassPermissions", "plan"])
     .optional(),
   respawnPerSend: z.boolean().optional(),
+  enableHookHttpPath: z.boolean().optional(),
+  enableHookSdkPath: z.boolean().optional(),
 });
 
 export interface PreferencesRouterOptions {
@@ -54,6 +56,12 @@ export function preferencesRouter(opts: PreferencesRouterOptions = {}) {
       }
       if (patch.respawnPerSend !== undefined) {
         opts.registry.setRespawnPerSend(merged.respawnPerSend);
+      }
+      if (patch.enableHookHttpPath !== undefined) {
+        opts.registry.setEnableHookHttpPath(merged.enableHookHttpPath);
+      }
+      if (patch.enableHookSdkPath !== undefined) {
+        opts.registry.setEnableHookSdkPath(merged.enableHookSdkPath);
       }
     }
     return c.json(merged);

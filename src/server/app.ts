@@ -86,7 +86,6 @@ export function createApp(opts: AppOptions) {
   app.route("/api/workspaces", workspacesRouter({ rootDir: opts.rootDir }));
   app.route("/api/sessions", sessionsRouter({ rootDir: opts.rootDir }));
   app.route("/api/search", searchRouter({ rootDir: opts.rootDir }));
-  app.route("/api/cc-hook", ccHookRouter({ getSecret: getHookSecret }));
   // v∞.2: SDK-backed turn endpoints + preferences. Registry is created
   // here unless one was passed in (tests do this for hermeticity).
   // Idle timeout reads the persisted preference at startup; PATCH
@@ -103,6 +102,8 @@ export function createApp(opts: AppOptions) {
       permissionMode: "default", // strictest; PATCH updates live
       respawnPerSend: true, // default; PATCH updates live. See
                             // docs/dual-writer-race-mitigation.md
+      enableHookHttpPath: true, // default; PATCH updates live
+      enableHookSdkPath: true,  // default; PATCH updates live
       // Staleness check needs to stat the session's jsonl;
       // SessionRegistry calls this on the dispatch path. Reuses the
       // shared lookup helper.
@@ -116,8 +117,22 @@ export function createApp(opts: AppOptions) {
       registry.setUseApiKey(p.useApiKey);
       registry.setPermissionMode(p.permissionMode);
       registry.setRespawnPerSend(p.respawnPerSend);
+      registry.setEnableHookHttpPath(p.enableHookHttpPath);
+      registry.setEnableHookSdkPath(p.enableHookSdkPath);
     });
   }
+  // ccHook router needs `registry.isHookHttpPathEnabled()` for the
+  // live HTTP-path gate (PATCH /preferences flips registry's flag,
+  // accessor reads through). Mount AFTER registry construction so
+  // the closure captures a bound `registry` rather than relying on
+  // temporal-dead-zone gymnastics.
+  app.route(
+    "/api/cc-hook",
+    ccHookRouter({
+      getSecret: getHookSecret,
+      isEnabled: () => registry.isHookHttpPathEnabled(),
+    }),
+  );
   app.route(
     "/api/sessions",
     turnsRouter({ registry, rootDir: opts.rootDir }),

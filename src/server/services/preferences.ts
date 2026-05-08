@@ -69,6 +69,36 @@ export interface LoomscopePreferences {
    */
   permissionMode: LoomscopePermissionMode;
   /**
+   * Hook delivery — settings.json HTTP path. When true (default),
+   * settings.json's hook block fires HTTP POSTs to /api/cc-hook
+   * which the server validates + publishes onto the in-process
+   * hookEventBus. Works for BOTH terminal CC and SDK CC (since
+   * Loomscope sets `settingSources` to load user/project/local).
+   * Turn off if you suspect the HTTP route as a culprit (e.g.
+   * spurious 403s) or want to reduce CC subprocess outbound HTTP
+   * for sandbox/audit reasons; SDK CC still fires hooks via the
+   * programmatic path below as long as `enableHookSdkPath=true`.
+   * Terminal CC has only the HTTP path — turning this off means
+   * NO hook events reach the browser for terminal CCs.
+   */
+  enableHookHttpPath: boolean;
+  /**
+   * Hook delivery — SDK programmatic callback path. When true
+   * (default), SessionRegistry registers `options.hooks` JS
+   * callbacks for every HookEvent. Each callback fires in-process
+   * (no HTTP, no secret, no settings.json dependency) and
+   * publishes onto the same hookEventBus as the HTTP path.
+   * Loomscope-spawned (= SDK) CCs only — terminal CCs are
+   * unaffected since they have no SDK options to hook.
+   *
+   * With BOTH paths on, every hook fires twice (once via each
+   * path). The bus's dedup window collapses them transparently
+   * (keyed on tool_use_id when present, timestamp bucket
+   * otherwise). Both-on = "belt-and-suspenders" reliability;
+   * either-off = single-path simplicity.
+   */
+  enableHookSdkPath: boolean;
+  /**
    * Dual-writer race mitigation strategy. CC's SDK doesn't tail or
    * lock the underlying jsonl, so when a Loomscope-spawned Query
    * and a terminal CC instance both append to the same session id,
@@ -105,6 +135,8 @@ const DEFAULTS: LoomscopePreferences = {
   useApiKey: false,
   permissionMode: "default",
   respawnPerSend: true,
+  enableHookHttpPath: true,
+  enableHookSdkPath: true,
 };
 
 const PERMISSION_MODE_VALUES: LoomscopePermissionMode[] = [
@@ -145,7 +177,24 @@ function normalize(raw: unknown): LoomscopePreferences {
   const respawnRaw = r["respawnPerSend"];
   const respawnPerSend =
     typeof respawnRaw === "boolean" ? respawnRaw : DEFAULTS.respawnPerSend;
-  return { idleTimeoutMin: idle, useApiKey, permissionMode, respawnPerSend };
+  const enableHookHttpPathRaw = r["enableHookHttpPath"];
+  const enableHookHttpPath =
+    typeof enableHookHttpPathRaw === "boolean"
+      ? enableHookHttpPathRaw
+      : DEFAULTS.enableHookHttpPath;
+  const enableHookSdkPathRaw = r["enableHookSdkPath"];
+  const enableHookSdkPath =
+    typeof enableHookSdkPathRaw === "boolean"
+      ? enableHookSdkPathRaw
+      : DEFAULTS.enableHookSdkPath;
+  return {
+    idleTimeoutMin: idle,
+    useApiKey,
+    permissionMode,
+    respawnPerSend,
+    enableHookHttpPath,
+    enableHookSdkPath,
+  };
 }
 
 export async function loadPreferences(): Promise<LoomscopePreferences> {

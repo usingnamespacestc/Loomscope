@@ -311,6 +311,17 @@ export interface SessionRegistryOptions {
    *  depend on stat). Tests + headless setups may legitimately
    *  pass undefined. */
   locateJsonl?: (sessionId: string) => Promise<string | null>;
+  /** Hook delivery — settings.json HTTP path. See
+   *  `LoomscopePreferences.enableHookHttpPath`. Optional in the
+   *  interface (default true) so existing tests don't need to
+   *  pass it. Live update via `setEnableHookHttpPath`. */
+  enableHookHttpPath?: boolean;
+  /** Hook delivery — SDK programmatic callback path. See
+   *  `LoomscopePreferences.enableHookSdkPath`. Optional in the
+   *  interface (default true). Live update via
+   *  `setEnableHookSdkPath` — but the next-spawn caveat applies:
+   *  in-flight Query keeps its original wiring. */
+  enableHookSdkPath?: boolean;
 }
 
 /** v∞.3 PR1: a pending permission prompt awaiting browser response.
@@ -585,6 +596,28 @@ export class SessionRegistry {
     this.opts.respawnPerSend = value;
   }
 
+  /** Live-update the SDK programmatic hook path. Affects the NEXT
+   *  spawn only — in-flight Query keeps its original options.hooks
+   *  wiring. Default true. */
+  setEnableHookSdkPath(value: boolean): void {
+    this.opts.enableHookSdkPath = value;
+  }
+
+  /** Live-update the settings.json HTTP hook path. ccHook router
+   *  reads this via the `isEnabled` accessor it was wired with —
+   *  takes effect on the next inbound /api/cc-hook POST. */
+  setEnableHookHttpPath(value: boolean): void {
+    this.opts.enableHookHttpPath = value;
+  }
+
+  /** Read current state of the HTTP path enable flag. ccHook router
+   *  uses this as its `isEnabled` accessor (see app.ts wiring). */
+  isHookHttpPathEnabled(): boolean {
+    // Default true when undefined — matches LoomscopePreferences
+    // shape ("set both true by default") + lets tests skip wiring.
+    return this.opts.enableHookHttpPath !== false;
+  }
+
   /** Live-update the idle threshold without restarting the server.
    *  PATCH /api/preferences calls this so changes take effect
    *  immediately. Pass 0 to disable timeout. */
@@ -798,7 +831,16 @@ export class SessionRegistry {
         // SDK is the one running CC (Loomscope-spawned). Both paths
         // converge on the same SSE bus.
         // ──────────────────────────────────────────────────────────
-        hooks: buildSdkHooksMap(),
+        // Gated on `enableHookSdkPath` — when false, no programmatic
+        // callbacks register and SDK CC's hook events flow only via
+        // the settings.json HTTP path (assuming that's still on).
+        // Default: true. Live-flippable via setEnableHookSdkPath but
+        // the next-spawn caveat applies; in-flight Query keeps its
+        // original wiring.
+        hooks:
+          this.opts.enableHookSdkPath !== false
+            ? buildSdkHooksMap()
+            : undefined,
         // ──────────────────────────────────────────────────────────
         // v∞.3 PR1: canUseTool — Loomscope's chance to mediate
         // tool-permission requests interactively. SDK fires this

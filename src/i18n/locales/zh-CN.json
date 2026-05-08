@@ -248,7 +248,14 @@
       "idle_description": "用户停止操作 N 分钟后，server 会 close 该 session 的 SDK Query（杀 claude subprocess）。下次操作会重新 spawn，缓存会冷启动。",
       "minutes": "分钟",
       "idle_range": "范围 5–240 分钟",
-      "idle_range_when_respawn_on": "范围 5–240 分钟。当前模式下作用是给「post-turn 残留 Query」一个清理上限——下次 send 反正会重启，闲置回收只决定「不操作时多久把那条幽灵 Query 也回收掉」"
+      "idle_range_when_respawn_on": "范围 5–240 分钟。当前模式下作用是给「post-turn 残留 Query」一个清理上限——下次 send 反正会重启，闲置回收只决定「不操作时多久把那条幽灵 Query 也回收掉」",
+      "section_hook_paths": "Hook 通路",
+      "hook_paths_description": "Loomscope 接收 CC hook 事件有两条通路：①settings.json 配置 + CC binary HTTP POST 到 /api/cc-hook（终端 CC 唯一通路）；②SDK options.hooks JS callback（仅 Loomscope spawn 的 SDK CC，in-process）。两路都开 = belt-and-suspenders，server 端 bus 用 tool_use_id-keyed 2s 窗口去重；任意单路也能工作。",
+      "hook_http_label": "settings.json HTTP 通路（终端 + SDK CC 都用）",
+      "hook_http_hint": "关掉后终端 CC 的所有 hook 事件都不会到 SSE bus；SDK CC 仍可走下面的程序化通路。",
+      "hook_sdk_label": "SDK 程序化 callback 通路（仅 SDK CC）",
+      "hook_sdk_hint": "关掉后 SDK CC 只剩 HTTP 通路（依赖 LOOMSCOPE_SECRET 跟 settings.json）。生效在下次 spawn。",
+      "hook_both_off_warning": "⚠ 两路都关 = SDK CC 完全无 hook 事件到 SSE bus，浏览器不会收到 PreToolUse / PostToolUse / TaskCreated 等通知。"
     },
     "hooks": {
       "loading": "加载中…",

@@ -508,6 +508,9 @@ function VinfPanel() {
   const [permissionMode, setPermissionMode] =
     useState<PermissionMode>("default");
   const [respawnPerSend, setRespawnPerSend] = useState<boolean>(true);
+  const [enableHookHttpPath, setEnableHookHttpPath] =
+    useState<boolean>(true);
+  const [enableHookSdkPath, setEnableHookSdkPath] = useState<boolean>(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -529,6 +532,16 @@ function VinfPanel() {
         }
         setRespawnPerSend(
           typeof p.respawnPerSend === "boolean" ? p.respawnPerSend : true,
+        );
+        setEnableHookHttpPath(
+          typeof p.enableHookHttpPath === "boolean"
+            ? p.enableHookHttpPath
+            : true,
+        );
+        setEnableHookSdkPath(
+          typeof p.enableHookSdkPath === "boolean"
+            ? p.enableHookSdkPath
+            : true,
         );
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -557,6 +570,12 @@ function VinfPanel() {
       }
       if (typeof next.respawnPerSend === "boolean") {
         setRespawnPerSend(next.respawnPerSend);
+      }
+      if (typeof next.enableHookHttpPath === "boolean") {
+        setEnableHookHttpPath(next.enableHookHttpPath);
+      }
+      if (typeof next.enableHookSdkPath === "boolean") {
+        setEnableHookSdkPath(next.enableHookSdkPath);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -702,6 +721,65 @@ function VinfPanel() {
             ? t("settings.vinf.idle_range_when_respawn_on")
             : t("settings.vinf.idle_range")}
         </p>
+      </section>
+
+      {/* Hook delivery paths (#142 follow-up). Two checkboxes —
+          settings.json HTTP path + SDK programmatic path. Both on
+          by default; the in-process bus collapses duplicates via
+          tool_use_id-keyed dedup. Either-off = single-path
+          simplicity. */}
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.vinf.section_hook_paths")}
+        </h3>
+        <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
+          {t("settings.vinf.hook_paths_description")}
+        </p>
+        <label className="flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            data-testid="settings-vinf-enable-hook-http-path"
+            checked={enableHookHttpPath}
+            onChange={(e) =>
+              void patch({ enableHookHttpPath: e.target.checked })
+            }
+            disabled={saving}
+            className="mt-0.5 h-4 w-4 cursor-pointer"
+          />
+          <div className="flex-1">
+            <div className="text-xs text-gray-700">
+              {t("settings.vinf.hook_http_label")}
+            </div>
+            <div className="text-[10px] italic text-gray-400">
+              {t("settings.vinf.hook_http_hint")}
+            </div>
+          </div>
+        </label>
+        <label className="mt-2 flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            data-testid="settings-vinf-enable-hook-sdk-path"
+            checked={enableHookSdkPath}
+            onChange={(e) =>
+              void patch({ enableHookSdkPath: e.target.checked })
+            }
+            disabled={saving}
+            className="mt-0.5 h-4 w-4 cursor-pointer"
+          />
+          <div className="flex-1">
+            <div className="text-xs text-gray-700">
+              {t("settings.vinf.hook_sdk_label")}
+            </div>
+            <div className="text-[10px] italic text-gray-400">
+              {t("settings.vinf.hook_sdk_hint")}
+            </div>
+          </div>
+        </label>
+        {!enableHookHttpPath && !enableHookSdkPath && (
+          <p className="mt-2 text-[10px] italic text-rose-600">
+            {t("settings.vinf.hook_both_off_warning")}
+          </p>
+        )}
       </section>
 
       {/* v∞.3 PR1: saved permission rules manager. Lists rules from

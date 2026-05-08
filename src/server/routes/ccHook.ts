@@ -56,6 +56,15 @@ export interface CcHookRouteOptions {
    * (rather than closing over a static string) lets `rotateSecret()`
    * take effect mid-run without reconstructing the Hono app. */
   getSecret: () => string;
+  /** Accessor returning whether the settings.json HTTP path is
+   *  enabled (matches LoomscopePreferences.enableHookHttpPath).
+   *  When false the route still 204s the request (so CC's POST
+   *  doesn't error or retry) but skips publishHook — events are
+   *  silently dropped. PATCH /api/preferences flips the underlying
+   *  flag; this accessor reads live state on each request.
+   *  Optional — when undefined, defaults to "always enabled" so
+   *  tests don't need to wire it. */
+  isEnabled?: () => boolean;
 }
 
 export function ccHookRouter(opts: CcHookRouteOptions) {
@@ -118,6 +127,14 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
           typeof body.agent_type === "string" ? body.agent_type : undefined,
         extras,
       };
+
+      // Path-gate: when disabled via Settings, swallow the event +
+      // return 204 so CC's POST succeeds (no retry storm). The 204
+      // response shape is identical to the enabled path so observers
+      // outside Loomscope can't distinguish.
+      if (opts.isEnabled && !opts.isEnabled()) {
+        return c.body(null, 204);
+      }
 
       publishHook(event, envelope);
       return c.body(null, 204);
