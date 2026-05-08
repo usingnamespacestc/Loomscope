@@ -30,13 +30,29 @@ const CSRF_BYPASS_PATHS = new Set([
   "/api/cc-hook-onboarding/rotate-secret",
 ]);
 
+// v∞.2: prefix-based bypass. Per-session write endpoints carry UUIDs
+// in the path (`/api/sessions/<sid>/turns`, `/api/sessions/<sid>/
+// interrupt`, etc.) so exact-match Set can't cover them. Bypass
+// rationale matches the onboarding case: Mode A's localhost binding
+// + strict same-origin CORS already block cross-origin browser
+// attacks; in-browser local attackers (extensions / third-party
+// tabs without Origin headers) are explicitly out of scope.
+const CSRF_BYPASS_PREFIXES = [
+  "/api/sessions/", // /:id/turns, /:id/queue/:itemId, /:id/interrupt
+  "/api/preferences", // GET + PATCH
+];
+
 export function csrfMiddleware(token: string): MiddlewareHandler {
   return async (c, next) => {
     const method = c.req.method.toUpperCase();
     if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
       return next();
     }
-    if (CSRF_BYPASS_PATHS.has(c.req.path)) {
+    const path = c.req.path;
+    if (CSRF_BYPASS_PATHS.has(path)) {
+      return next();
+    }
+    if (CSRF_BYPASS_PREFIXES.some((p) => path.startsWith(p))) {
       return next();
     }
     const provided = c.req.header("x-loomscope-token");
