@@ -38,8 +38,10 @@ const CSRF_BYPASS_PATHS = new Set([
 // attacks; in-browser local attackers (extensions / third-party
 // tabs without Origin headers) are explicitly out of scope.
 const CSRF_BYPASS_PREFIXES = [
-  "/api/sessions/", // /:id/turns, /:id/queue/:itemId, /:id/interrupt
+  "/api/sessions/", // /:id/turns, /:id/queue/:itemId, /:id/interrupt,
+                    // /:id/permission-prompts/:promptId/decision (v∞.3)
   "/api/preferences", // GET + PATCH
+  "/api/permission-rules", // v∞.3: GET / POST / DELETE
 ];
 
 export function csrfMiddleware(token: string): MiddlewareHandler {

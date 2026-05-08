@@ -27,6 +27,7 @@ function blankSessionState(): SessionState {
     workflowCache: new Map<string, WorkflowCacheEntry>(),
     workflowViewports: new Map<string, { x: number; y: number; zoom: number }>(),
     pendingPermission: null,
+    pendingCanUseToolPrompts: [],
     currentTurn: null,
     lastTurnHookAt: 0,
     lastNotification: null,
@@ -527,6 +528,47 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     if (!cur) return;
     const updated = new Map(sessions);
     updated.set(sessionId, { ...cur, lastInvalidateAt: Date.now() });
+    set({ sessions: updated });
+  },
+
+  // v∞.3 PR1: SDK canUseTool browser banner state.
+  addCanUseToolPrompt: (sessionId, prompt) => {
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur) return;
+    const list = cur.pendingCanUseToolPrompts ?? [];
+    // Dedup by promptId — late-join SSE replay can re-deliver an
+    // already-shown prompt; we don't want the banner to appear
+    // twice.
+    if (list.some((p) => p.promptId === prompt.promptId)) return;
+    const updated = new Map(sessions);
+    updated.set(sessionId, {
+      ...cur,
+      pendingCanUseToolPrompts: [...list, prompt],
+    });
+    set({ sessions: updated });
+  },
+  removeCanUseToolPrompt: (sessionId, promptId) => {
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur) return;
+    const list = cur.pendingCanUseToolPrompts ?? [];
+    const filtered = list.filter((p) => p.promptId !== promptId);
+    if (filtered.length === list.length) return;
+    const updated = new Map(sessions);
+    updated.set(sessionId, {
+      ...cur,
+      pendingCanUseToolPrompts: filtered,
+    });
+    set({ sessions: updated });
+  },
+  clearCanUseToolPrompts: (sessionId) => {
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur) return;
+    if ((cur.pendingCanUseToolPrompts ?? []).length === 0) return;
+    const updated = new Map(sessions);
+    updated.set(sessionId, { ...cur, pendingCanUseToolPrompts: [] });
     set({ sessions: updated });
   },
 

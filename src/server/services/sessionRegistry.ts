@@ -32,12 +32,20 @@
 
 import { promises as fsp } from "node:fs";
 
+import * as crypto from "node:crypto";
+
 import {
   HOOK_EVENTS,
   publishHook,
   type HookEnvelope,
   type HookEventName,
 } from "@/server/services/hookEventBus";
+import {
+  loadPermissionRules,
+  matchRule,
+  type PermissionBehavior,
+  type PermissionRule,
+} from "@/server/services/permissionRules";
 import { broadcast } from "@/server/services/sseHub";
 import type { QueryFactory, Query, SDKUserMessage } from "@/server/services/sdkAdapter";
 
@@ -305,10 +313,35 @@ export interface SessionRegistryOptions {
   locateJsonl?: (sessionId: string) => Promise<string | null>;
 }
 
+/** v∞.3 PR1: a pending permission prompt awaiting browser response.
+ *  Created when canUseTool fires + no saved rule matches; resolved
+ *  by `resolvePermissionPrompt` (called from the HTTP decision
+ *  endpoint) or rejected when the SDK aborts. */
+interface PendingPermissionPrompt {
+  id: string;
+  sessionId: string;
+  toolName: string;
+  resolve: (decision: { behavior: PermissionBehavior; message?: string }) => void;
+  reject: (err: Error) => void;
+}
+
 export class SessionRegistry {
   private entries = new Map<string, SessionEntry>();
   private opts: SessionRegistryOptions;
   private watchdogTimer: NodeJS.Timeout | null = null;
+  /** v∞.3 PR1: pending canUseTool requests awaiting user decision.
+   *  Key: promptId. Cleaned up by `resolvePermissionPrompt` on
+   *  decision arrival OR by the abort listener inside the canUseTool
+   *  callback when the SDK aborts the in-flight tool. */
+  private pendingPermissionPrompts = new Map<string, PendingPermissionPrompt>();
+  /** v∞.3 PR1: in-memory mirror of `~/.loomscope/permissions.json`,
+   *  refreshed on every `refreshPermissionRules()` call (from the
+   *  save/delete HTTP handlers). canUseTool's hot path reads this
+   *  synchronously to avoid blocking the SDK on disk I/O for every
+   *  tool use. Initial load is async + non-blocking — until it
+   *  completes the array is empty (no rules match → all tools
+   *  prompt), which is the safe default. */
+  private permissionRules: PermissionRule[] = [];
 
   constructor(opts: SessionRegistryOptions) {
     this.opts = opts;
@@ -321,6 +354,59 @@ export class SessionRegistry {
         this.watchdogTimer.unref();
       }
     }
+    // Best-effort initial load. Failures (file missing, parse error)
+    // leave rules empty which means every tool prompts — safe.
+    void this.refreshPermissionRules();
+  }
+
+  /** Reload rule cache from disk. HTTP save/delete handlers call
+   *  this so subsequent canUseTool invocations see the updated
+   *  rules without restarting the registry. */
+  async refreshPermissionRules(): Promise<void> {
+    try {
+      const file = await loadPermissionRules();
+      this.permissionRules = file.rules;
+    } catch (err) {
+      console.warn("[sessionRegistry] permission rules reload failed:", err);
+    }
+  }
+
+  /** Lookup pending prompt + resolve it. Used by the HTTP decision
+   *  endpoint. Returns the resolved prompt's metadata (toolName +
+   *  sessionId) on success so the caller can — e.g. — persist a
+   *  rule keyed on toolName without trusting client-provided
+   *  values. Returns null when the promptId is unknown (stale /
+   *  already resolved / never existed). */
+  resolvePermissionPrompt(
+    promptId: string,
+    decision: { behavior: PermissionBehavior; message?: string },
+  ): { sessionId: string; toolName: string } | null {
+    const p = this.pendingPermissionPrompts.get(promptId);
+    if (!p) return null;
+    this.pendingPermissionPrompts.delete(promptId);
+    try {
+      p.resolve(decision);
+    } catch (err) {
+      console.warn(
+        `[sessionRegistry] permission prompt resolve threw:`,
+        err,
+      );
+    }
+    return { sessionId: p.sessionId, toolName: p.toolName };
+  }
+
+  /** Snapshot pending prompts for a session — used by the SSE late-
+   *  join replay so a browser tab opening mid-prompt sees it. */
+  pendingPermissionPromptsFor(
+    sessionId: string,
+  ): Array<{ id: string; toolName: string }> {
+    const out: Array<{ id: string; toolName: string }> = [];
+    for (const p of this.pendingPermissionPrompts.values()) {
+      if (p.sessionId === sessionId) {
+        out.push({ id: p.id, toolName: p.toolName });
+      }
+    }
+    return out;
   }
 
   /** Returns true iff this session currently has a live Query. */
@@ -453,6 +539,22 @@ export class SessionRegistry {
         );
       }
     }
+    // v∞.3 PR1: any pending permission prompts for this session
+    // must be cleaned up — leaving them in the map would leak both
+    // the entries themselves AND the abort listeners that still
+    // point at them. The browser's banner subscription will see
+    // sdk-session-closed and clear its UI for this sid; the
+    // resolve/reject Promises here just need to settle so the SDK
+    // (already shutting down) doesn't hang on them.
+    for (const p of [...this.pendingPermissionPrompts.values()]) {
+      if (p.sessionId !== sessionId) continue;
+      this.pendingPermissionPrompts.delete(p.id);
+      try {
+        p.reject(new Error("session closed"));
+      } catch {
+        /* ignore — Promise already settled */
+      }
+    }
     broadcast(sessionId, {
       event: "sdk-session-closed",
       data: { sessionId },
@@ -512,6 +614,106 @@ export class SessionRegistry {
   }
 
   // ─── internals ────────────────────────────────────────────────
+
+  /** Build the canUseTool callback handed to SDK at spawn. Captures
+   *  sessionId in the closure so the broadcast goes to the right SSE
+   *  channel + the pending entry stamps which session originated.
+   *  Returns the callback function (not invoked here). */
+  private makeCanUseToolCallback(sessionId: string) {
+    type PermissionResultLike =
+      | { behavior: "allow"; updatedInput?: Record<string, unknown> }
+      | { behavior: "deny"; message: string; interrupt?: boolean };
+    return async (
+      toolName: string,
+      input: Record<string, unknown>,
+      options: {
+        signal: AbortSignal;
+        suggestions?: unknown;
+        title?: string;
+        displayName?: string;
+        decisionReason?: string;
+        blockedPath?: string;
+      },
+    ): Promise<PermissionResultLike> => {
+      // Hot path: saved rule matches → synchronous allow/deny, no
+      // browser round-trip. The SDK only cares about behavior; we
+      // return a minimal allow object for matched rules.
+      const matched = matchRule(this.permissionRules, toolName, input);
+      if (matched === "allow") {
+        return { behavior: "allow", updatedInput: input };
+      }
+      if (matched === "deny") {
+        return {
+          behavior: "deny",
+          message: `Loomscope: 已保存的规则拒绝了 ${toolName}`,
+        };
+      }
+
+      // No saved rule → ask the user via browser banner.
+      const promptId = `pp-${crypto.randomUUID()}`;
+      return new Promise<PermissionResultLike>((resolve, reject) => {
+        const pending: PendingPermissionPrompt = {
+          id: promptId,
+          sessionId,
+          toolName,
+          resolve: (decision) => {
+            if (decision.behavior === "allow") {
+              resolve({ behavior: "allow", updatedInput: input });
+            } else {
+              resolve({
+                behavior: "deny",
+                message:
+                  decision.message ??
+                  `Loomscope: 用户拒绝了 ${toolName}`,
+              });
+            }
+          },
+          reject,
+        };
+        this.pendingPermissionPrompts.set(promptId, pending);
+
+        // Hook up SDK abort: if the in-flight tool is cancelled
+        // (user clicks Stop, registry interrupts the turn, etc.)
+        // we reject the pending Promise + cleanup the map. This
+        // mirrors how SDK's `signal` is documented to behave —
+        // callers that ignore it would leak entries.
+        const onAbort = () => {
+          if (this.pendingPermissionPrompts.delete(promptId)) {
+            reject(new Error("permission prompt aborted"));
+            broadcast(sessionId, {
+              event: "permission-prompt-resolved",
+              data: { sessionId, promptId, reason: "aborted" },
+            });
+          }
+        };
+        if (options.signal.aborted) {
+          onAbort();
+          return;
+        }
+        options.signal.addEventListener("abort", onAbort, { once: true });
+
+        // Broadcast SSE so the active browser tab renders the
+        // banner. Late-joining tabs get a snapshot via the SSE
+        // route's `pendingPermissionPromptsFor` replay.
+        broadcast(sessionId, {
+          event: "permission-prompt",
+          data: {
+            sessionId,
+            promptId,
+            toolName,
+            input,
+            // SDK pre-renders these — pass through so the banner
+            // can show "Claude wants to read foo.txt" instead of
+            // reconstructing from raw JSON.
+            title: options.title,
+            displayName: options.displayName,
+            decisionReason: options.decisionReason,
+            blockedPath: options.blockedPath,
+          },
+        });
+      });
+    };
+  }
 
   private async spawn(sessionId: string, cwd: string): Promise<SessionEntry> {
     const pumpController = new AsyncQueueController<SDKUserMessage>();
@@ -597,6 +799,26 @@ export class SessionRegistry {
         // converge on the same SSE bus.
         // ──────────────────────────────────────────────────────────
         hooks: buildSdkHooksMap(),
+        // ──────────────────────────────────────────────────────────
+        // v∞.3 PR1: canUseTool — Loomscope's chance to mediate
+        // tool-permission requests interactively. SDK fires this
+        // before each tool call (in modes that ask: 'default',
+        // 'acceptEdits' for non-Edit tools, 'plan' for non-readonly).
+        // Flow:
+        //   1. Pre-check the in-memory rules cache. If a saved
+        //      "always allow X" rule matches → return allow
+        //      synchronously, no browser round-trip.
+        //   2. Otherwise generate a promptId, broadcast
+        //      `permission-prompt` SSE event with tool details, and
+        //      return a Promise that the HTTP decision endpoint
+        //      resolves when the user clicks a banner button.
+        //   3. SDK abort signal → reject pending Promise + remove
+        //      from map (e.g. user clicked Stop while waiting).
+        //
+        // bypassPermissions mode skips canUseTool entirely (SDK side)
+        // — those users have explicitly opted out of permission
+        // gating, so no prompts fire.
+        canUseTool: this.makeCanUseToolCallback(sessionId),
       },
     });
     entry.query = query;

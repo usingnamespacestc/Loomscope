@@ -25,6 +25,7 @@ import { SessionSearchBar } from "@/components/SessionSearchBar";
 import { DrillPanel } from "@/components/drill/DrillPanel";
 import { Header } from "@/components/Header";
 import { HookOnboardingModal } from "@/components/HookOnboardingModal";
+import { InteractivePermissionBanner } from "@/components/InteractivePermissionBanner";
 import { PermissionBanner } from "@/components/PermissionBanner";
 import { Sidebar } from "@/components/Sidebar";
 import { useKeyboardNav } from "@/hooks/useKeyboardNav";
@@ -182,6 +183,59 @@ export default function App() {
         };
         if (payload.sessionId !== activeId) return;
         useStore.getState().clearSdkSession(activeId);
+        // v∞.3 PR1: also drop any pending canUseTool prompts —
+        // server-side already rejected them; UI carcasses serve no
+        // purpose and would be confusing if they linger.
+        useStore.getState().clearCanUseToolPrompts(activeId);
+      } catch {
+        /* ignore */
+      }
+    });
+
+    // v∞.3 PR1: SDK canUseTool browser-banner events. The server
+    // emits `permission-prompt` when canUseTool fires for a tool
+    // that has no saved rule; the browser shows a banner with
+    // Allow / Always / Deny buttons. The banner POSTs the user's
+    // decision to /api/sessions/:id/permission-prompts/:promptId/
+    // decision; on success the prompt is removed from store
+    // (optimistic clear + the matching `permission-prompt-resolved`
+    // SSE event also cleans up).
+    es.addEventListener("permission-prompt", (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          sessionId: string;
+          promptId: string;
+          toolName: string;
+          input: Record<string, unknown>;
+          title?: string;
+          displayName?: string;
+          decisionReason?: string;
+          blockedPath?: string;
+        };
+        if (payload.sessionId !== activeId) return;
+        useStore.getState().addCanUseToolPrompt(activeId, {
+          promptId: payload.promptId,
+          toolName: payload.toolName,
+          toolInput: payload.input,
+          title: payload.title,
+          displayName: payload.displayName,
+          decisionReason: payload.decisionReason,
+          blockedPath: payload.blockedPath,
+          receivedAt: Date.now(),
+        });
+      } catch (err) {
+        console.error("[loomscope] sse permission-prompt parse failed:", err);
+      }
+    });
+    es.addEventListener("permission-prompt-resolved", (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          sessionId: string;
+          promptId: string;
+          reason?: string;
+        };
+        if (payload.sessionId !== activeId) return;
+        useStore.getState().removeCanUseToolPrompt(activeId, payload.promptId);
       } catch {
         /* ignore */
       }
@@ -357,6 +411,7 @@ export default function App() {
           {activeId && session?.isLoading && <LoadingState />}
           {activeId && session?.error && <ErrorState message={session.error} />}
           {activeId && <PermissionBanner sessionId={activeId} />}
+          {activeId && <InteractivePermissionBanner sessionId={activeId} />}
           {/* v0.10 perf: top-level ChatFlowCanvas stays mounted across
               drill in/out — hidden via display:none when not the
               active view. Prevents the 187-card unmount/remount spike

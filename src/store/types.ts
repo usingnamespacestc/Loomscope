@@ -202,6 +202,27 @@ export interface SessionState {
     permissionMode?: string;
     receivedAt: number;
   } | null;
+  // v∞.3 PR1: pending SDK canUseTool prompts awaiting user decision.
+  // Created on `permission-prompt` SSE arrival; cleared when the
+  // user clicks Allow / Always / Deny (decision POSTs back), when
+  // the SDK aborts (`permission-prompt-resolved` SSE event with
+  // reason='aborted'), or on sdk-session-closed.
+  //
+  // Distinct from `pendingPermission` above — that one mirrors CC's
+  // PermissionRequest HOOK (terminal CC's y/n prompt, read-only
+  // banner). canUseTool prompts are SDK-interactive (Loomscope
+  // banner has actual buttons that resolve the SDK's awaiting
+  // Promise via /api/sessions/:id/permission-prompts/:promptId/decision).
+  pendingCanUseToolPrompts?: Array<{
+    promptId: string;
+    toolName: string;
+    toolInput: Record<string, unknown>;
+    title?: string;
+    displayName?: string;
+    decisionReason?: string;
+    blockedPath?: string;
+    receivedAt: number;
+  }>;
   // v0.11: hook-driven turn window. UserPromptSubmit sets this to
   // { startedAt: now }; Stop clears it. When non-null, the session is
   // canonically "running" — drives card pulse + edge dashed flow
@@ -272,6 +293,26 @@ export interface SessionSlice {
   // 中: 把指定 session 的 lastInvalidateAt 设为当前时间戳，由 App.tsx
   // 的 SSE invalidate 处理器调用，触发 liveness 进入 active。
   markSessionActivity: (sessionId: string) => void;
+  // v∞.3 PR1: SDK canUseTool browser banner state. Driven by the
+  // `permission-prompt` / `permission-prompt-resolved` SSE events
+  // in App.tsx + the InteractivePermissionBanner click handlers.
+  addCanUseToolPrompt: (
+    sessionId: string,
+    prompt: {
+      promptId: string;
+      toolName: string;
+      toolInput: Record<string, unknown>;
+      title?: string;
+      displayName?: string;
+      decisionReason?: string;
+      blockedPath?: string;
+      receivedAt: number;
+    },
+  ) => void;
+  removeCanUseToolPrompt: (sessionId: string, promptId: string) => void;
+  /** Wipe all pending prompts for a session — used on
+   *  sdk-session-closed to drop now-stale UI state. */
+  clearCanUseToolPrompts: (sessionId: string) => void;
   // v∞.0 PR 2: dispatch a CC settings.json hook event into the
   // session's state. Driven by the `cc-hook` SSE event in App.tsx.
   // Common path = bump activity timestamp; the load-bearing branch

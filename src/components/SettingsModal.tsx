@@ -704,9 +704,134 @@ function VinfPanel() {
         </p>
       </section>
 
+      {/* v∞.3 PR1: saved permission rules manager. Lists rules from
+          ~/.loomscope/permissions.json with × to remove. New rules
+          land here when the user clicks "Always allow" in the
+          InteractivePermissionBanner. */}
+      <PermissionRulesSection />
+
       {error && (
         <div className="text-[11px] italic text-rose-600">✗ {error}</div>
       )}
     </div>
   );
+}
+
+// v∞.3 PR1: GET / DELETE /api/permission-rules — separate fetch
+// lifecycle from VinfPanel's preferences fetch so a slow rules
+// load doesn't block the rest of the v∞ tab. Rules typically
+// number 0-10; UI shows them as a tabular list.
+interface PermRule {
+  id: string;
+  toolName: string;
+  behavior: "allow" | "deny";
+  createdAt: number;
+}
+
+function PermissionRulesSection() {
+  const { t } = useTranslation();
+  const [rules, setRules] = useState<PermRule[] | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+
+  const refresh = async () => {
+    try {
+      const res = await fetch("/api/permission-rules", {
+        credentials: "same-origin",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { rules?: PermRule[] };
+      setRules(data.rules ?? []);
+      setLoadErr(null);
+    } catch (err) {
+      setLoadErr(err instanceof Error ? err.message : String(err));
+      setRules([]);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const removeRule = async (id: string) => {
+    try {
+      const res = await fetch(`/api/permission-rules/${id}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      if (!res.ok && res.status !== 404) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      // Optimistic remove + refresh.
+      setRules((cur) => (cur ?? []).filter((r) => r.id !== id));
+    } catch (err) {
+      setLoadErr(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <section data-testid="settings-permission-rules">
+      <h3 className="mb-1 text-xs font-semibold text-gray-700">
+        {t("settings.permission_rules.section_title")}
+      </h3>
+      <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
+        {t("settings.permission_rules.section_description")}
+      </p>
+      {loadErr && (
+        <div className="mb-2 text-[11px] italic text-rose-600">
+          ✗ {t("settings.permission_rules.load_failed")}: {loadErr}
+        </div>
+      )}
+      {rules && rules.length === 0 && (
+        <div className="text-[11px] italic text-gray-400">
+          {t("settings.permission_rules.empty")}
+        </div>
+      )}
+      {rules && rules.length > 0 && (
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+              <th className="pb-1">{t("settings.permission_rules.header_tool")}</th>
+              <th className="pb-1">{t("settings.permission_rules.header_added_at")}</th>
+              <th className="pb-1 text-right" />
+            </tr>
+          </thead>
+          <tbody>
+            {rules.map((r) => (
+              <tr key={r.id} className="border-t border-gray-100">
+                <td className="py-1 font-mono">
+                  {r.toolName}{" "}
+                  {r.behavior === "deny" && (
+                    <span className="ml-1 text-[9px] rounded bg-rose-100 px-1 text-rose-700">
+                      deny
+                    </span>
+                  )}
+                </td>
+                <td className="py-1 text-gray-500">
+                  {formatRuleAge(r.createdAt)}
+                </td>
+                <td className="py-1 text-right">
+                  <button
+                    type="button"
+                    data-testid={`permission-rule-remove-${r.id}`}
+                    onClick={() => void removeRule(r.id)}
+                    className="rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200"
+                  >
+                    {t("settings.permission_rules.remove")}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function formatRuleAge(epochMs: number): string {
+  const delta = Date.now() - epochMs;
+  if (delta < 60_000) return "just now";
+  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
+  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`;
+  return `${Math.floor(delta / 86_400_000)}d ago`;
 }

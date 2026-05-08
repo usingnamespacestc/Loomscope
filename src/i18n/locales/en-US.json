@@ -72,6 +72,23 @@
       "jump_to_source_hint": "This node lives on a sibling-fork jsonl"
     }
   },
+  "permission_banner": {
+    "fallback_headline": "Claude Code requests permission to use {{tool}}",
+    "queue_count": "{{count}} more pending request(s)",
+    "allow": "Allow once",
+    "allow_always": "Allow always",
+    "deny": "Deny"
+  },
+  "permission_rules": {
+    "section_title": "Saved \"always allow\" rules",
+    "section_description": "Loomscope intercepts Claude's tool permission requests via the SDK canUseTool callback. Clicking \"Allow always\" saves the tool to ~/.loomscope/permissions.json so future calls auto-allow without prompting. Remove rules here.",
+    "empty": "No rules yet. Click \"Allow always\" the first time you grant a tool to save one here.",
+    "header_tool": "Tool",
+    "header_added_at": "Added",
+    "header_actions": "",
+    "remove": "Remove",
+    "load_failed": "Failed to load"
+  },
   "drill_panel": {
     "tab_detail": "Detail",
     "tab_conversation": "Conversation",

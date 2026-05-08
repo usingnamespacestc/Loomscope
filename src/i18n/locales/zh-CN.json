@@ -72,6 +72,23 @@
       "jump_to_source_hint": "此节点位于 sibling fork 的 jsonl 中"
     }
   },
+  "permission_banner": {
+    "fallback_headline": "Claude Code 请求执行 {{tool}}",
+    "queue_count": "还有 {{count}} 条待批的请求",
+    "allow": "本次允许",
+    "allow_always": "始终允许",
+    "deny": "拒绝"
+  },
+  "permission_rules": {
+    "section_title": "已保存的「始终允许」规则",
+    "section_description": "Loomscope 通过 SDK canUseTool 拦截 Claude 的工具权限请求；点击「始终允许」会把当前工具记到 ~/.loomscope/permissions.json，下次再不弹。可以在这里删除。",
+    "empty": "暂无规则。第一次允许工具时点「始终允许」会保存到这里。",
+    "header_tool": "工具",
+    "header_added_at": "添加时间",
+    "header_actions": "",
+    "remove": "删除",
+    "load_failed": "加载失败"
+  },
   "drill_panel": {
     "tab_detail": "详情",
     "tab_conversation": "对话",
