@@ -97,19 +97,32 @@ export function turnsRouter(opts: TurnsRouterOptions) {
       // member's jsonl contains it; fork from THAT member.
       let forkedSessionId: string | null = null;
       if (body.forkFrom) {
-        const sourceSid = await resolveForkSourceSession(
+        const resolution = await resolveForkSourceSessionWithDiag(
           opts.rootDir,
           id,
           body.forkFrom.upToMessageId,
         );
-        if (!sourceSid) {
+        if (!resolution.sourceSid) {
+          // Loud server-side log so the operator can correlate with
+          // file state (timing, permissions, racing writers). The
+          // 400 body echoes the diag for the browser console too.
+          console.warn(
+            "[loomscope:turns] fork failed — uuid not found in closure",
+            {
+              entrySessionId: id,
+              upToMessageId: body.forkFrom.upToMessageId,
+              candidates: resolution.scans,
+            },
+          );
           return c.json(
             {
               error: `fork failed: upToMessageId not found in any closure member of ${id}`,
+              diag: resolution.scans,
             },
             400,
           );
         }
+        const sourceSid = resolution.sourceSid;
         try {
           const r = await forkSession(sourceSid, {
             upToMessageId: body.forkFrom.upToMessageId,
@@ -214,13 +227,27 @@ async function locateSessionJsonl(
 // lives in a sibling jsonl rather than the active session's own
 // jsonl (e.g. closure-merged canvas view). Without this resolution,
 // SDK forkSession would try to read the wrong jsonl and 500.
-async function resolveForkSourceSession(
+interface ScanRecord {
+  sid: string;
+  path: string;
+  linesScanned: number;
+  fileSize: number;
+  found: boolean;
+  error?: string;
+}
+
+interface ResolveResult {
+  sourceSid: string | null;
+  scans: ScanRecord[];
+}
+
+async function resolveForkSourceSessionWithDiag(
   rootDir: string,
   entrySessionId: string,
   upToMessageId: string,
-): Promise<string | null> {
+): Promise<ResolveResult> {
   const entryJsonl = await locateSessionJsonl(rootDir, entrySessionId);
-  if (!entryJsonl) return null;
+  if (!entryJsonl) return { sourceSid: null, scans: [] };
   const projectDir = path.dirname(entryJsonl);
   const closure = await findForkClosure({ projectDir, entrySessionId });
   // Closure can be empty for non-fork sessions (just the entry); the
@@ -233,12 +260,36 @@ async function resolveForkSourceSession(
       : [{ sid: entrySessionId, path: entryJsonl }];
   // Try the entry first (most common case), then sibling members.
   candidates.sort((a, b) => (a.sid === entrySessionId ? -1 : b.sid === entrySessionId ? 1 : 0));
+  const scans: ScanRecord[] = [];
   for (const cand of candidates) {
-    if (await jsonlContainsUuid(cand.path, upToMessageId)) {
-      return cand.sid;
+    const stat = await fsp.stat(cand.path).catch(() => null);
+    const fileSize = stat?.size ?? -1;
+    try {
+      const { found, linesScanned } = await scanJsonlForUuid(
+        cand.path,
+        upToMessageId,
+      );
+      scans.push({
+        sid: cand.sid,
+        path: cand.path,
+        linesScanned,
+        fileSize,
+        found,
+      });
+      if (found) return { sourceSid: cand.sid, scans };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      scans.push({
+        sid: cand.sid,
+        path: cand.path,
+        linesScanned: -1,
+        fileSize,
+        found: false,
+        error: msg,
+      });
     }
   }
-  return null;
+  return { sourceSid: null, scans };
 }
 
 // Stream-scan a jsonl line by line for a record whose `uuid` matches
@@ -246,10 +297,16 @@ async function resolveForkSourceSession(
 // near the head of the file; bounded full scan when not. We don't
 // JSON.parse — just substring-match `"uuid":"<target>"` because the
 // target is a UUID with hyphens (no escaping concerns).
-async function jsonlContainsUuid(
+//
+// Returns linesScanned alongside the boolean for diagnostic purposes
+// — when a fork attempt fails because the resolver couldn't find
+// the uuid, knowing how many lines we read vs the file's actual line
+// count helps distinguish "scanned everything, genuinely missing"
+// from "stream truncated mid-scan / racing writer".
+async function scanJsonlForUuid(
   jsonlPath: string,
   target: string,
-): Promise<boolean> {
+): Promise<{ found: boolean; linesScanned: number }> {
   const needle = `"uuid":"${target}"`;
   return new Promise((resolve, reject) => {
     let stream: ReturnType<typeof createReadStream> | null = null;
@@ -260,14 +317,16 @@ async function jsonlContainsUuid(
       return;
     }
     const rl = readline.createInterface({ input: stream });
+    let linesScanned = 0;
     rl.on("line", (line) => {
+      linesScanned++;
       if (line.includes(needle)) {
         rl.close();
         stream?.destroy();
-        resolve(true);
+        resolve({ found: true, linesScanned });
       }
     });
-    rl.on("close", () => resolve(false));
+    rl.on("close", () => resolve({ found: false, linesScanned }));
     rl.on("error", (err) => reject(err));
   });
 }
