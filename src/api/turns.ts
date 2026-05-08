@@ -121,12 +121,18 @@ export async function postFork(
   payload: {
     upToMessageId?: string;
     title?: string;
-    /** When forking from a sibling-fork ChatNode visible via closure
-     *  merge, this is the session that physically owns the record.
-     *  Server uses it as the forkSession source instead of `sessionId`
-     *  (the URL param). Frontend reads it from
-     *  `ChatNode.contributingSessions`. Omit on the same-session
-     *  on-chain fork case. */
+    /** DORMANT (no current caller as of 2026-05-08). When forking from
+     *  a sibling-fork ChatNode visible via closure-merge, this is the
+     *  session that physically owns the record. Server uses it as the
+     *  `forkSession` source instead of `sessionId` (the URL param).
+     *  Frontend reads it from `ChatNode.contributingSessions`. Omit on
+     *  the same-session on-chain fork case (this is the only path
+     *  exercised today after PR 2's right-click UX disallowed forking
+     *  from gray ChatNodes).
+     *
+     *  Server-side comment in `src/server/routes/fork.ts` has the full
+     *  rationale + the "why kept anyway" note. Cross-ref:
+     *  `docs/fork-ux-notes.md`. */
     sourceSessionId?: string;
   },
 ): Promise<{ ok: true; sessionId: string } | ApiError> {
