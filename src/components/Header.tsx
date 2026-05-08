@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 
 import { copyToClipboardWithFallback } from "@/lib/clipboard";
 import { HookStatusChip } from "@/components/HookStatusChip";
+import { RunningSessionsChip } from "@/components/RunningSessionsChip";
 import { SettingsModal } from "@/components/SettingsModal";
 import { currentLanguage, setLanguage } from "@/i18n";
 import { useStore } from "@/store/index";
@@ -92,6 +93,7 @@ export function Header() {
           </span>
         )}
         <LanguageToggle />
+        <RunningSessionsChip />
         <button
           type="button"
           onClick={() => setSettingsOpen(true)}

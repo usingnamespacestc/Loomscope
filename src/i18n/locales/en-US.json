@@ -168,6 +168,13 @@
     "case_toggle_tooltip": "Case-sensitive",
     "clear_tooltip": "Clear"
   },
+  "running_sessions": {
+    "label": "running",
+    "tooltip": "v∞.2 SDK sessions with active turns or pending queue",
+    "heading": "Active sessions",
+    "state_running": "running",
+    "state_queued": "queued"
+  },
   "task_list": {
     "title": "Tasks",
     "tooltip_expand": "Expand CC TaskList (click to collapse)",

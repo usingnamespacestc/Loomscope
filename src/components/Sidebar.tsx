@@ -417,8 +417,9 @@ export function Sidebar() {
                               data-testid={`session-row-${s.sessionId}`}
                               title={`${s.sessionId} · ${formatBytes(s.fileSize)} · ${s.messageCount} ${t("sidebar.session_records_unit")}`}
                             >
-                              <div className="truncate text-[11px]">
-                                {s.title}
+                              <div className="flex items-center gap-1 truncate text-[11px]">
+                                <SessionRowRunningDot sessionId={s.sessionId} />
+                                <span className="truncate">{s.title}</span>
                               </div>
                               <div className="text-[10px] text-gray-400 flex justify-between mt-0.5">
                                 <span className="font-mono">
@@ -582,4 +583,27 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+// v∞.2 PR 4: small green pulse dot rendered next to session title
+// when that session has a v∞.2 SDK Query active (running OR queued
+// pending). Hidden otherwise so the title takes the full row width
+// for cold sessions. Per-row store subscription keeps re-render
+// cost bounded — only sessions whose state flips actually re-render.
+function SessionRowRunningDot({ sessionId }: { sessionId: string }) {
+  const isActive = useStore((s) => {
+    const inflight = s.inflightBySession.get(sessionId);
+    if (!inflight) return false;
+    return (
+      inflight.state === "running" || inflight.pendingPrompts.length > 0
+    );
+  });
+  if (!isActive) return null;
+  return (
+    <span
+      data-testid={`session-row-running-${sessionId}`}
+      className="inline-block h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-emerald-500"
+      title="v∞.2 SDK active"
+    />
+  );
 }
