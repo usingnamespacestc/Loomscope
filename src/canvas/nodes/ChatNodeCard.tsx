@@ -14,6 +14,7 @@
 
 import { Handle, Position } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useFoldAnchor } from "@/canvas/FoldAnchorContext";
@@ -137,6 +138,15 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
       data-testid={`chat-node-${cn.id}`}
       data-running={running ? "true" : "false"}
     >
+      {/* v∞.2 PR 6: hover-revealed fork button at top-right corner.
+          Calls server's POST /:sid/fork with `upToMessageId` resolved
+          to this ChatNode's last record uuid. Hidden on compact /
+          slash chrome (those have their own dedicated controls).
+          Disabled while the session has any v∞.2 SDK activity (mid-
+          turn fork would race the orphan jsonl writes). */}
+      {!compact && !slash && (
+        <ForkButton chatNode={cn} />
+      )}
       {/* Handles — invisible 0×0 when no edge connects (viewer mode). */}
       <Handle
         type="target"
@@ -748,6 +758,78 @@ function SlashCommandCard({
         }
       />
     </div>
+  );
+}
+
+// v∞.2 PR 6: fork button — appears on hover at the card's top-
+// right corner. Click → POST /:sid/fork with upToMessageId = last
+// record uuid of this ChatNode (so the new fork session contains
+// everything up through this turn). Disabled while the session
+// has v∞.2 SDK activity (= mid-turn fork would race jsonl writes).
+function ForkButton({
+  chatNode,
+}: {
+  chatNode: import("@/data/types").ChatNode;
+}) {
+  const { t } = useTranslation();
+  const activeId = useStore((s) => s.activeSessionId);
+  const isBusy = useStore((s) => {
+    if (!activeId) return false;
+    const inflight = s.inflightBySession.get(activeId);
+    if (!inflight) return false;
+    return (
+      inflight.state === "running" || inflight.pendingPrompts.length > 0
+    );
+  });
+  const refreshWorkspaces = useStore((s) => s.refreshWorkspaces);
+  const setActive = useStore((s) => s.setActiveSession);
+  const [pending, setPending] = useState(false);
+
+  const handleClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!activeId || isBusy || pending) return;
+    setPending(true);
+    try {
+      // Resolve upToMessageId: prefer the last workflow node's uuid
+      // (the chronologically last record in this ChatNode's bucket).
+      // Fallback to the user message uuid for ChatNodes whose
+      // workflow is empty (live-tail with no llm_call yet).
+      const lastNode =
+        chatNode.workflow.nodes[chatNode.workflow.nodes.length - 1];
+      const upToMessageId = lastNode?.id ?? chatNode.userMessage.uuid;
+      const { postFork } = await import("@/api/turns");
+      const r = await postFork(activeId, { upToMessageId });
+      if ("ok" in r && r.ok) {
+        // chokidar will detect the new jsonl in 1-2 RAFs and update
+        // the sidebar. For instant feedback, also kick a manual
+        // refresh and switch to the fork.
+        await refreshWorkspaces();
+        setActive(r.sessionId);
+      } else {
+        console.error("[loomscope:fork] failed:", r);
+      }
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const tooltip = isBusy
+    ? t("fork.tooltip_busy")
+    : pending
+      ? t("fork.tooltip_pending")
+      : t("fork.tooltip");
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={isBusy || pending}
+      data-testid={`chat-node-fork-${chatNode.id}`}
+      title={tooltip}
+      className="absolute right-1 top-1 z-10 hidden h-5 w-5 items-center justify-center rounded text-[10px] text-gray-400 transition-colors hover:bg-blue-100 hover:text-blue-600 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-300 group-hover/card:flex"
+    >
+      ⑂
+    </button>
   );
 }
 

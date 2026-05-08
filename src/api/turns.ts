@@ -97,3 +97,15 @@ export async function deleteQueueItem(
   if ("error" in r) return r;
   return { ok: true, canceled: r.canceled };
 }
+
+export async function postFork(
+  sessionId: string,
+  payload: { upToMessageId?: string; title?: string },
+): Promise<{ ok: true; sessionId: string } | ApiError> {
+  const r = await post<{ sessionId: string }>(
+    `/api/sessions/${sessionId}/fork`,
+    payload,
+  );
+  if ("error" in r) return r;
+  return { ok: true, sessionId: r.sessionId };
+}

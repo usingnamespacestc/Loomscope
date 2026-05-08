@@ -15,6 +15,7 @@ import { corsMiddleware } from "@/server/middleware/cors";
 import { csrfMiddleware } from "@/server/middleware/csrf";
 import { ccHookRouter } from "@/server/routes/ccHook";
 import { ccHookOnboardingRouter } from "@/server/routes/ccHookOnboarding";
+import { forkRouter } from "@/server/routes/fork";
 import { preferencesRouter } from "@/server/routes/preferences";
 import { searchRouter } from "@/server/routes/search";
 import { sessionsRouter } from "@/server/routes/sessions";
@@ -103,6 +104,7 @@ export function createApp(opts: AppOptions) {
     });
   }
   app.route("/api/sessions", turnsRouter({ registry }));
+  app.route("/api/sessions", forkRouter());
   app.route("/api/preferences", preferencesRouter({ registry }));
   // v∞.0 PR 3: parse allowedOrigin to recover the listening port —
   // settings.json hook URLs are constructed against that port. If

@@ -168,6 +168,11 @@
     "case_toggle_tooltip": "区分大小写",
     "clear_tooltip": "清空"
   },
+  "fork": {
+    "tooltip": "从此节点 fork 出新 session（包含到这条为止的对话）",
+    "tooltip_busy": "session 有 SDK 活动中，等当前 turn 跑完才能 fork",
+    "tooltip_pending": "fork 中…"
+  },
   "running_sessions": {
     "label": "running",
     "tooltip": "当前活跃的 v∞.2 SDK session 数（运行中或排队中）",
