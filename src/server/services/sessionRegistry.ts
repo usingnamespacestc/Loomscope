@@ -1,0 +1,480 @@
+// EN: server-side registry of active SDK Query instances, keyed by
+// CC session id. v∞.2 spawn lifecycle (B model — per-session
+// long-lived Query):
+//
+//   - Lazy spawn: nothing happens until a write action lands
+//     (`enqueueTurn` / `interrupt` / `stopAndSend`). Read-only
+//     browsing pays no subprocess cost.
+//   - Stateful Query: a single `Query` lives for the session's
+//     active period; subsequent turns reuse it via `streamInput`.
+//     This keeps CC's prompt cache warm — the second turn skips
+//     the ~24K-token cache_creation hit observed in spike #1.
+//   - Idle close: when a session sees no activity for
+//     `idleTimeoutMin`, the watchdog calls `query.close()` and
+//     drops the entry. Next action re-spawns from the jsonl on
+//     disk (same `resume: sid` mechanic spike #2 verified).
+//   - Browser disconnect != close: SSE detach has no effect on
+//     subprocess lifecycle; turns finish on their own and the
+//     jsonl persists. Activity (incl. message arrival) is what
+//     resets the idle timer, not browser presence.
+//   - Server shutdown: graceful path closes every Query before
+//     exit, sending SIGTERM to underlying claude subprocesses.
+//     Crash path leaves orphans which complete naturally (spike
+//     #4 verified) — jsonl writes finalize on their own.
+//
+// Per-session FIFO queue with priority levels mirroring CC's
+// internal model (`now` interrupts current; `next` queue head;
+// `later` queue tail). PR 1 ships the queue data structure; the
+// browser UI for pending bubbles lands in PR 3.
+//
+// 中: 服务端 SDK Query 注册表。lazy spawn / 长期复用 / idle 回收 /
+// 浏览器断开不影响。优先级队列对齐 CC 内部 now/next/later 语义。
+
+import { broadcast } from "@/server/services/sseHub";
+import type { QueryFactory, Query, SDKUserMessage } from "@/server/services/sdkAdapter";
+
+export type Priority = "now" | "next" | "later";
+
+export interface ImageAttachment {
+  mediaType: string;
+  base64: string;
+}
+
+export interface PromptItem {
+  /** Server-issued unique id for cancel / reorder operations. */
+  id: string;
+  /** Plain text portion of the prompt (may be empty if image-only). */
+  text: string;
+  /** Optional image attachments — multimodal SDK content blocks. */
+  images: ImageAttachment[];
+  /** CC priority. Default `next` (matches CC source). */
+  priority: Priority;
+  /** Wall clock when enqueue was received. */
+  createdAt: number;
+}
+
+export type SessionState = "idle" | "running";
+
+interface SessionEntry {
+  sessionId: string;
+  cwd: string;
+  state: SessionState;
+  /** SDK handle. Null after close(). */
+  query: Query | null;
+  /** Driver of the Query's prompt input — yields SDKUserMessage to
+   *  push new turns through `streamInput`. Set by spawn. */
+  pumpController: AsyncQueueController<SDKUserMessage> | null;
+  /** Currently in-flight turn metadata (null when idle). */
+  currentRun: { promptItemId: string; startedAt: number } | null;
+  /** Backlog (does NOT include the in-flight turn). FIFO within
+   *  priority level; priority order: now > next > later. */
+  pendingPrompts: PromptItem[];
+  /** Last activity wall-clock — drives idle timeout. */
+  lastActivityAt: number;
+}
+
+/**
+ * Async queue used as the SDK's input AsyncIterable. Push from
+ * registry; SDK iterates internally. Closing signals end-of-stream.
+ */
+class AsyncQueueController<T> {
+  private buffered: T[] = [];
+  private waiters: Array<{ resolve: (v: IteratorResult<T>) => void }> = [];
+  private closed = false;
+
+  push(value: T): void {
+    if (this.closed) return;
+    const w = this.waiters.shift();
+    if (w) w.resolve({ value, done: false });
+    else this.buffered.push(value);
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    while (this.waiters.length > 0) {
+      this.waiters.shift()!.resolve({
+        value: undefined as unknown as T,
+        done: true,
+      });
+    }
+  }
+
+  iterable(): AsyncIterable<T> {
+    return {
+      [Symbol.asyncIterator]: () => ({
+        next: () =>
+          new Promise<IteratorResult<T>>((resolve) => {
+            const v = this.buffered.shift();
+            if (v !== undefined) {
+              resolve({ value: v, done: false });
+              return;
+            }
+            if (this.closed) {
+              resolve({ value: undefined as unknown as T, done: true });
+              return;
+            }
+            this.waiters.push({ resolve });
+          }),
+      }),
+    };
+  }
+}
+
+export interface SessionRegistryOptions {
+  queryFactory: QueryFactory;
+  /** Minutes of inactivity before close(). 0 disables timeout
+   *  (useful in tests). */
+  idleTimeoutMin: number;
+  /** Override watchdog poll interval. Defaults to 60s; tests pass
+   *  small values. */
+  watchdogIntervalMs?: number;
+}
+
+export class SessionRegistry {
+  private entries = new Map<string, SessionEntry>();
+  private opts: SessionRegistryOptions;
+  private watchdogTimer: NodeJS.Timeout | null = null;
+
+  constructor(opts: SessionRegistryOptions) {
+    this.opts = opts;
+    if (opts.idleTimeoutMin > 0) {
+      const ms = opts.watchdogIntervalMs ?? 60_000;
+      this.watchdogTimer = setInterval(() => this.evictIdle(), ms);
+      // Don't keep the Node process alive just for this timer — server
+      // shutdown should not be blocked.
+      if (typeof this.watchdogTimer.unref === "function") {
+        this.watchdogTimer.unref();
+      }
+    }
+  }
+
+  /** Returns true iff this session currently has a live Query. */
+  has(sessionId: string): boolean {
+    return this.entries.has(sessionId);
+  }
+
+  /** Snapshot for read-only consumers (UI status displays, tests). */
+  snapshot(sessionId: string): {
+    state: SessionState;
+    pendingCount: number;
+    currentRun: SessionEntry["currentRun"];
+  } | null {
+    const e = this.entries.get(sessionId);
+    if (!e) return null;
+    return {
+      state: e.state,
+      pendingCount: e.pendingPrompts.length,
+      currentRun: e.currentRun,
+    };
+  }
+
+  /**
+   * Enqueue a new turn on `sessionId`. Spawns a Query if none exists.
+   * Priority semantics:
+   *   - `now`: aborts the in-flight turn (Query.interrupt) before
+   *     pushing — the new prompt runs immediately.
+   *   - `next`: inserted at position 0 of pendingPrompts (queue head),
+   *     processed when current turn finishes.
+   *   - `later`: appended to end of pendingPrompts.
+   *
+   * Returns the assigned PromptItem id so the caller can later cancel
+   * via cancelPending().
+   */
+  async enqueueTurn(
+    sessionId: string,
+    cwd: string,
+    prompt: Omit<PromptItem, "id" | "createdAt">,
+  ): Promise<string> {
+    const item: PromptItem = {
+      ...prompt,
+      id: makeId(),
+      createdAt: Date.now(),
+    };
+
+    let entry = this.entries.get(sessionId);
+    if (!entry) {
+      entry = await this.spawn(sessionId, cwd);
+    }
+    entry.lastActivityAt = Date.now();
+
+    if (item.priority === "now") {
+      // Interrupt the running turn (if any) before sending. CC's
+      // internal queue also reacts to a `now` arrival by aborting,
+      // but going through Query.interrupt() gives us a deterministic
+      // sequencing: SDK ack'd interrupt → push new prompt → CC sees
+      // a clean queue with one item.
+      if (entry.state === "running" && entry.query) {
+        try {
+          await entry.query.interrupt();
+        } catch (err) {
+          console.warn(
+            `[sessionRegistry] interrupt failed for ${sessionId}:`,
+            err,
+          );
+        }
+      }
+      // Pre-empt any earlier pending items too — `now` means the user
+      // wants this prompt to run NEXT, regardless of what was queued.
+      entry.pendingPrompts.unshift(item);
+    } else if (item.priority === "next") {
+      entry.pendingPrompts.unshift(item);
+    } else {
+      entry.pendingPrompts.push(item);
+    }
+
+    // Try to dispatch immediately if idle. Running turns will pick up
+    // the next item from pendingPrompts when they complete.
+    this.maybeDispatch(entry);
+    this.broadcastQueueState(entry);
+    return item.id;
+  }
+
+  /** Cancel a queued (NOT yet running) prompt by id. Returns whether
+   *  removed. */
+  cancelPending(sessionId: string, itemId: string): boolean {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return false;
+    const idx = entry.pendingPrompts.findIndex((p) => p.id === itemId);
+    if (idx < 0) return false;
+    entry.pendingPrompts.splice(idx, 1);
+    entry.lastActivityAt = Date.now();
+    this.broadcastQueueState(entry);
+    return true;
+  }
+
+  /** Abort the in-flight turn (if any). Pending items remain queued. */
+  async interrupt(sessionId: string): Promise<boolean> {
+    const entry = this.entries.get(sessionId);
+    if (!entry || !entry.query || entry.state !== "running") return false;
+    entry.lastActivityAt = Date.now();
+    try {
+      await entry.query.interrupt();
+      return true;
+    } catch (err) {
+      console.warn(
+        `[sessionRegistry] interrupt failed for ${sessionId}:`,
+        err,
+      );
+      return false;
+    }
+  }
+
+  /** Force-close a session. Used by idle eviction + shutdown. */
+  async close(sessionId: string): Promise<void> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return;
+    this.entries.delete(sessionId);
+    if (entry.pumpController) entry.pumpController.close();
+    if (entry.query) {
+      try {
+        entry.query.close();
+      } catch (err) {
+        console.warn(
+          `[sessionRegistry] query.close failed for ${sessionId}:`,
+          err,
+        );
+      }
+    }
+    broadcast(sessionId, {
+      event: "sdk-session-closed",
+      data: { sessionId },
+    });
+  }
+
+  /** Live-update the idle threshold without restarting the server.
+   *  PATCH /api/preferences calls this so changes take effect
+   *  immediately. Pass 0 to disable timeout. */
+  setIdleTimeoutMin(minutes: number): void {
+    this.opts.idleTimeoutMin = minutes;
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+    if (minutes > 0) {
+      const ms = this.opts.watchdogIntervalMs ?? 60_000;
+      this.watchdogTimer = setInterval(() => this.evictIdle(), ms);
+      if (typeof this.watchdogTimer.unref === "function") {
+        this.watchdogTimer.unref();
+      }
+    }
+  }
+
+  /** Graceful shutdown — closes all sessions. */
+  async shutdown(): Promise<void> {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+    const ids = [...this.entries.keys()];
+    await Promise.all(ids.map((id) => this.close(id)));
+  }
+
+  // ─── internals ────────────────────────────────────────────────
+
+  private async spawn(sessionId: string, cwd: string): Promise<SessionEntry> {
+    const pumpController = new AsyncQueueController<SDKUserMessage>();
+    const entry: SessionEntry = {
+      sessionId,
+      cwd,
+      state: "idle",
+      query: null,
+      pumpController,
+      currentRun: null,
+      pendingPrompts: [],
+      lastActivityAt: Date.now(),
+    };
+
+    // Start the Query with the AsyncIterable input form so we can
+    // streamInput multiple turns through the same Query.
+    const query = this.opts.queryFactory({
+      prompt: pumpController.iterable(),
+      options: {
+        cwd,
+        resume: sessionId,
+      },
+    });
+    entry.query = query;
+    this.entries.set(sessionId, entry);
+
+    // Background driver: iterate SDK messages, broadcast each on the
+    // session's SSE channel. Updates state machine on assistant /
+    // result frames. Errors close the entry — caller will respawn on
+    // next action.
+    void this.driveQueryMessages(entry).catch((err) => {
+      console.error(
+        `[sessionRegistry] driveQueryMessages threw for ${sessionId}:`,
+        err,
+      );
+      void this.close(sessionId);
+    });
+
+    return entry;
+  }
+
+  private async driveQueryMessages(entry: SessionEntry): Promise<void> {
+    const { sessionId } = entry;
+    const q = entry.query;
+    if (!q) return;
+    try {
+      for await (const msg of q) {
+        // Broadcast every SDK frame as `sdk-message` on the existing
+        // per-session SSE bus. Browsers iterate the same bus for hook
+        // events / file-tail invalidates; this just adds another event
+        // type they need to handle.
+        broadcast(sessionId, { event: "sdk-message", data: msg });
+
+        // State machine — minimal for PR 1. We only differentiate
+        // running vs idle on the boundary frames `system/init` →
+        // `result`. Other frames update lastActivityAt to defer idle.
+        entry.lastActivityAt = Date.now();
+        if (msg.type === "system" && (msg as { subtype?: string }).subtype === "init") {
+          if (entry.state !== "running" && entry.currentRun) {
+            entry.state = "running";
+            this.broadcastQueueState(entry);
+          }
+        } else if (msg.type === "result") {
+          entry.state = "idle";
+          entry.currentRun = null;
+          this.broadcastQueueState(entry);
+          // After a turn ends, dispatch the next pending if any.
+          this.maybeDispatch(entry);
+        }
+      }
+    } finally {
+      // SDK iterator ended (Query.close() ran or subprocess died).
+      // Drop the entry if still registered.
+      if (this.entries.get(sessionId) === entry) {
+        await this.close(sessionId);
+      }
+    }
+  }
+
+  private maybeDispatch(entry: SessionEntry): void {
+    if (entry.state === "running") return;
+    if (entry.pendingPrompts.length === 0) return;
+    if (!entry.pumpController) return;
+
+    // Sort by priority then FIFO within priority. We re-sort each
+    // dispatch (cheap — queue length is small) so a `now` enqueued
+    // late still wins.
+    entry.pendingPrompts.sort(comparePriority);
+    const next = entry.pendingPrompts.shift()!;
+    entry.state = "running";
+    entry.currentRun = { promptItemId: next.id, startedAt: Date.now() };
+    entry.lastActivityAt = Date.now();
+
+    const sdkMsg: SDKUserMessage = {
+      type: "user",
+      message: {
+        role: "user",
+        content:
+          next.images.length === 0
+            ? next.text
+            : [
+                ...next.images.map((img) => ({
+                  type: "image" as const,
+                  source: {
+                    type: "base64" as const,
+                    media_type: img.mediaType as "image/png" | "image/jpeg" | "image/gif" | "image/webp",
+                    data: img.base64,
+                  },
+                })),
+                ...(next.text.length > 0
+                  ? [{ type: "text" as const, text: next.text }]
+                  : []),
+              ],
+      },
+      parent_tool_use_id: null,
+      priority: next.priority,
+    };
+    entry.pumpController.push(sdkMsg);
+    this.broadcastQueueState(entry);
+  }
+
+  private broadcastQueueState(entry: SessionEntry): void {
+    broadcast(entry.sessionId, {
+      event: "sdk-queue-state",
+      data: {
+        sessionId: entry.sessionId,
+        state: entry.state,
+        currentRun: entry.currentRun,
+        pendingPrompts: entry.pendingPrompts.map((p) => ({
+          id: p.id,
+          text: p.text,
+          imageCount: p.images.length,
+          priority: p.priority,
+          createdAt: p.createdAt,
+        })),
+      },
+    });
+  }
+
+  private evictIdle(): void {
+    if (this.opts.idleTimeoutMin <= 0) return;
+    const cutoff = Date.now() - this.opts.idleTimeoutMin * 60_000;
+    for (const [sid, entry] of this.entries) {
+      if (entry.state === "running") continue;
+      if (entry.pendingPrompts.length > 0) continue;
+      if (entry.lastActivityAt > cutoff) continue;
+      void this.close(sid);
+    }
+  }
+}
+
+const PRIORITY_ORDER: Record<Priority, number> = {
+  now: 0,
+  next: 1,
+  later: 2,
+};
+
+function comparePriority(a: PromptItem, b: PromptItem): number {
+  const pa = PRIORITY_ORDER[a.priority];
+  const pb = PRIORITY_ORDER[b.priority];
+  if (pa !== pb) return pa - pb;
+  return a.createdAt - b.createdAt;
+}
+
+function makeId(): string {
+  return `pi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}

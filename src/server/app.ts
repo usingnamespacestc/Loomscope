@@ -15,15 +15,25 @@ import { corsMiddleware } from "@/server/middleware/cors";
 import { csrfMiddleware } from "@/server/middleware/csrf";
 import { ccHookRouter } from "@/server/routes/ccHook";
 import { ccHookOnboardingRouter } from "@/server/routes/ccHookOnboarding";
+import { preferencesRouter } from "@/server/routes/preferences";
 import { searchRouter } from "@/server/routes/search";
 import { sessionsRouter } from "@/server/routes/sessions";
+import { turnsRouter } from "@/server/routes/turns";
 import { workspacesRouter } from "@/server/routes/workspaces";
 import { initHookSseForwarder } from "@/server/services/hookSseForwarder";
 import { initPendingPermissionTracker } from "@/server/services/pendingPermissionTracker";
+import { loadPreferences } from "@/server/services/preferences";
+import { realSdkQuery } from "@/server/services/sdkAdapter";
+import { SessionRegistry } from "@/server/services/sessionRegistry";
 
 export interface AppOptions {
   rootDir: string; // e.g. ~/.claude/projects
   csrfToken: string;
+  // v∞.2: optional SessionRegistry override for testing. Production
+  // wiring auto-creates one bound to the real SDK + saved
+  // preferences. Tests inject a fake-SDK-backed registry to drive
+  // turn endpoints deterministically.
+  registry?: SessionRegistry;
   allowedOrigin: string; // e.g. http://localhost:5174
   // v∞.0 PR 1: per-installation secret CC hook fires must carry in
   // `X-Loomscope-Secret`. Boot script generates / loads via
@@ -71,6 +81,29 @@ export function createApp(opts: AppOptions) {
   app.route("/api/sessions", sessionsRouter({ rootDir: opts.rootDir }));
   app.route("/api/search", searchRouter({ rootDir: opts.rootDir }));
   app.route("/api/cc-hook", ccHookRouter({ getSecret: getHookSecret }));
+  // v∞.2: SDK-backed turn endpoints + preferences. Registry is created
+  // here unless one was passed in (tests do this for hermeticity).
+  // Idle timeout reads the persisted preference at startup; PATCH
+  // /api/preferences calls registry.setIdleTimeoutMin to apply changes
+  // live without restart. Note: createApp is sync, so we can't await
+  // loadPreferences here — we read it synchronously below using a
+  // sync read; if missing we fall back to the default.
+  const registry =
+    opts.registry ??
+    new SessionRegistry({
+      queryFactory: realSdkQuery,
+      idleTimeoutMin: 30, // default; PATCH /preferences updates live
+    });
+  // Asynchronously sync the persisted preference into the new
+  // registry — production path. Tests pass their own registry and
+  // skip this.
+  if (!opts.registry) {
+    void loadPreferences().then((p) => {
+      registry.setIdleTimeoutMin(p.idleTimeoutMin);
+    });
+  }
+  app.route("/api/sessions", turnsRouter({ registry }));
+  app.route("/api/preferences", preferencesRouter({ registry }));
   // v∞.0 PR 3: parse allowedOrigin to recover the listening port —
   // settings.json hook URLs are constructed against that port. If
   // the URL is malformed (custom deploys), fall back to 5174 which

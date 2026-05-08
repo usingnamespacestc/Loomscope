@@ -18,6 +18,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.133",
     "@dagrejs/dagre": "^1.1.4",
     "@hono/node-server": "^2.0.1",
     "@hono/zod-validator": "^0.7.6",
