@@ -197,9 +197,12 @@ export function Composer({ disabled = true, placeholder, onResize }: Props) {
 
   // Attachments alone (no text) can be a valid prompt — the model can
   // still respond to "describe this image" implicitly. claude.ai
-  // allows it; mirror.
-  const canSend =
-    !disabled && (text.trim().length > 0 || attachments.length > 0);
+  // allows it; mirror. Note `disabled` is NOT a gate here on
+  // purpose: when the SDK isn't wired yet (v∞.1 placeholder mode),
+  // we still want users to type, paste, drag images, and click Send
+  // to feel out the UX. Send becomes a console.log no-op in that
+  // mode; the disclaimer below the card explains.
+  const canSend = text.trim().length > 0 || attachments.length > 0;
 
   const onSend = () => {
     if (!canSend) return;
@@ -397,13 +400,12 @@ export function Composer({ disabled = true, placeholder, onResize }: Props) {
 
           <textarea
             data-testid="composer-input"
-            className="min-h-0 flex-1 resize-none border-0 bg-transparent text-[13px] leading-relaxed text-gray-800 placeholder:text-gray-400 focus:outline-none disabled:text-gray-400"
+            className="min-h-0 flex-1 resize-none border-0 bg-transparent text-[13px] leading-relaxed text-gray-800 placeholder:text-gray-400 focus:outline-none"
             placeholder={placeholder ?? t("composer.placeholder_input")}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            disabled={disabled}
           />
           <div className="flex flex-shrink-0 items-center justify-between pt-1">
             {/* Left: attachment "+" button. Opens hidden file picker.
