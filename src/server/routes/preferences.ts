@@ -18,6 +18,7 @@ import type { SessionRegistry } from "@/server/services/sessionRegistry";
 
 const patchSchema = z.object({
   idleTimeoutMin: z.number().optional(),
+  useApiKey: z.boolean().optional(),
 });
 
 export interface PreferencesRouterOptions {
@@ -37,16 +38,13 @@ export function preferencesRouter(opts: PreferencesRouterOptions = {}) {
   app.patch("/", zValidator("json", patchSchema), async (c) => {
     const patch = c.req.valid("json");
     const merged = await savePreferences(patch);
-    if (
-      patch.idleTimeoutMin !== undefined &&
-      opts.registry &&
-      "setIdleTimeoutMin" in opts.registry
-    ) {
-      (
-        opts.registry as SessionRegistry & {
-          setIdleTimeoutMin: (m: number) => void;
-        }
-      ).setIdleTimeoutMin(merged.idleTimeoutMin);
+    if (opts.registry) {
+      if (patch.idleTimeoutMin !== undefined) {
+        opts.registry.setIdleTimeoutMin(merged.idleTimeoutMin);
+      }
+      if (patch.useApiKey !== undefined) {
+        opts.registry.setUseApiKey(merged.useApiKey);
+      }
     }
     return c.json(merged);
   });

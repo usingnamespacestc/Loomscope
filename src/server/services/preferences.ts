@@ -30,10 +30,23 @@ export interface LoomscopePreferences {
    * value outside the range clamps in.
    */
   idleTimeoutMin: number;
+  /**
+   * When false (default), Loomscope strips `ANTHROPIC_API_KEY` from
+   * the SDK subprocess env so the spawned `claude` falls back to
+   * `~/.claude/.credentials.json` OAuth — this means turns billed
+   * against the user's claude.ai subscription, not API credits.
+   *
+   * When true, the env var is left in place and CC takes API-key
+   * billing. Useful when (a) the user genuinely wants per-token API
+   * billing (e.g. paid org spend account), or (b) no OAuth login
+   * exists and only API key is configured.
+   */
+  useApiKey: boolean;
 }
 
 const DEFAULTS: LoomscopePreferences = {
   idleTimeoutMin: 30,
+  useApiKey: false,
 };
 
 const MIN_IDLE = 5;
@@ -55,7 +68,10 @@ function normalize(raw: unknown): LoomscopePreferences {
     typeof idleRaw === "number" && Number.isFinite(idleRaw)
       ? clamp(Math.round(idleRaw), MIN_IDLE, MAX_IDLE)
       : DEFAULTS.idleTimeoutMin;
-  return { idleTimeoutMin: idle };
+  const useApiKeyRaw = r["useApiKey"];
+  const useApiKey =
+    typeof useApiKeyRaw === "boolean" ? useApiKeyRaw : DEFAULTS.useApiKey;
+  return { idleTimeoutMin: idle, useApiKey };
 }
 
 export async function loadPreferences(): Promise<LoomscopePreferences> {

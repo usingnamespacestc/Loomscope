@@ -15,10 +15,11 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type TabId = "hooks";
+type TabId = "hooks" | "vinf";
 
 const TABS: Array<{ id: TabId; labelKey: string; icon: string }> = [
   { id: "hooks", labelKey: "settings.tab_hooks", icon: "🪝" },
+  { id: "vinf", labelKey: "settings.tab_vinf", icon: "✏️" },
 ];
 
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
@@ -85,6 +86,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
 
           <div className="flex-1 overflow-auto px-5 py-4">
             {activeTab === "hooks" && <HooksPanel />}
+            {activeTab === "vinf" && <VinfPanel />}
           </div>
         </div>
       </div>
@@ -467,6 +469,148 @@ function HooksPanel() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+// ─── v∞.2 behavior panel ────────────────────────────────────────
+//
+// Two settings exposed today:
+//   - idleTimeoutMin: how long an SDK Query stays alive after the
+//     user goes idle. Lower = faster recycle, higher = warmer cache
+//     for follow-up turns. Bounded [5, 240] minutes.
+//   - useApiKey: when true, leaves `ANTHROPIC_API_KEY` env in place
+//     so the spawned `claude` binary uses API-credit billing. Off
+//     by default so users' claude.ai subscriptions are used
+//     transparently.
+//
+// State is persisted server-side (~/.loomscope/preferences.json);
+// PATCH /api/preferences flushes it through to SessionRegistry's
+// live setters. A failed save surfaces as inline error text;
+// success silently returns.
+function VinfPanel() {
+  const { t } = useTranslation();
+  const [idleTimeoutMin, setIdleTimeoutMin] = useState<number>(30);
+  const [useApiKey, setUseApiKey] = useState<boolean>(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/preferences", {
+          credentials: "same-origin",
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const p = await res.json();
+        setIdleTimeoutMin(
+          typeof p.idleTimeoutMin === "number" ? p.idleTimeoutMin : 30,
+        );
+        setUseApiKey(typeof p.useApiKey === "boolean" ? p.useApiKey : false);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const patch = async (body: Record<string, unknown>) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/preferences", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "same-origin",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const next = await res.json();
+      setIdleTimeoutMin(next.idleTimeoutMin);
+      setUseApiKey(next.useApiKey);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="text-xs text-gray-500">
+        {t("settings.hooks.loading")}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      {/* Auth mode (subscription vs api key) */}
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.vinf.section_auth")}
+        </h3>
+        <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
+          {t("settings.vinf.auth_description")}
+        </p>
+        <label className="flex cursor-pointer items-center gap-3">
+          <input
+            type="checkbox"
+            data-testid="settings-vinf-use-api-key"
+            checked={useApiKey}
+            onChange={(e) =>
+              void patch({ useApiKey: e.target.checked })
+            }
+            disabled={saving}
+            className="h-4 w-4 cursor-pointer"
+          />
+          <span className="text-xs text-gray-700">
+            {t("settings.vinf.use_api_key_label")}
+          </span>
+        </label>
+        <p className="mt-1 text-[10px] italic text-gray-400">
+          {useApiKey
+            ? t("settings.vinf.use_api_key_on")
+            : t("settings.vinf.use_api_key_off")}
+        </p>
+      </section>
+
+      {/* Idle timeout */}
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.vinf.section_idle")}
+        </h3>
+        <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
+          {t("settings.vinf.idle_description")}
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            data-testid="settings-vinf-idle-min"
+            min={5}
+            max={240}
+            value={idleTimeoutMin}
+            onChange={(e) =>
+              setIdleTimeoutMin(Number(e.target.value) || 30)
+            }
+            onBlur={() => void patch({ idleTimeoutMin })}
+            disabled={saving}
+            className="w-20 rounded border border-gray-300 px-2 py-1 text-xs"
+          />
+          <span className="text-xs text-gray-600">
+            {t("settings.vinf.minutes")}
+          </span>
+        </div>
+        <p className="mt-1 text-[10px] italic text-gray-400">
+          {t("settings.vinf.idle_range")}
+        </p>
+      </section>
+
+      {error && (
+        <div className="text-[11px] italic text-rose-600">✗ {error}</div>
+      )}
     </div>
   );
 }

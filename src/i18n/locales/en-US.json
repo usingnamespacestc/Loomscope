@@ -198,6 +198,18 @@
     "open": "Open settings",
     "close": "Close",
     "tab_hooks": "Hooks",
+    "tab_vinf": "v∞ behavior",
+    "vinf": {
+      "section_auth": "Billing / auth",
+      "auth_description": "Defaults to OAuth credentials from your claude.ai subscription. Toggle the switch below to use ANTHROPIC_API_KEY (per-token API billing) instead.",
+      "use_api_key_label": "Use API key (per-token billing)",
+      "use_api_key_on": "Enabled: ANTHROPIC_API_KEY env passes through to spawned `claude`; uses API credits.",
+      "use_api_key_off": "Disabled (default): ANTHROPIC_API_KEY is stripped at spawn time; uses subscription.",
+      "section_idle": "Session idle recycle",
+      "idle_description": "After N minutes of inactivity, the server closes that session's SDK Query (kills the `claude` subprocess). The next action respawns; the prompt cache cold-starts.",
+      "minutes": "minutes",
+      "idle_range": "Range 5–240 minutes"
+    },
     "hooks": {
       "loading": "Loading…",
       "section_status": "Current status",

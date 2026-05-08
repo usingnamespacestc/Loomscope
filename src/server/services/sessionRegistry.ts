@@ -129,6 +129,13 @@ export interface SessionRegistryOptions {
   /** Override watchdog poll interval. Defaults to 60s; tests pass
    *  small values. */
   watchdogIntervalMs?: number;
+  /** When false (default), strip `ANTHROPIC_API_KEY` from the
+   *  spawned subprocess env so the user's claude.ai subscription
+   *  (`~/.claude/.credentials.json` OAuth) is used. When true, the
+   *  env var passes through and the binary uses API-key billing.
+   *  Backed by `~/.loomscope/preferences.json::useApiKey`; live
+   *  updates land via `setUseApiKey`. */
+  useApiKey: boolean;
 }
 
 export class SessionRegistry {
@@ -282,6 +289,14 @@ export class SessionRegistry {
     });
   }
 
+  /** Live-update the auth mode preference. Affects the NEXT spawn —
+   *  in-flight Query instances keep their original env. Users who
+   *  change this mid-session may need to wait for idle close +
+   *  next-action respawn before the new mode takes effect. */
+  setUseApiKey(useApiKey: boolean): void {
+    this.opts.useApiKey = useApiKey;
+  }
+
   /** Live-update the idle threshold without restarting the server.
    *  PATCH /api/preferences calls this so changes take effect
    *  immediately. Pass 0 to disable timeout. */
@@ -336,11 +351,11 @@ export class SessionRegistry {
     // `ANTHROPIC_API_KEY` (e.g. when launched via `npm run dev`
     // nested inside an existing Claude Code session, or simply
     // because the user exported it for unrelated tooling). Strip it
-    // here so the default path is OAuth/subscription. Users who
-    // genuinely want API-key billing can set `LOOMSCOPE_USE_API_KEY=
-    // 1` to opt back in (TBD: Settings UI for this in a later PR).
+    // here unless the user has explicitly toggled `useApiKey` on
+    // in Settings (preferences.useApiKey). Mutable via
+    // setUseApiKey() so PATCH /preferences is live.
     const childEnv = { ...process.env };
-    if (process.env.LOOMSCOPE_USE_API_KEY !== "1") {
+    if (!this.opts.useApiKey) {
       delete childEnv.ANTHROPIC_API_KEY;
     }
     const query = this.opts.queryFactory({

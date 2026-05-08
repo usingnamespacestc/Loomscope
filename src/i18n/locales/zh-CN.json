@@ -198,6 +198,18 @@
     "open": "打开设置",
     "close": "关闭",
     "tab_hooks": "Hooks",
+    "tab_vinf": "v∞ 行为",
+    "vinf": {
+      "section_auth": "计费 / 认证",
+      "auth_description": "默认走 claude.ai 订阅的 OAuth 凭据。打开下面这个开关才会改用 ANTHROPIC_API_KEY 走按量计费。",
+      "use_api_key_label": "使用 API Key（按量计费）",
+      "use_api_key_on": "已启用：spawn 时保留 ANTHROPIC_API_KEY，走 API 计费",
+      "use_api_key_off": "已禁用（默认）：spawn 时剥离 ANTHROPIC_API_KEY，走订阅",
+      "section_idle": "Session 闲置回收",
+      "idle_description": "用户停止操作 N 分钟后，server 会 close 该 session 的 SDK Query（杀 claude subprocess）。下次操作会重新 spawn，缓存会冷启动。",
+      "minutes": "分钟",
+      "idle_range": "范围 5–240 分钟"
+    },
     "hooks": {
       "loading": "加载中…",
       "section_status": "当前状态",

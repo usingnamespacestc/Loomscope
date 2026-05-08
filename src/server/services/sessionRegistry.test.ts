@@ -151,6 +151,7 @@ describe("SessionRegistry", () => {
   it("first enqueueTurn spawns a Query and pushes the prompt", async () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
+      useApiKey: false,
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -174,6 +175,7 @@ describe("SessionRegistry", () => {
   it("subsequent enqueue while idle reuses Query (no respawn)", async () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
+      useApiKey: false,
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -204,6 +206,7 @@ describe("SessionRegistry", () => {
   it("priority `next` queues at head; `later` at tail; FIFO within priority", async () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
+      useApiKey: false,
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -262,6 +265,7 @@ describe("SessionRegistry", () => {
   it("priority `now` calls interrupt and pre-empts pending items", async () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
+      useApiKey: false,
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -301,6 +305,7 @@ describe("SessionRegistry", () => {
   it("cancelPending removes a queued (not-yet-running) prompt", async () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
+      useApiKey: false,
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -331,6 +336,7 @@ describe("SessionRegistry", () => {
   it("interrupt() aborts running turn but leaves pendingPrompts intact", async () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
+      useApiKey: false,
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -356,6 +362,7 @@ describe("SessionRegistry", () => {
     const { factory, spawned } = makeFactory();
     const captured = captureSse(SID);
     const reg = new SessionRegistry({
+      useApiKey: false,
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -383,6 +390,7 @@ describe("SessionRegistry", () => {
     // it out without slowing the suite materially.
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
+      useApiKey: false,
       queryFactory: factory,
       idleTimeoutMin: 0.002, // 120ms
       watchdogIntervalMs: 30,
@@ -411,6 +419,7 @@ describe("SessionRegistry", () => {
   it("shutdown closes all sessions", async () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
+      useApiKey: false,
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -439,6 +448,7 @@ describe("SessionRegistry", () => {
   it("multimodal: image attachments marshal into multi-block content", async () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
+      useApiKey: false,
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
