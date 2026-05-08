@@ -248,14 +248,7 @@
       "idle_description": "After N minutes of inactivity, the server closes that session's SDK Query (kills the `claude` subprocess). The next action respawns; the prompt cache cold-starts.",
       "minutes": "minutes",
       "idle_range": "Range 5–240 minutes",
-      "idle_range_when_respawn_on": "Range 5–240 minutes. With respawn-per-send enabled this only bounds how long an idle-but-still-alive post-turn Query lingers — the next send respawns regardless.",
-      "section_hook_paths": "Hook delivery paths",
-      "hook_paths_description": "Loomscope receives CC hook events via two paths: (1) settings.json HTTP fires from the CC binary (the ONLY path for terminal CC); (2) SDK options.hooks JS callbacks fired in-process (SDK-spawned CC only). Both on = belt-and-suspenders reliability — the server bus collapses dups via tool_use_id keyed 2s window. Either-off works too.",
-      "hook_http_label": "settings.json HTTP path (terminal + SDK CC)",
-      "hook_http_hint": "Off → terminal CC's hook events stop reaching the SSE bus entirely; SDK CC can still use the programmatic path below.",
-      "hook_sdk_label": "SDK programmatic callback path (SDK CC only)",
-      "hook_sdk_hint": "Off → SDK CC falls back to HTTP only (depends on LOOMSCOPE_SECRET + readable settings.json). Takes effect on next spawn.",
-      "hook_both_off_warning": "⚠ Both off = SDK CC sends zero hook events to the SSE bus; browser never sees PreToolUse / PostToolUse / TaskCreated notifications."
+      "idle_range_when_respawn_on": "Range 5–240 minutes. With respawn-per-send enabled this only bounds how long an idle-but-still-alive post-turn Query lingers — the next send respawns regardless."
     },
     "hooks": {
       "loading": "Loading…",
@@ -286,6 +279,13 @@
         "PermissionRequest": "When CC waits for y/n approval — without this the in-browser banner can't show",
         "PermissionDenied": "When the user denies a permission"
       },
+      "section_paths": "Hook delivery paths",
+      "paths_description": "Loomscope receives CC hook events via two paths: (1) settings.json HTTP fires from the CC binary (the ONLY path for terminal CC); (2) SDK options.hooks JS callbacks fired in-process (SDK-spawned CC only). Both on = belt-and-suspenders reliability — the server bus collapses dups via tool_use_id keyed 2s window. Either-off works too.",
+      "path_http_label": "settings.json HTTP path (terminal + SDK CC)",
+      "path_http_hint": "Off → terminal CC's hook events stop reaching the SSE bus entirely; SDK CC can still use the programmatic path below.",
+      "path_sdk_label": "SDK programmatic callback path (SDK CC only)",
+      "path_sdk_hint": "Off → SDK CC falls back to HTTP only (depends on LOOMSCOPE_SECRET + readable settings.json). Takes effect on next spawn.",
+      "path_both_off_warning": "⚠ Both off = SDK CC sends zero hook events to the SSE bus; browser never sees PreToolUse / PostToolUse / TaskCreated notifications.",
       "section_secret": "Environment variable",
       "secret_description": "Add this line to ~/.bashrc / ~/.zshrc so CC's hook headers receive the secret.",
       "btn_rotate_secret": "🔄 Rotate secret",

@@ -380,6 +380,8 @@ function HooksPanel() {
         )}
       </section>
 
+      <HookPathsSection />
+
       <section className="space-y-2">
         <h3 className="text-[13px] font-semibold text-gray-800">
           {t("settings.hooks.section_secret")}
@@ -508,9 +510,9 @@ function VinfPanel() {
   const [permissionMode, setPermissionMode] =
     useState<PermissionMode>("default");
   const [respawnPerSend, setRespawnPerSend] = useState<boolean>(true);
-  const [enableHookHttpPath, setEnableHookHttpPath] =
-    useState<boolean>(true);
-  const [enableHookSdkPath, setEnableHookSdkPath] = useState<boolean>(true);
+  // Hook-path enables (`enableHookHttpPath` / `enableHookSdkPath`)
+  // are managed in the Hooks tab via HookPathsSection — they
+  // logically belong with hook config, not SDK-Query settings.
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -532,16 +534,6 @@ function VinfPanel() {
         }
         setRespawnPerSend(
           typeof p.respawnPerSend === "boolean" ? p.respawnPerSend : true,
-        );
-        setEnableHookHttpPath(
-          typeof p.enableHookHttpPath === "boolean"
-            ? p.enableHookHttpPath
-            : true,
-        );
-        setEnableHookSdkPath(
-          typeof p.enableHookSdkPath === "boolean"
-            ? p.enableHookSdkPath
-            : true,
         );
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -570,12 +562,6 @@ function VinfPanel() {
       }
       if (typeof next.respawnPerSend === "boolean") {
         setRespawnPerSend(next.respawnPerSend);
-      }
-      if (typeof next.enableHookHttpPath === "boolean") {
-        setEnableHookHttpPath(next.enableHookHttpPath);
-      }
-      if (typeof next.enableHookSdkPath === "boolean") {
-        setEnableHookSdkPath(next.enableHookSdkPath);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -723,64 +709,10 @@ function VinfPanel() {
         </p>
       </section>
 
-      {/* Hook delivery paths (#142 follow-up). Two checkboxes —
-          settings.json HTTP path + SDK programmatic path. Both on
-          by default; the in-process bus collapses duplicates via
-          tool_use_id-keyed dedup. Either-off = single-path
-          simplicity. */}
-      <section>
-        <h3 className="mb-1 text-xs font-semibold text-gray-700">
-          {t("settings.vinf.section_hook_paths")}
-        </h3>
-        <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
-          {t("settings.vinf.hook_paths_description")}
-        </p>
-        <label className="flex cursor-pointer items-start gap-3">
-          <input
-            type="checkbox"
-            data-testid="settings-vinf-enable-hook-http-path"
-            checked={enableHookHttpPath}
-            onChange={(e) =>
-              void patch({ enableHookHttpPath: e.target.checked })
-            }
-            disabled={saving}
-            className="mt-0.5 h-4 w-4 cursor-pointer"
-          />
-          <div className="flex-1">
-            <div className="text-xs text-gray-700">
-              {t("settings.vinf.hook_http_label")}
-            </div>
-            <div className="text-[10px] italic text-gray-400">
-              {t("settings.vinf.hook_http_hint")}
-            </div>
-          </div>
-        </label>
-        <label className="mt-2 flex cursor-pointer items-start gap-3">
-          <input
-            type="checkbox"
-            data-testid="settings-vinf-enable-hook-sdk-path"
-            checked={enableHookSdkPath}
-            onChange={(e) =>
-              void patch({ enableHookSdkPath: e.target.checked })
-            }
-            disabled={saving}
-            className="mt-0.5 h-4 w-4 cursor-pointer"
-          />
-          <div className="flex-1">
-            <div className="text-xs text-gray-700">
-              {t("settings.vinf.hook_sdk_label")}
-            </div>
-            <div className="text-[10px] italic text-gray-400">
-              {t("settings.vinf.hook_sdk_hint")}
-            </div>
-          </div>
-        </label>
-        {!enableHookHttpPath && !enableHookSdkPath && (
-          <p className="mt-2 text-[10px] italic text-rose-600">
-            {t("settings.vinf.hook_both_off_warning")}
-          </p>
-        )}
-      </section>
+      {/* Hook delivery paths moved to the Hooks tab (HookPathsSection)
+          — that's where users configure the rest of the hook
+          subsystem (event matchers + LOOMSCOPE_SECRET). v∞ tab is
+          for SDK-Query lifecycle settings, not hook routing. */}
 
       {/* v∞.3 PR1: saved permission rules manager. Lists rules from
           ~/.loomscope/permissions.json with × to remove. New rules
@@ -912,4 +844,136 @@ function formatRuleAge(epochMs: number): string {
   if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
   if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`;
   return `${Math.floor(delta / 86_400_000)}d ago`;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Hook delivery paths (#142 follow-up). Two checkboxes — settings.json
+// HTTP path + SDK programmatic path. Mounted inside HooksPanel since
+// it's part of hook configuration; logically belongs alongside event
+// matchers + LOOMSCOPE_SECRET, not v∞ SDK-Query settings.
+//
+// Self-contained GET/PATCH lifecycle so HooksPanel doesn't need to
+// know about preferences endpoint internals.
+// ────────────────────────────────────────────────────────────────────
+function HookPathsSection() {
+  const { t } = useTranslation();
+  const [http, setHttp] = useState<boolean>(true);
+  const [sdk, setSdk] = useState<boolean>(true);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/preferences", {
+          credentials: "same-origin",
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const p = (await res.json()) as {
+          enableHookHttpPath?: boolean;
+          enableHookSdkPath?: boolean;
+        };
+        setHttp(typeof p.enableHookHttpPath === "boolean" ? p.enableHookHttpPath : true);
+        setSdk(typeof p.enableHookSdkPath === "boolean" ? p.enableHookSdkPath : true);
+        setErr(null);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const patch = async (body: {
+    enableHookHttpPath?: boolean;
+    enableHookSdkPath?: boolean;
+  }) => {
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/preferences", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const next = (await res.json()) as {
+        enableHookHttpPath?: boolean;
+        enableHookSdkPath?: boolean;
+      };
+      if (typeof next.enableHookHttpPath === "boolean") setHttp(next.enableHookHttpPath);
+      if (typeof next.enableHookSdkPath === "boolean") setSdk(next.enableHookSdkPath);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <section data-testid="settings-hook-paths">
+        <p className="text-[11px] italic text-gray-400">
+          {t("settings.hooks.loading")}
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section data-testid="settings-hook-paths" className="space-y-2">
+      <h3 className="text-[13px] font-semibold text-gray-800">
+        {t("settings.hooks.section_paths")}
+      </h3>
+      <p className="text-gray-500">
+        {t("settings.hooks.paths_description")}
+      </p>
+      <label className="flex cursor-pointer items-start gap-3">
+        <input
+          type="checkbox"
+          data-testid="settings-hooks-enable-http-path"
+          checked={http}
+          onChange={(e) => void patch({ enableHookHttpPath: e.target.checked })}
+          disabled={saving}
+          className="mt-0.5 h-4 w-4 cursor-pointer"
+        />
+        <div className="flex-1">
+          <div className="text-xs text-gray-700">
+            {t("settings.hooks.path_http_label")}
+          </div>
+          <div className="text-[10px] italic text-gray-400">
+            {t("settings.hooks.path_http_hint")}
+          </div>
+        </div>
+      </label>
+      <label className="mt-2 flex cursor-pointer items-start gap-3">
+        <input
+          type="checkbox"
+          data-testid="settings-hooks-enable-sdk-path"
+          checked={sdk}
+          onChange={(e) => void patch({ enableHookSdkPath: e.target.checked })}
+          disabled={saving}
+          className="mt-0.5 h-4 w-4 cursor-pointer"
+        />
+        <div className="flex-1">
+          <div className="text-xs text-gray-700">
+            {t("settings.hooks.path_sdk_label")}
+          </div>
+          <div className="text-[10px] italic text-gray-400">
+            {t("settings.hooks.path_sdk_hint")}
+          </div>
+        </div>
+      </label>
+      {!http && !sdk && (
+        <p className="text-[11px] italic text-rose-600">
+          {t("settings.hooks.path_both_off_warning")}
+        </p>
+      )}
+      {err && (
+        <div className="text-[11px] italic text-rose-600">✗ {err}</div>
+      )}
+    </section>
+  );
 }
