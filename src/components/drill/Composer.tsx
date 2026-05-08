@@ -457,7 +457,13 @@ export function Composer({
 
           <textarea
             data-testid="composer-input"
-            className="min-h-0 flex-1 resize-none border-0 bg-transparent text-[13px] leading-relaxed text-gray-800 placeholder:text-gray-400 focus:outline-none"
+            // min-h-[24px]: thumbnail strip + bottom controls can
+            // otherwise squeeze flex-1 to 0px (composer total 140px
+            // - thumbs ~80 - controls ~28 - chrome ~16 = ~16 left).
+            // Min keeps textarea reachable; the card naturally
+            // overflows downward if all of it doesn't fit, but
+            // typically the user resizes up via the drag handle.
+            className="min-h-[24px] flex-1 resize-none border-0 bg-transparent text-[13px] leading-relaxed text-gray-800 placeholder:text-gray-400 focus:outline-none"
             placeholder={placeholder ?? t("composer.placeholder_input")}
             value={text}
             onChange={(e) => setText(e.target.value)}
