@@ -32,6 +32,12 @@
 
 import { promises as fsp } from "node:fs";
 
+import {
+  HOOK_EVENTS,
+  publishHook,
+  type HookEnvelope,
+  type HookEventName,
+} from "@/server/services/hookEventBus";
 import { broadcast } from "@/server/services/sseHub";
 import type { QueryFactory, Query, SDKUserMessage } from "@/server/services/sdkAdapter";
 
@@ -147,6 +153,100 @@ class AsyncQueueController<T> {
       }),
     };
   }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// SDK programmatic hooks bridge
+// ────────────────────────────────────────────────────────────────────
+//
+// SDK's `query({ options: { hooks } })` accepts JS callbacks per
+// HookEvent. Each callback receives the same payload shape that
+// settings.json HTTP hooks send (BaseHookInput + event-specific
+// fields). We translate to Loomscope's existing HookEnvelope and
+// publish onto `hookEventBus` — from there the existing
+// `hookSseForwarder` bridges to SSE on the right session channel.
+//
+// The callback returns `{ continue: true }` so we never block CC's
+// flow. Permission decisions / blocking errors / async work would
+// require a richer return; we don't need any of that — Loomscope is
+// purely OBSERVING here.
+//
+// Type note: SDK's HookCallback signature uses union HookInput type
+// from `@anthropic-ai/claude-agent-sdk`. We import as `unknown`-ish
+// to dodge the union-discrimination dance — every HookInput member
+// extends BaseHookInput so the envelope-extraction is uniform; the
+// extras object captures whatever event-specific fields each
+// concrete shape carries.
+
+const ENVELOPE_KNOWN_KEYS = new Set([
+  "session_id",
+  "transcript_path",
+  "cwd",
+  "permission_mode",
+  "agent_id",
+  "agent_type",
+  "hook_event_name", // SDK adds this; it's the event name itself, redundant for envelope
+]);
+
+function inputToEnvelope(input: Record<string, unknown>): HookEnvelope {
+  const extras: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (!ENVELOPE_KNOWN_KEYS.has(k)) extras[k] = v;
+  }
+  return {
+    session_id: String(input.session_id ?? ""),
+    transcript_path:
+      typeof input.transcript_path === "string"
+        ? input.transcript_path
+        : undefined,
+    cwd: typeof input.cwd === "string" ? input.cwd : undefined,
+    permission_mode:
+      typeof input.permission_mode === "string"
+        ? input.permission_mode
+        : undefined,
+    agent_id:
+      typeof input.agent_id === "string" ? input.agent_id : undefined,
+    agent_type:
+      typeof input.agent_type === "string" ? input.agent_type : undefined,
+    extras,
+  };
+}
+
+/** Build the `options.hooks` map for SDK `query()`. Registers a
+ *  catch-all (empty matcher) callback for every HookEventName the
+ *  hookEventBus knows about. SDK silently ignores keys for events
+ *  it doesn't fire, so this is forward-compatible with HOOK_EVENTS
+ *  growing.
+ *
+ *  The returned map's values are `HookCallbackMatcher[]` per the
+ *  SDK type, but to avoid pulling the SDK types into this module
+ *  (and the union-discrimination overhead) we let the actual SDK
+ *  call site shape-check via its existing typed call. */
+function buildSdkHooksMap(): Record<string, unknown> {
+  const map: Record<string, unknown> = {};
+  for (const event of HOOK_EVENTS) {
+    map[event as HookEventName] = [
+      {
+        // Empty matcher = match all (mirrors settings.json convention).
+        hooks: [
+          async (input: Record<string, unknown>) => {
+            try {
+              publishHook(event, inputToEnvelope(input));
+            } catch (err) {
+              console.error(
+                `[sessionRegistry] hook bridge error for ${event}:`,
+                err,
+              );
+            }
+            // Non-blocking: tell CC to continue normally regardless
+            // of how Loomscope handled the broadcast.
+            return { continue: true };
+          },
+        ],
+      },
+    ];
+  }
+  return map;
 }
 
 export interface SessionRegistryOptions {
@@ -479,6 +579,24 @@ export class SessionRegistry {
         // via Settings → v∞ tab; respecting that intent.
         allowDangerouslySkipPermissions:
           this.opts.permissionMode === "bypassPermissions",
+        // ──────────────────────────────────────────────────────────
+        // Programmatic hooks. SDK provides `options.hooks` so we
+        // register ALL hook events as JS callbacks that publish onto
+        // the existing in-process `hookEventBus`. The bus is the
+        // same one `/api/cc-hook` route publishes onto for terminal
+        // CC; the existing `hookSseForwarder` then bridges to the
+        // SSE bus untouched. Net effect: SDK-spawn CC's hook events
+        // reach the browser the same way terminal CC's do, but
+        // without going out over HTTP / needing LOOMSCOPE_SECRET /
+        // depending on settings.json being readable.
+        //
+        // Why both this AND `settingSources` above: settings.json
+        // hooks still drive terminal CC instances the user runs
+        // independently. Programmatic hooks here only flow when the
+        // SDK is the one running CC (Loomscope-spawned). Both paths
+        // converge on the same SSE bus.
+        // ──────────────────────────────────────────────────────────
+        hooks: buildSdkHooksMap(),
       },
     });
     entry.query = query;
