@@ -10,6 +10,8 @@ import { beforeEach } from "vitest";
 
 import i18n, { i18nReady } from "@/i18n";
 
+process.env.TZ = 'UTC';
+
 // EN: Await the init promise + force zh-CN at module load time.
 // Vitest setup files run BEFORE any test fixture; awaiting here
 // guarantees translations are resolvable by the time any render

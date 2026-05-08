@@ -14,6 +14,7 @@ import { SettingsModal } from "@/components/SettingsModal";
 import { currentLanguage, setLanguage } from "@/i18n";
 import { useStore } from "@/store/index";
 import type { LiveChannelState } from "@/store/types";
+import dayjs from "dayjs";
 
 export function Header() {
   const { t } = useTranslation();
@@ -242,6 +243,6 @@ function LanguageToggle() {
 }
 
 function short(iso: string | undefined): string {
-  if (!iso) return "—";
-  return iso.slice(0, 16).replace("T", " ");
+  const parsed = dayjs(iso);
+  return parsed.isValid() ? parsed.format("YYYY-MM-DD HH:mm") : "—";
 }
