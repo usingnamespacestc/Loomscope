@@ -507,6 +507,7 @@ function VinfPanel() {
   const [useApiKey, setUseApiKey] = useState<boolean>(false);
   const [permissionMode, setPermissionMode] =
     useState<PermissionMode>("default");
+  const [respawnPerSend, setRespawnPerSend] = useState<boolean>(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -526,6 +527,9 @@ function VinfPanel() {
         if (PERMISSION_MODE_OPTIONS.includes(p.permissionMode)) {
           setPermissionMode(p.permissionMode);
         }
+        setRespawnPerSend(
+          typeof p.respawnPerSend === "boolean" ? p.respawnPerSend : true,
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -550,6 +554,9 @@ function VinfPanel() {
       setUseApiKey(next.useApiKey);
       if (PERMISSION_MODE_OPTIONS.includes(next.permissionMode)) {
         setPermissionMode(next.permissionMode);
+      }
+      if (typeof next.respawnPerSend === "boolean") {
+        setRespawnPerSend(next.respawnPerSend);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -631,6 +638,39 @@ function VinfPanel() {
         </p>
       </section>
 
+      {/* Dual-writer race mitigation. Position BEFORE idle-timeout
+          because the two interact: when respawnPerSend=true, idle
+          timeout becomes a post-turn cleanup bound rather than a
+          per-session lifetime knob. The hint text reflects this. */}
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.vinf.section_respawn")}
+        </h3>
+        <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
+          {t("settings.vinf.respawn_description")}
+        </p>
+        <label className="flex cursor-pointer items-center gap-3">
+          <input
+            type="checkbox"
+            data-testid="settings-vinf-respawn-per-send"
+            checked={respawnPerSend}
+            onChange={(e) =>
+              void patch({ respawnPerSend: e.target.checked })
+            }
+            disabled={saving}
+            className="h-4 w-4 cursor-pointer"
+          />
+          <span className="text-xs text-gray-700">
+            {t("settings.vinf.respawn_label")}
+          </span>
+        </label>
+        <p className="mt-1 text-[10px] italic text-gray-400">
+          {respawnPerSend
+            ? t("settings.vinf.respawn_on_hint")
+            : t("settings.vinf.respawn_off_hint")}
+        </p>
+      </section>
+
       {/* Idle timeout */}
       <section>
         <h3 className="mb-1 text-xs font-semibold text-gray-700">
@@ -658,7 +698,9 @@ function VinfPanel() {
           </span>
         </div>
         <p className="mt-1 text-[10px] italic text-gray-400">
-          {t("settings.vinf.idle_range")}
+          {respawnPerSend
+            ? t("settings.vinf.idle_range_when_respawn_on")
+            : t("settings.vinf.idle_range")}
         </p>
       </section>
 

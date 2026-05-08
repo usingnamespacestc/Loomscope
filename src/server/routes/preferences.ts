@@ -22,6 +22,7 @@ const patchSchema = z.object({
   permissionMode: z
     .enum(["default", "acceptEdits", "bypassPermissions", "plan"])
     .optional(),
+  respawnPerSend: z.boolean().optional(),
 });
 
 export interface PreferencesRouterOptions {
@@ -50,6 +51,9 @@ export function preferencesRouter(opts: PreferencesRouterOptions = {}) {
       }
       if (patch.permissionMode !== undefined) {
         opts.registry.setPermissionMode(merged.permissionMode);
+      }
+      if (patch.respawnPerSend !== undefined) {
+        opts.registry.setRespawnPerSend(merged.respawnPerSend);
       }
     }
     return c.json(merged);

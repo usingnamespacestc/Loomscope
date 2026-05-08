@@ -30,6 +30,8 @@
 // 中: 服务端 SDK Query 注册表。lazy spawn / 长期复用 / idle 回收 /
 // 浏览器断开不影响。优先级队列对齐 CC 内部 now/next/later 语义。
 
+import { promises as fsp } from "node:fs";
+
 import { broadcast } from "@/server/services/sseHub";
 import type { QueryFactory, Query, SDKUserMessage } from "@/server/services/sdkAdapter";
 
@@ -71,6 +73,32 @@ interface SessionEntry {
   pendingPrompts: PromptItem[];
   /** Last activity wall-clock — drives idle timeout. */
   lastActivityAt: number;
+  /** Whether this Query has completed at least one turn (saw a
+   *  `result` frame). Used by the dispatch path to skip respawn
+   *  on the very first turn — the just-spawned Query has already
+   *  read fresh jsonl state, respawning it immediately would mean
+   *  spawn-cost-per-turn × 2. After the first `result` we flip
+   *  this to true so subsequent dispatches go through the normal
+   *  respawn / staleness logic. */
+  hasServedTurn: boolean;
+  /** Dual-writer race mitigation baseline: jsonl byte size as last
+   *  observed by THIS Query's lifecycle. Updated at spawn (initial
+   *  observation) and after each `result` frame (post-turn).
+   *
+   *  Why: CC's SDK doesn't tail/lock the underlying jsonl, so a
+   *  terminal CC instance writing to the same sid in parallel
+   *  produces dup uuids + multi-parent fork artifacts. Before
+   *  dispatching the next turn we stat the file again — if size
+   *  drifted from this baseline (foreign writer appended) we kill
+   *  this Query and respawn so the new spawn re-reads fresh state.
+   *
+   *  undefined when we couldn't stat at spawn time (race / missing
+   *  file). Treated as "no baseline" → never triggers respawn from
+   *  staleness; respawnPerSend mode still works.
+   *
+   *  See `docs/dual-writer-race-mitigation.md` + the rationale on
+   *  `LoomscopePreferences.respawnPerSend` for the full picture. */
+  lastKnownJsonlSize?: number;
 }
 
 /**
@@ -147,6 +175,34 @@ export interface SessionRegistryOptions {
     | "acceptEdits"
     | "bypassPermissions"
     | "plan";
+  /** Dual-writer race mitigation. See `LoomscopePreferences.
+   *  respawnPerSend` + `docs/dual-writer-race-mitigation.md` for
+   *  rationale. Briefly:
+   *
+   *  - true (production default, recommended): respawn the SDK
+   *    Query before each turn dispatch — every spawn re-reads the
+   *    jsonl from disk, so Loomscope never carries stale chain
+   *    state across sends. `idleTimeoutMin` becomes a post-turn
+   *    cleanup bound.
+   *
+   *  - false: keep the Query alive across sends (subject to
+   *    `idleTimeoutMin`). Pre-dispatch staleness check still runs:
+   *    if the jsonl size drifted from `lastKnownJsonlSize`, we
+   *    auto-respawn for THIS dispatch only. Trade-off is "rare
+   *    spawn + staleness blind spots" vs `true`'s "always spawn".
+   *
+   *  Optional in the interface (defaults to `false` in the
+   *  constructor) so existing tests that hand-build options without
+   *  the new field don't need a global edit. Production wiring in
+   *  `app.ts` explicitly passes `true`. Live update via
+   *  `setRespawnPerSend`. */
+  respawnPerSend?: boolean;
+  /** Locate a session's jsonl by id. Used by the staleness check
+   *  to stat the file. Optional — when absent, staleness check is
+   *  skipped (respawnPerSend=true still works since it doesn't
+   *  depend on stat). Tests + headless setups may legitimately
+   *  pass undefined. */
+  locateJsonl?: (sessionId: string) => Promise<string | null>;
 }
 
 export class SessionRegistry {
@@ -243,7 +299,10 @@ export class SessionRegistry {
 
     // Try to dispatch immediately if idle. Running turns will pick up
     // the next item from pendingPrompts when they complete.
-    this.maybeDispatch(entry);
+    // Fire-and-forget: dispatch can now be async (respawn check) but
+    // the HTTP caller doesn't need to wait for the SDK spin-up — the
+    // SSE channel surfaces all subsequent state.
+    void this.maybeDispatch(entry);
     this.broadcastQueueState(entry);
     return item.id;
   }
@@ -317,6 +376,13 @@ export class SessionRegistry {
     this.opts.permissionMode = mode;
   }
 
+  /** Live-update the dual-writer race mitigation strategy. Takes
+   *  effect on the next dispatch — in-flight turns finish under the
+   *  prior policy. PATCH /api/preferences calls this. */
+  setRespawnPerSend(value: boolean): void {
+    this.opts.respawnPerSend = value;
+  }
+
   /** Live-update the idle threshold without restarting the server.
    *  PATCH /api/preferences calls this so changes take effect
    *  immediately. Pass 0 to disable timeout. */
@@ -358,6 +424,7 @@ export class SessionRegistry {
       currentRun: null,
       pendingPrompts: [],
       lastActivityAt: Date.now(),
+      hasServedTurn: false,
     };
 
     // Start the Query with the AsyncIterable input form so we can
@@ -390,6 +457,15 @@ export class SessionRegistry {
     entry.query = query;
     this.entries.set(sessionId, entry);
 
+    // Snapshot the jsonl size at spawn time as the staleness baseline.
+    // This is what `respawnPerSend=false` mode compares against on
+    // subsequent sends to detect foreign-writer appends. Best-effort
+    // — failures (file not yet created on first-ever spawn, transient
+    // race) leave `lastKnownJsonlSize` undefined and the check
+    // becomes a no-op (safe default: never trigger respawn from
+    // staleness when we don't know the baseline).
+    entry.lastKnownJsonlSize = await this.statJsonlSize(sessionId);
+
     // Background driver: iterate SDK messages, broadcast each on the
     // session's SSE channel. Updates state machine on assistant /
     // result frames. Errors close the entry — caller will respawn on
@@ -403,6 +479,76 @@ export class SessionRegistry {
     });
 
     return entry;
+  }
+
+  /** Stat the session's jsonl and return its byte size, or undefined
+   *  if no `locateJsonl` is configured / file doesn't exist / stat
+   *  fails. Used as the staleness-check baseline + post-turn refresh.
+   *  Failures are quietly swallowed — staleness check treats
+   *  undefined as "no baseline available" and skips. */
+  private async statJsonlSize(sessionId: string): Promise<number | undefined> {
+    if (!this.opts.locateJsonl) return undefined;
+    try {
+      const path = await this.opts.locateJsonl(sessionId);
+      if (!path) return undefined;
+      const stat = await fsp.stat(path);
+      return stat.size;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Pre-dispatch decision: do we need to close + respawn before
+   *  starting the next turn?
+   *
+   *   - respawnPerSend=true → always yes (per-send safety).
+   *   - respawnPerSend=false → only if jsonl size drifted from the
+   *     last-known baseline (foreign writer detected). When the
+   *     baseline is unavailable, we don't trigger — we have no signal
+   *     to act on.
+   *
+   *  Returns the reason string for logging, or null when no respawn
+   *  is needed. The reason gets included in the SSE
+   *  `sdk-respawn-notice` event that flows to the browser, so users
+   *  can see why their send took longer / why the queue paused. */
+  private async respawnReasonForDispatch(
+    entry: SessionEntry,
+  ): Promise<"per-send" | "staleness-detected" | null> {
+    // Skip respawn before the FIRST turn — the just-spawned Query
+    // hasn't had a chance to write anything yet, and its initial
+    // read is already the freshest jsonl state. Without this guard
+    // every first send would spawn → immediately close → spawn
+    // again, doubling the cold-start cost.
+    if (!entry.hasServedTurn) return null;
+    if (this.opts.respawnPerSend) return "per-send";
+    if (entry.lastKnownJsonlSize === undefined) return null;
+    const current = await this.statJsonlSize(entry.sessionId);
+    if (current === undefined) return null;
+    if (current !== entry.lastKnownJsonlSize) return "staleness-detected";
+    return null;
+  }
+
+  /** Close `entry`'s Query and spawn a fresh one for the same
+   *  sessionId, preserving the queued pending prompts so they aren't
+   *  lost across the boundary. The new entry replaces the old in
+   *  `this.entries`. Returns the new entry.
+   *
+   *  Used by the dispatch path when respawnPerSend=true OR when a
+   *  staleness check detected a foreign-writer append. The post-
+   *  spawn jsonl size baseline is fresh, so subsequent staleness
+   *  checks compare against the now-current state. */
+  private async respawnPreservingQueue(
+    entry: SessionEntry,
+  ): Promise<SessionEntry> {
+    const { sessionId, cwd } = entry;
+    // Detach pendings BEFORE close so the close path doesn't attempt
+    // any per-prompt cleanup that would discard them.
+    const pendings = entry.pendingPrompts;
+    entry.pendingPrompts = [];
+    await this.close(sessionId);
+    const fresh = await this.spawn(sessionId, cwd);
+    fresh.pendingPrompts = pendings;
+    return fresh;
   }
 
   private async driveQueryMessages(entry: SessionEntry): Promise<void> {
@@ -429,9 +575,20 @@ export class SessionRegistry {
         } else if (msg.type === "result") {
           entry.state = "idle";
           entry.currentRun = null;
+          // Mark this Query as having served at least one turn —
+          // future dispatches go through the normal respawn /
+          // staleness logic. (The very first turn after spawn skips
+          // respawn since the spawn already read fresh state.)
+          entry.hasServedTurn = true;
           this.broadcastQueueState(entry);
+          // Refresh the staleness baseline: at end-of-turn the jsonl
+          // contains all of OUR writes for this turn. Future foreign
+          // appends will drift the size beyond this checkpoint, which
+          // is what `respawnReasonForDispatch` looks for.
+          entry.lastKnownJsonlSize = await this.statJsonlSize(sessionId);
           // After a turn ends, dispatch the next pending if any.
-          this.maybeDispatch(entry);
+          // Fire-and-forget — async respawn-aware dispatch.
+          void this.maybeDispatch(entry);
         }
       }
     } finally {
@@ -443,10 +600,31 @@ export class SessionRegistry {
     }
   }
 
-  private maybeDispatch(entry: SessionEntry): void {
+  private async maybeDispatch(entry: SessionEntry): Promise<void> {
     if (entry.state === "running") return;
     if (entry.pendingPrompts.length === 0) return;
     if (!entry.pumpController) return;
+
+    // Dual-writer race mitigation: before we drive the next turn,
+    // decide whether the existing Query is fresh enough to trust.
+    // Two cases trigger respawn:
+    //   1. respawnPerSend=true → always respawn (per-send safety)
+    //   2. respawnPerSend=false + jsonl size drifted → foreign write
+    //      detected, auto-recover by respawning so the new spawn
+    //      re-reads the now-current state.
+    // After respawn, `entry` is replaced by the freshly-spawned one;
+    // the queued pendings carry over.
+    const respawnReason = await this.respawnReasonForDispatch(entry);
+    if (respawnReason) {
+      broadcast(entry.sessionId, {
+        event: "sdk-respawn-notice",
+        data: {
+          sessionId: entry.sessionId,
+          reason: respawnReason,
+        },
+      });
+      entry = await this.respawnPreservingQueue(entry);
+    }
 
     // Sort by priority then FIFO within priority. We re-sort each
     // dispatch (cheap — queue length is small) so a `now` enqueued
@@ -481,7 +659,7 @@ export class SessionRegistry {
       parent_tool_use_id: null,
       priority: next.priority,
     };
-    entry.pumpController.push(sdkMsg);
+    entry.pumpController!.push(sdkMsg);
     this.broadcastQueueState(entry);
   }
 

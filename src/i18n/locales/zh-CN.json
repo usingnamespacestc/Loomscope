@@ -220,10 +220,16 @@
       "permission_mode_bypassPermissions_hint": "等价于 --dangerously-skip-permissions，所有工具调用一律放行",
       "permission_mode_plan": "plan — 计划模式（只读）",
       "permission_mode_plan_hint": "plan 模式，工具被限制为只读",
+      "section_respawn": "Dual-writer race 缓解策略",
+      "respawn_description": "Claude Code 的 SDK 不锁 / 不 tail jsonl，所以 Loomscope spawn 出去的 CC 跟终端 CC 同写一个 session 时，两边各自基于陈旧的 chain 状态写入会产生重复 uuid + 多 parent 的链分叉伪迹。开启此项让每次 send 都重起 SDK Query，确保读到最新文件状态再写——race 窗口压到亚秒级。关闭后 Query 长寿（受下方 idle timeout 控制）但 send 前会做 staleness check（对比 jsonl 大小），发现外部写入会对当次 send 自动重启 Query。两种模式都收敛到「写前必读最新」，区别只在 spawn 频率。详见 docs/dual-writer-race-mitigation.md。",
+      "respawn_label": "每次 send 重启 SDK Query（推荐）",
+      "respawn_on_hint": "已启用：每次 send 前 kill 现有 Query → 起新 Query 读最新 jsonl → 写入。idle timeout 退化为「post-turn 清理时长上限」",
+      "respawn_off_hint": "已禁用：Query 持续存活；send 前做 staleness check（基于 jsonl 大小），检测到外部写入才自动重启。延迟更低但有 best-effort 盲区",
       "section_idle": "Session 闲置回收",
       "idle_description": "用户停止操作 N 分钟后，server 会 close 该 session 的 SDK Query（杀 claude subprocess）。下次操作会重新 spawn，缓存会冷启动。",
       "minutes": "分钟",
-      "idle_range": "范围 5–240 分钟"
+      "idle_range": "范围 5–240 分钟",
+      "idle_range_when_respawn_on": "范围 5–240 分钟。当前模式下作用是给「post-turn 残留 Query」一个清理上限——下次 send 反正会重启，闲置回收只决定「不操作时多久把那条幽灵 Query 也回收掉」"
     },
     "hooks": {
       "loading": "加载中…",

@@ -33,6 +33,7 @@ import {
 } from "@/server/services/chatFlowCache";
 import { getPendingPermission } from "@/server/services/pendingPermissionTracker";
 import { findForkClosure, type ClosureMember } from "@/server/services/forkTree";
+import { locateSessionJsonl } from "@/server/services/locateJsonl";
 import {
   sidecarSubagentsDir,
   watchSessionClosure,
@@ -631,21 +632,8 @@ export interface SubAgentResponse {
   meta: AgentMetadata | null;
 }
 
-async function locateSessionJsonl(rootDir: string, sessionId: string): Promise<string | null> {
-  let entries: string[];
-  try {
-    entries = await fsp.readdir(rootDir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw err;
-  }
-  for (const dir of entries) {
-    const candidate = path.join(rootDir, dir, `${sessionId}.jsonl`);
-    const stat = await fsp.stat(candidate).catch(() => null);
-    if (stat?.isFile()) return candidate;
-  }
-  return null;
-}
+// (`locateSessionJsonl` was inlined here historically; hoisted to
+//  `services/locateJsonl.ts` 2026-05-08 once a third caller landed.)
 
 // v0.8: load + merge a fork closure into a single ChatFlow.
 //

@@ -477,6 +477,134 @@ describe("SessionRegistry", () => {
       expect(content[1].type).toBe("text");
     }
   });
+
+  // Dual-writer race mitigation. See docs/dual-writer-race-mitigation.md
+  // for context. Two assertions:
+  //   1. respawnPerSend=true ⇒ a second enqueueTurn after a result frame
+  //      respawns the Query (= second `factory(...)` call observed).
+  //   2. respawnPerSend=false (default in test fixtures) ⇒ same scenario
+  //      reuses the Query (already proven by "subsequent enqueue while
+  //      idle reuses Query" above; this is just the contrast assertion).
+  it("respawnPerSend=true respawns Query on each new send", async () => {
+    const { factory, spawned } = makeFactory();
+    const reg = new SessionRegistry({
+      useApiKey: false,
+      permissionMode: "bypassPermissions",
+      queryFactory: factory,
+      idleTimeoutMin: 0,
+      respawnPerSend: true,
+    });
+
+    // First send → spawn (#1)
+    await reg.enqueueTurn(SID, CWD, {
+      text: "first",
+      images: [],
+      priority: "next",
+    });
+    await flush();
+    expect(spawned).toHaveLength(1);
+
+    // Finish the first turn so the second can be dispatched.
+    spawned[0].emitInit(SID);
+    spawned[0].emitResult();
+    await flush();
+
+    // Second send → expected to close #1 + spawn #2 because of
+    // respawnPerSend.
+    await reg.enqueueTurn(SID, CWD, {
+      text: "second",
+      images: [],
+      priority: "next",
+    });
+    await flush();
+
+    expect(spawned).toHaveLength(2);
+    expect(spawned[0].closeCalls).toBe(1);
+    expect(spawned[1].pushedUserMessages.map((m) => m.message.content)).toEqual([
+      "second",
+    ]);
+  });
+
+  // Staleness-detected respawn: with respawnPerSend=false, the registry
+  // SHOULD reuse the Query (no respawn) when locateJsonl returns null /
+  // file size doesn't drift. Conversely, when locateJsonl reports a
+  // size that drifted between turns, the registry respawns to recover.
+  // We exercise the reuse path here; the drift path needs a real fs
+  // fixture (out of unit-test scope, would land as an integration test).
+  it("respawnPerSend=false (default) keeps Query alive between turns when no staleness signal", async () => {
+    const { factory, spawned } = makeFactory();
+    const reg = new SessionRegistry({
+      useApiKey: false,
+      permissionMode: "bypassPermissions",
+      queryFactory: factory,
+      idleTimeoutMin: 0,
+      // respawnPerSend omitted → defaults to false
+      // locateJsonl omitted → staleness check returns undefined → no
+      // respawn signal → Query reused
+    });
+
+    await reg.enqueueTurn(SID, CWD, {
+      text: "first",
+      images: [],
+      priority: "next",
+    });
+    await flush();
+    expect(spawned).toHaveLength(1);
+
+    spawned[0].emitInit(SID);
+    spawned[0].emitResult();
+    await flush();
+
+    await reg.enqueueTurn(SID, CWD, {
+      text: "second",
+      images: [],
+      priority: "next",
+    });
+    await flush();
+
+    // Same Query — no respawn happened.
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0].pushedUserMessages.map((m) => m.message.content)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  // setRespawnPerSend live update: flipping the setting between turns
+  // changes the next dispatch's behavior without restarting the
+  // registry. PATCH /api/preferences depends on this.
+  it("setRespawnPerSend flips dispatch policy live", async () => {
+    const { factory, spawned } = makeFactory();
+    const reg = new SessionRegistry({
+      useApiKey: false,
+      permissionMode: "bypassPermissions",
+      queryFactory: factory,
+      idleTimeoutMin: 0,
+      respawnPerSend: false,
+    });
+
+    await reg.enqueueTurn(SID, CWD, {
+      text: "first",
+      images: [],
+      priority: "next",
+    });
+    await flush();
+    spawned[0].emitInit(SID);
+    spawned[0].emitResult();
+    await flush();
+
+    // Flip on respawnPerSend; next dispatch should respawn.
+    reg.setRespawnPerSend(true);
+    await reg.enqueueTurn(SID, CWD, {
+      text: "second",
+      images: [],
+      priority: "next",
+    });
+    await flush();
+
+    expect(spawned).toHaveLength(2);
+    expect(spawned[0].closeCalls).toBe(1);
+  });
 });
 
 // Yields once to let pending microtasks (in the async pump driver

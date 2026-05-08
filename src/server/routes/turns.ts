@@ -24,6 +24,7 @@ import { z } from "zod";
 import { forkSession } from "@anthropic-ai/claude-agent-sdk";
 
 import { findForkClosure } from "@/server/services/forkTree";
+import { locateSessionJsonl } from "@/server/services/locateJsonl";
 import type { SessionRegistry } from "@/server/services/sessionRegistry";
 
 const SESSION_ID_RE =
@@ -194,28 +195,8 @@ export function turnsRouter(opts: TurnsRouterOptions) {
   return app;
 }
 
-// Locate the jsonl path for a given session id by scanning project
-// dirs under rootDir. Returns null if not found. (Inlined from
-// sessions.ts where it lives as a private helper — could be hoisted
-// to workspaceScanner if a third caller appears.)
-async function locateSessionJsonl(
-  rootDir: string,
-  sessionId: string,
-): Promise<string | null> {
-  let entries: string[];
-  try {
-    entries = await fsp.readdir(rootDir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw err;
-  }
-  for (const dir of entries) {
-    const candidate = path.join(rootDir, dir, `${sessionId}.jsonl`);
-    const stat = await fsp.stat(candidate).catch(() => null);
-    if (stat?.isFile()) return candidate;
-  }
-  return null;
-}
+// (`locateSessionJsonl` hoisted to `services/locateJsonl.ts` once a
+//  third caller appeared — see app.ts/staleness check.)
 
 // Walk the entry session's fork closure (incl. parent sessions
 // reachable via forkedFrom + child sessions via inverse map) and

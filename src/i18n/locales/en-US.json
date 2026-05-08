@@ -220,10 +220,16 @@
       "permission_mode_bypassPermissions_hint": "Equivalent to --dangerously-skip-permissions; all tool calls allowed.",
       "permission_mode_plan": "plan — Plan mode (read-only)",
       "permission_mode_plan_hint": "Plan mode; tools restricted to read-only.",
+      "section_respawn": "Dual-writer race mitigation",
+      "respawn_description": "Claude Code's SDK doesn't lock or tail the underlying jsonl, so when a Loomscope-spawned CC and a terminal CC both append to the same session id, each writes records based on a stale view of the chain — producing duplicate uuids + multi-parent fork artifacts. Enabling this option respawns the SDK Query before every send, so each spawn re-reads the jsonl from disk; race window narrows to sub-second. With it disabled the Query persists (subject to the idle timeout below) and the server only respawns when a pre-send staleness check detects a foreign-writer append. Both modes converge on \"always read fresh before write\"; the difference is just spawn frequency. See docs/dual-writer-race-mitigation.md for the full rationale.",
+      "respawn_label": "Respawn SDK Query per send (recommended)",
+      "respawn_on_hint": "Enabled: every send kills the existing Query, spawns a fresh one that reads the current jsonl, then writes. Idle timeout below becomes a \"post-turn cleanup bound\" rather than a session-lifetime knob.",
+      "respawn_off_hint": "Disabled: Query persists across sends; pre-send staleness check (based on jsonl byte-size delta) auto-respawns only when an external write is detected. Lower latency but best-effort blind spots.",
       "section_idle": "Session idle recycle",
       "idle_description": "After N minutes of inactivity, the server closes that session's SDK Query (kills the `claude` subprocess). The next action respawns; the prompt cache cold-starts.",
       "minutes": "minutes",
-      "idle_range": "Range 5–240 minutes"
+      "idle_range": "Range 5–240 minutes",
+      "idle_range_when_respawn_on": "Range 5–240 minutes. With respawn-per-send enabled this only bounds how long an idle-but-still-alive post-turn Query lingers — the next send respawns regardless."
     },
     "hooks": {
       "loading": "Loading…",

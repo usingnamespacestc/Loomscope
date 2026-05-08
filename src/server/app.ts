@@ -22,6 +22,7 @@ import { sessionsRouter } from "@/server/routes/sessions";
 import { turnsRouter } from "@/server/routes/turns";
 import { workspacesRouter } from "@/server/routes/workspaces";
 import { initHookSseForwarder } from "@/server/services/hookSseForwarder";
+import { locateSessionJsonl } from "@/server/services/locateJsonl";
 import { initPendingPermissionTracker } from "@/server/services/pendingPermissionTracker";
 import { loadPreferences } from "@/server/services/preferences";
 import { realSdkQuery } from "@/server/services/sdkAdapter";
@@ -96,6 +97,12 @@ export function createApp(opts: AppOptions) {
       idleTimeoutMin: 30, // default; PATCH /preferences updates live
       useApiKey: false,   // default subscription; PATCH updates live
       permissionMode: "default", // strictest; PATCH updates live
+      respawnPerSend: true, // default; PATCH updates live. See
+                            // docs/dual-writer-race-mitigation.md
+      // Staleness check needs to stat the session's jsonl;
+      // SessionRegistry calls this on the dispatch path. Reuses the
+      // shared lookup helper.
+      locateJsonl: (sid) => locateSessionJsonl(opts.rootDir, sid),
     });
   // Asynchronously sync persisted preferences into the new registry
   // — production path. Tests pass their own registry and skip this.
@@ -104,6 +111,7 @@ export function createApp(opts: AppOptions) {
       registry.setIdleTimeoutMin(p.idleTimeoutMin);
       registry.setUseApiKey(p.useApiKey);
       registry.setPermissionMode(p.permissionMode);
+      registry.setRespawnPerSend(p.respawnPerSend);
     });
   }
   app.route(

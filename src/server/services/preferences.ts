@@ -68,12 +68,43 @@ export interface LoomscopePreferences {
    * sessions.
    */
   permissionMode: LoomscopePermissionMode;
+  /**
+   * Dual-writer race mitigation strategy. CC's SDK doesn't tail or
+   * lock the underlying jsonl, so when a Loomscope-spawned Query
+   * and a terminal CC instance both append to the same session id,
+   * each can write records based on a stale view of the chain —
+   * producing duplicate uuids + multi-parent fork artifacts in the
+   * canvas. See `docs/dual-writer-race-mitigation.md` for the full
+   * picture.
+   *
+   * - `true` (DEFAULT, recommended): respawn the SDK Query before
+   *   every send. Each spawn re-reads the jsonl from disk, so
+   *   Loomscope's view is always fresh — race window narrows to
+   *   the spawn's own read-then-write interval (sub-second). Cost:
+   *   ~500ms-1s spawn cost per send. `idleTimeoutMin` becomes
+   *   irrelevant because the Query never persists between sends.
+   *
+   * - `false`: keep the Query alive across sends (subject to
+   *   `idleTimeoutMin` recycle). Faster latency + preserves
+   *   priority queue / interrupt / inflight semantics. Race
+   *   protection falls back to start-of-send staleness check:
+   *   compare current jsonl size to our last-known-good size; if
+   *   mismatch detected, kill+respawn just for that send (auto-
+   *   recover) so the new write builds on current state.
+   *
+   * Both modes converge on "always read fresh before write"; the
+   * difference is just spawn frequency. Mode `true` is safer (no
+   * staleness-detection blind spots); mode `false` is faster and
+   * keeps Query-lifetime features.
+   */
+  respawnPerSend: boolean;
 }
 
 const DEFAULTS: LoomscopePreferences = {
   idleTimeoutMin: 30,
   useApiKey: false,
   permissionMode: "default",
+  respawnPerSend: true,
 };
 
 const PERMISSION_MODE_VALUES: LoomscopePermissionMode[] = [
@@ -111,7 +142,10 @@ function normalize(raw: unknown): LoomscopePreferences {
   )
     ? (permRaw as LoomscopePermissionMode)
     : DEFAULTS.permissionMode;
-  return { idleTimeoutMin: idle, useApiKey, permissionMode };
+  const respawnRaw = r["respawnPerSend"];
+  const respawnPerSend =
+    typeof respawnRaw === "boolean" ? respawnRaw : DEFAULTS.respawnPerSend;
+  return { idleTimeoutMin: idle, useApiKey, permissionMode, respawnPerSend };
 }
 
 export async function loadPreferences(): Promise<LoomscopePreferences> {
