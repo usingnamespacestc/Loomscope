@@ -22,6 +22,13 @@
 // capture on the handle so a fast drag that leaves the bar doesn't
 // lose the gesture.
 //
+// Image attachments: support three input paths — paste (Cmd/Ctrl+V),
+// drag-and-drop onto the card, and the "+" button file picker. All
+// three feed the same `attachments` state which surfaces as a
+// thumbnail strip in the card. Each thumbnail gets a × delete on
+// hover. State is held client-side until submit; v∞.2 will marshal
+// these into multimodal SDKUserMessage content blocks.
+//
 // Submit is a no-op placeholder until v∞.1 wires it to the Agent SDK
 // `query()` flow.
 
@@ -81,6 +88,20 @@ interface Props {
   onResize?: (deltaPx: number) => void;
 }
 
+interface AttachmentItem {
+  id: string;
+  mediaType: string;       // "image/png", "image/jpeg", etc.
+  base64: string;          // raw base64 (without data: prefix), for SDK marshaling later
+  dataUrl: string;         // full "data:..." for thumbnail <img src>
+  name?: string;
+  sizeBytes: number;
+}
+
+// Limit per-image size so a stray drag of a 50 MB file doesn't lock
+// the textarea. SDK API has its own ~20 MB image cap; we stay well
+// below to leave headroom for prompt + other blocks.
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
 export function Composer({ disabled = true, placeholder, onResize }: Props) {
   const { t } = useTranslation();
   const [height, setHeight] = useState<number>(() => loadHeight());
@@ -89,9 +110,15 @@ export function Composer({ disabled = true, placeholder, onResize }: Props) {
     loadSettings(),
   );
   const [menuOpen, setMenuOpen] = useState(false);
+  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
   const handleRef = useRef<HTMLDivElement | null>(null);
   const menuWrapRef = useRef<HTMLDivElement | null>(null);
+  const filePickerRef = useRef<HTMLInputElement | null>(null);
+  // dragenter/dragleave fire for child elements too — counter to
+  // distinguish "actually leaving the card" from "moved over a child".
+  const dragDepthRef = useRef(0);
   // Mirror of the height state usable from event handlers without
   // routing through setState updaters. React.StrictMode dev mode runs
   // updater functions twice to detect impurity — putting the
@@ -168,18 +195,114 @@ export function Composer({ disabled = true, placeholder, onResize }: Props) {
     }
   }, []);
 
-  const canSend = !disabled && text.trim().length > 0;
+  // Attachments alone (no text) can be a valid prompt — the model can
+  // still respond to "describe this image" implicitly. claude.ai
+  // allows it; mirror.
+  const canSend =
+    !disabled && (text.trim().length > 0 || attachments.length > 0);
 
   const onSend = () => {
     if (!canSend) return;
     // v∞.1 replaces this with the actual SDK query dispatch.
-    console.log(
-      "[loomscope:composer] submit (placeholder):",
+    console.log("[loomscope:composer] submit (placeholder):", {
       text,
+      attachments: attachments.map((a) => ({
+        mediaType: a.mediaType,
+        sizeBytes: a.sizeBytes,
+        name: a.name,
+      })),
       settings,
-    );
+    });
     setText("");
+    setAttachments([]);
   };
+
+  const ingestFiles = useCallback(async (files: File[]) => {
+    const next: AttachmentItem[] = [];
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) continue;
+      if (file.size > MAX_IMAGE_BYTES) {
+        // Surface a tiny inline error somewhere? For now console.warn —
+        // size cap is generous enough that misuse is rare; can add a
+        // toast later if friends report tripping it.
+        console.warn(
+          `[loomscope:composer] image too large (${file.size}B), skipping`,
+        );
+        continue;
+      }
+      const item = await fileToAttachment(file);
+      if (item) next.push(item);
+    }
+    if (next.length > 0) {
+      setAttachments((cur) => [...cur, ...next]);
+    }
+  }, []);
+
+  const onPaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const files: File[] = [];
+      for (const item of e.clipboardData.items) {
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          const f = item.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length === 0) return; // pure text paste — let it through
+      e.preventDefault(); // suppress the default text-of-image-as-blob path
+      void ingestFiles(files);
+    },
+    [ingestFiles],
+  );
+
+  const onDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragOver(true);
+  }, []);
+
+  const onDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDragOver(false);
+  }, []);
+
+  const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    // dragover MUST preventDefault to allow drop. Without this the
+    // browser refuses to fire the drop event at all — every drag-and-
+    // drop tutorial misses this and people wonder why drop never
+    // fires. The default behavior would be "no, you can't drop here".
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+
+  const onDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+      e.preventDefault();
+      dragDepthRef.current = 0;
+      setIsDragOver(false);
+      const files = Array.from(e.dataTransfer.files);
+      void ingestFiles(files);
+    },
+    [ingestFiles],
+  );
+
+  const onFilePickerChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!e.target.files) return;
+      void ingestFiles(Array.from(e.target.files));
+      // Reset so picking the same file twice in a row still triggers
+      // change (browser de-dupes by default, breaking re-attach).
+      e.target.value = "";
+    },
+    [ingestFiles],
+  );
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((cur) => cur.filter((a) => a.id !== id));
+  }, []);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Plain Enter submits; Shift+Enter inserts a newline. Matches
@@ -222,7 +345,56 @@ export function Composer({ disabled = true, placeholder, onResize }: Props) {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col px-3 pt-2 pb-1">
-        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-gray-200 bg-white px-3 py-2 shadow-sm transition-shadow focus-within:border-gray-300 focus-within:shadow">
+        <div
+          className={`relative flex min-h-0 flex-1 flex-col rounded-2xl border bg-white px-3 py-2 shadow-sm transition-all focus-within:shadow ${
+            isDragOver
+              ? "border-2 border-dashed border-blue-400 bg-blue-50/30"
+              : "border border-gray-200 focus-within:border-gray-300"
+          }`}
+          onDragEnter={onDragEnter}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+        >
+          {isDragOver && (
+            <div
+              data-testid="composer-drop-overlay"
+              className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-2xl bg-blue-50/60 text-[12px] font-medium text-blue-600"
+            >
+              {t("composer.drop_hint")}
+            </div>
+          )}
+
+          {attachments.length > 0 && (
+            <div
+              data-testid="composer-attachments"
+              className="flex flex-wrap gap-2 pb-2"
+            >
+              {attachments.map((a) => (
+                <div
+                  key={a.id}
+                  className="group relative h-16 w-16 overflow-hidden rounded-md border border-gray-200 bg-gray-50"
+                  data-testid={`composer-attachment-${a.id}`}
+                >
+                  <img
+                    src={a.dataUrl}
+                    alt={a.name ?? "attachment"}
+                    className="h-full w-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(a.id)}
+                    title={t("composer.attach_remove")}
+                    data-testid={`composer-attachment-remove-${a.id}`}
+                    className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-gray-700/80 text-[10px] leading-none text-white opacity-0 transition-opacity group-hover:opacity-100"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <textarea
             data-testid="composer-input"
             className="min-h-0 flex-1 resize-none border-0 bg-transparent text-[13px] leading-relaxed text-gray-800 placeholder:text-gray-400 focus:outline-none disabled:text-gray-400"
@@ -230,16 +402,29 @@ export function Composer({ disabled = true, placeholder, onResize }: Props) {
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             disabled={disabled}
           />
           <div className="flex flex-shrink-0 items-center justify-between pt-1">
-            {/* Left: attachment placeholder. v∞.2 will wire this. */}
+            {/* Left: attachment "+" button. Opens hidden file picker.
+                Disabled state mirrors composer.disabled — but paste +
+                drag-drop still work even when composer is disabled,
+                which lets users prep attachments while v∞.1 is wiring
+                up. */}
+            <input
+              ref={filePickerRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={onFilePickerChange}
+            />
             <button
               type="button"
-              disabled
               data-testid="composer-attach"
               title={t("composer.attach_tooltip")}
-              className="flex h-7 w-7 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => filePickerRef.current?.click()}
+              className="flex h-7 w-7 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700"
             >
               <PlusIcon />
             </button>
@@ -467,6 +652,38 @@ function ArrowUpIcon() {
       <polyline points="5 12 12 5 19 12" />
     </svg>
   );
+}
+
+async function fileToAttachment(file: File): Promise<AttachmentItem | null> {
+  // FileReader wraps the read in an async-via-events shape; promisify
+  // for the ingest pipeline. Reads as data URL (= "data:image/png;
+  // base64,..."), then split into the raw base64 chunk for SDK
+  // marshaling later. Keep dataUrl too for fast <img> rendering.
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== "string") {
+        resolve(null);
+        return;
+      }
+      const commaIdx = dataUrl.indexOf(",");
+      const base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : "";
+      resolve({
+        id:
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        mediaType: file.type,
+        base64,
+        dataUrl,
+        name: file.name,
+        sizeBytes: file.size,
+      });
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
 }
 
 function clamp(n: number, min: number, max: number): number {
