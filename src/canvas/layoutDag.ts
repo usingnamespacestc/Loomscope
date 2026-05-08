@@ -18,10 +18,17 @@ import type { ChatFoldNodeData } from "@/canvas/nodes/ChatFoldNodeCard";
 import type { ChatFlow, ChatNode } from "@/data/types";
 
 // Match Agentloom's w-52 (208px) for visual family resemblance.
-// Height auto-grows with content; dagre uses NODE_HEIGHT only as a layout
-// hint for rank computation.
+// Height auto-grows with content; dagre uses NODE_HEIGHT only as a
+// layout hint for rank computation.
+//
+// 2026-05-08 bump 150 → 260: cards have accreted chrome (TokenBar,
+// multi-row stats with flex-wrap, hybrid InnerCompactBanner, NodeId
+// line, fork chip when childCount ≥ 2). Real rendered cards reach
+// 240-260px in worst case. Dagre at 150 was leaving siblings on
+// adjacent ranks visually overlapping — user reported this on the
+// post-fork canvas where two ChatNodes stacked vertically.
 export const NODE_WIDTH = 208;
-export const NODE_HEIGHT = 150;
+export const NODE_HEIGHT = 260;
 export const RANKSEP = 90;
 export const NODESEP = 24;
 

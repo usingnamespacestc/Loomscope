@@ -12,11 +12,23 @@ interface TurnPayload {
   cwd: string;
   images?: { mediaType: string; base64: string }[];
   priority?: "now" | "next" | "later";
+  // v∞.2 auto-fork: when present, the server forks the session up to
+  // `upToMessageId` (slicing the transcript) before enqueueing. The
+  // returned `sessionId` reflects the post-fork session; clients
+  // should compare it to the URL sid and switch active when they
+  // differ (= a fork did happen).
+  forkFrom?: { upToMessageId: string; title?: string };
 }
 
 export interface TurnResult {
   ok: true;
   itemId: string;
+  // Post-fork session id (= the URL sid when no fork happened).
+  sessionId: string;
+  // Set only when a fork actually occurred; null otherwise. Lets the
+  // client distinguish "we got rerouted to a new branch" from "this
+  // continued the existing session".
+  forkedSessionId: string | null;
 }
 
 export interface ApiError {
@@ -68,12 +80,18 @@ export async function postTurn(
   sessionId: string,
   payload: TurnPayload,
 ): Promise<TurnResult | ApiError> {
-  const r = await post<{ itemId: string }>(
-    `/api/sessions/${sessionId}/turns`,
-    payload,
-  );
+  const r = await post<{
+    itemId: string;
+    sessionId: string;
+    forkedSessionId: string | null;
+  }>(`/api/sessions/${sessionId}/turns`, payload);
   if ("error" in r) return r;
-  return { ok: true, itemId: r.itemId };
+  return {
+    ok: true,
+    itemId: r.itemId,
+    sessionId: r.sessionId,
+    forkedSessionId: r.forkedSessionId,
+  };
 }
 
 export async function postInterrupt(

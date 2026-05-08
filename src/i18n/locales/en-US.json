@@ -168,11 +168,6 @@
     "case_toggle_tooltip": "Case-sensitive",
     "clear_tooltip": "Clear"
   },
-  "fork": {
-    "tooltip": "Fork from this node into a new session (includes everything up through this turn)",
-    "tooltip_busy": "Session has SDK activity — wait for the current turn to settle before forking",
-    "tooltip_pending": "Forking…"
-  },
   "running_sessions": {
     "label": "running",
     "tooltip": "v∞.2 SDK sessions with active turns or pending queue",

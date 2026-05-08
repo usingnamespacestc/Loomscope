@@ -16,6 +16,8 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 
+import { forkSession } from "@anthropic-ai/claude-agent-sdk";
+
 import type { SessionRegistry } from "@/server/services/sessionRegistry";
 
 const SESSION_ID_RE =
@@ -33,6 +35,19 @@ const turnSchema = z.object({
     .optional(),
   priority: z.enum(["now", "next", "later"]).optional(),
   cwd: z.string(),
+  // v∞.2 auto-fork: when set, the user is submitting a turn from a
+  // non-leaf ChatNode. Server first calls SDK forkSession to spawn
+  // a new jsonl with the transcript sliced up to upToMessageId, then
+  // enqueues the turn on the FORK (not the origin). Replaces the
+  // explicit ⑂ fork button — Loomscope now just auto-forks whenever
+  // the user composes from anywhere other than the leaf, matching
+  // Agentloom's "submitting from non-leaf must fork" semantic.
+  forkFrom: z
+    .object({
+      upToMessageId: z.string(),
+      title: z.string().optional(),
+    })
+    .optional(),
 });
 
 export interface TurnsRouterOptions {
@@ -47,7 +62,7 @@ export function turnsRouter(opts: TurnsRouterOptions) {
     zValidator("param", z.object({ id: z.string().regex(SESSION_ID_RE) })),
     zValidator("json", turnSchema),
     async (c) => {
-      const { id } = c.req.valid("param");
+      let { id } = c.req.valid("param");
       const body = c.req.valid("json");
       // Empty prompt rejected — this would either no-op or confuse
       // CC. The composer enforces canSend client-side, but defend
@@ -55,12 +70,37 @@ export function turnsRouter(opts: TurnsRouterOptions) {
       if (body.text.length === 0 && (body.images?.length ?? 0) === 0) {
         return c.json({ error: "empty prompt" }, 400);
       }
+      // Auto-fork before enqueue: forkFrom set ⇒ user is composing
+      // from a non-leaf ChatNode. Slice the transcript via SDK's
+      // forkSession, then redirect the rest of this request onto the
+      // fork's session id so the new turn lands on the new branch.
+      let forkedSessionId: string | null = null;
+      if (body.forkFrom) {
+        try {
+          const r = await forkSession(id, {
+            upToMessageId: body.forkFrom.upToMessageId,
+            title: body.forkFrom.title,
+          });
+          forkedSessionId = r.sessionId;
+          id = forkedSessionId;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return c.json({ error: `fork failed: ${msg}` }, 500);
+        }
+      }
       const itemId = await opts.registry.enqueueTurn(id, body.cwd, {
         text: body.text,
         images: body.images ?? [],
         priority: body.priority ?? "next",
       });
-      return c.json({ itemId });
+      return c.json({
+        itemId,
+        // Echo the (post-fork) sessionId so the client knows where
+        // the turn actually landed and can switch active session
+        // when forkedSessionId differs from the URL :id.
+        sessionId: id,
+        forkedSessionId,
+      });
     },
   );
 

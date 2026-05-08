@@ -42,6 +42,7 @@ import type { PointerEvent as RPointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import { postInterrupt, postTurn } from "@/api/turns";
+import { findLatestLeafId } from "@/components/drill/pathUtils";
 import { useStore } from "@/store/index";
 import { getInflight } from "@/store/sdkChannelSlice";
 
@@ -231,6 +232,29 @@ export function Composer({
       setText("");
       setAttachments([]);
       setSdkError(sessionId, null);
+
+      // Auto-fork: when the user is composing from a non-leaf
+      // ChatNode, the turn must fork from there rather than blindly
+      // appending to the leaf. Resolve the upToMessageId from the
+      // selected ChatNode's last record uuid (the chronologically
+      // latest record in that bucket; falls back to user message
+      // uuid for live-tail buckets with no llm_call yet).
+      const session = useStore.getState().sessions.get(sessionId);
+      const cf = session?.chatFlow;
+      const selectedId = session?.selectedNodeId ?? null;
+      const leafId = cf ? findLatestLeafId(cf) : null;
+      let forkFrom: { upToMessageId: string } | undefined;
+      if (cf && selectedId && selectedId !== leafId) {
+        const sel = cf.chatNodes.find((c) => c.id === selectedId);
+        if (sel) {
+          const lastNode =
+            sel.workflow.nodes[sel.workflow.nodes.length - 1];
+          forkFrom = {
+            upToMessageId: lastNode?.id ?? sel.userMessage.uuid,
+          };
+        }
+      }
+
       const r = await postTurn(sessionId, {
         text: snapshotText,
         cwd,
@@ -239,6 +263,7 @@ export function Composer({
           base64: a.base64,
         })),
         priority,
+        forkFrom,
       });
       if (!("ok" in r) || r.ok !== true) {
         // Restore typed content + record error for inline display.
@@ -248,6 +273,15 @@ export function Composer({
           sessionId,
           "error" in r ? r.error : "send failed",
         );
+        return;
+      }
+      // If the server forked, switch active session to the new
+      // branch so the user follows their turn into the new jsonl.
+      // The fork's jsonl will be picked up by chokidar within ~1
+      // RAF; setActiveSession + the existing post-active load
+      // pipeline does the rest.
+      if (r.forkedSessionId && r.forkedSessionId !== sessionId) {
+        useStore.getState().setActiveSession(r.forkedSessionId);
       }
     },
     [canSend, text, attachments, sessionId, cwd, setSdkError],
