@@ -244,16 +244,42 @@ export function Composer({
       const selectedId = session?.selectedNodeId ?? null;
       const leafId = cf ? findLatestLeafId(cf) : null;
       let forkFrom: { upToMessageId: string } | undefined;
-      if (cf && selectedId && selectedId !== leafId) {
+      let forkReason = "no-fork";
+      if (!cf) {
+        forkReason = "no-chatflow";
+      } else if (!selectedId) {
+        forkReason = "no-selection";
+      } else if (selectedId === leafId) {
+        forkReason = "selection-is-leaf";
+      } else {
         const sel = cf.chatNodes.find((c) => c.id === selectedId);
-        if (sel) {
+        if (!sel) {
+          forkReason = "selection-not-in-chatNodes";
+        } else {
           const lastNode =
             sel.workflow.nodes[sel.workflow.nodes.length - 1];
           forkFrom = {
             upToMessageId: lastNode?.id ?? sel.userMessage.uuid,
           };
+          forkReason = lastNode
+            ? "fork-from-last-workflow-node"
+            : "fork-from-user-message";
         }
       }
+      // Diagnostic: when users report "I thought it would fork but it
+      // didn't", or vice versa, the console output here pins down
+      // which branch the resolver took.
+      console.log("[loomscope:composer] fork resolution:", {
+        sessionId,
+        selectedId,
+        leafId,
+        forkReason,
+        forkFrom,
+        chatNodeCount: cf?.chatNodes.length ?? 0,
+        selectionInChatNodes: cf
+          ? cf.chatNodes.some((c) => c.id === selectedId)
+          : false,
+      });
 
       const r = await postTurn(sessionId, {
         text: snapshotText,
