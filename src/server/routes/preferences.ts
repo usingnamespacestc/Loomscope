@@ -19,6 +19,9 @@ import type { SessionRegistry } from "@/server/services/sessionRegistry";
 const patchSchema = z.object({
   idleTimeoutMin: z.number().optional(),
   useApiKey: z.boolean().optional(),
+  permissionMode: z
+    .enum(["default", "acceptEdits", "bypassPermissions", "plan"])
+    .optional(),
 });
 
 export interface PreferencesRouterOptions {
@@ -44,6 +47,9 @@ export function preferencesRouter(opts: PreferencesRouterOptions = {}) {
       }
       if (patch.useApiKey !== undefined) {
         opts.registry.setUseApiKey(merged.useApiKey);
+      }
+      if (patch.permissionMode !== undefined) {
+        opts.registry.setPermissionMode(merged.permissionMode);
       }
     }
     return c.json(merged);

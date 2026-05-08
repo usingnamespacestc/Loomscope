@@ -152,6 +152,7 @@ describe("SessionRegistry", () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
       useApiKey: false,
+      permissionMode: "bypassPermissions",
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -176,6 +177,7 @@ describe("SessionRegistry", () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
       useApiKey: false,
+      permissionMode: "bypassPermissions",
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -207,6 +209,7 @@ describe("SessionRegistry", () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
       useApiKey: false,
+      permissionMode: "bypassPermissions",
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -266,6 +269,7 @@ describe("SessionRegistry", () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
       useApiKey: false,
+      permissionMode: "bypassPermissions",
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -306,6 +310,7 @@ describe("SessionRegistry", () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
       useApiKey: false,
+      permissionMode: "bypassPermissions",
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -337,6 +342,7 @@ describe("SessionRegistry", () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
       useApiKey: false,
+      permissionMode: "bypassPermissions",
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -363,6 +369,7 @@ describe("SessionRegistry", () => {
     const captured = captureSse(SID);
     const reg = new SessionRegistry({
       useApiKey: false,
+      permissionMode: "bypassPermissions",
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -391,6 +398,7 @@ describe("SessionRegistry", () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
       useApiKey: false,
+      permissionMode: "bypassPermissions",
       queryFactory: factory,
       idleTimeoutMin: 0.002, // 120ms
       watchdogIntervalMs: 30,
@@ -420,6 +428,7 @@ describe("SessionRegistry", () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
       useApiKey: false,
+      permissionMode: "bypassPermissions",
       queryFactory: factory,
       idleTimeoutMin: 0,
     });
@@ -449,6 +458,7 @@ describe("SessionRegistry", () => {
     const { factory, spawned } = makeFactory();
     const reg = new SessionRegistry({
       useApiKey: false,
+      permissionMode: "bypassPermissions",
       queryFactory: factory,
       idleTimeoutMin: 0,
     });

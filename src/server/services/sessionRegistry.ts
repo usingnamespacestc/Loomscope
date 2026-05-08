@@ -136,6 +136,17 @@ export interface SessionRegistryOptions {
    *  Backed by `~/.loomscope/preferences.json::useApiKey`; live
    *  updates land via `setUseApiKey`. */
   useApiKey: boolean;
+  /** Permission mode passed to SDK `query({ permissionMode })`.
+   *  In default mode, write-tools (Bash/Edit/Write/...) require
+   *  approval; in non-TTY SDK context that means silent deny.
+   *  `bypassPermissions` mirrors `claude --dangerously-skip-
+   *  permissions`. Live update via `setPermissionMode`; affects
+   *  the NEXT spawn (in-flight Queries keep their original mode). */
+  permissionMode:
+    | "default"
+    | "acceptEdits"
+    | "bypassPermissions"
+    | "plan";
 }
 
 export class SessionRegistry {
@@ -297,6 +308,15 @@ export class SessionRegistry {
     this.opts.useApiKey = useApiKey;
   }
 
+  /** Live-update the permission mode preference. Same NEXT-spawn
+   *  caveat as `setUseApiKey` — the SDK options snapshot at spawn
+   *  time, so flipping this only affects sessions spawned after
+   *  the change (or existing sessions after their next idle close
+   *  + respawn). */
+  setPermissionMode(mode: SessionRegistryOptions["permissionMode"]): void {
+    this.opts.permissionMode = mode;
+  }
+
   /** Live-update the idle threshold without restarting the server.
    *  PATCH /api/preferences calls this so changes take effect
    *  immediately. Pass 0 to disable timeout. */
@@ -364,6 +384,7 @@ export class SessionRegistry {
         cwd,
         resume: sessionId,
         env: childEnv,
+        permissionMode: this.opts.permissionMode,
       },
     });
     entry.query = query;

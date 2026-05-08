@@ -488,10 +488,25 @@ function HooksPanel() {
 // PATCH /api/preferences flushes it through to SessionRegistry's
 // live setters. A failed save surfaces as inline error text;
 // success silently returns.
+type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "bypassPermissions"
+  | "plan";
+
+const PERMISSION_MODE_OPTIONS: PermissionMode[] = [
+  "default",
+  "acceptEdits",
+  "bypassPermissions",
+  "plan",
+];
+
 function VinfPanel() {
   const { t } = useTranslation();
   const [idleTimeoutMin, setIdleTimeoutMin] = useState<number>(30);
   const [useApiKey, setUseApiKey] = useState<boolean>(false);
+  const [permissionMode, setPermissionMode] =
+    useState<PermissionMode>("default");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -508,6 +523,9 @@ function VinfPanel() {
           typeof p.idleTimeoutMin === "number" ? p.idleTimeoutMin : 30,
         );
         setUseApiKey(typeof p.useApiKey === "boolean" ? p.useApiKey : false);
+        if (PERMISSION_MODE_OPTIONS.includes(p.permissionMode)) {
+          setPermissionMode(p.permissionMode);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -530,6 +548,9 @@ function VinfPanel() {
       const next = await res.json();
       setIdleTimeoutMin(next.idleTimeoutMin);
       setUseApiKey(next.useApiKey);
+      if (PERMISSION_MODE_OPTIONS.includes(next.permissionMode)) {
+        setPermissionMode(next.permissionMode);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -574,6 +595,39 @@ function VinfPanel() {
           {useApiKey
             ? t("settings.vinf.use_api_key_on")
             : t("settings.vinf.use_api_key_off")}
+        </p>
+      </section>
+
+      {/* Permission mode — passed to SDK query as `permissionMode`.
+          Mirrors `claude --permission-mode` startup flag. Default is
+          strictest (silent deny in non-TTY); users coming from
+          `--dangerously-skip-permissions` should pick bypassPermissions.
+          The full canUseTool browser-banner UX (= each tool prompts in
+          Loomscope) is a separate v∞.next backlog item. */}
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.vinf.section_permission")}
+        </h3>
+        <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
+          {t("settings.vinf.permission_description")}
+        </p>
+        <select
+          data-testid="settings-vinf-permission-mode"
+          value={permissionMode}
+          onChange={(e) =>
+            void patch({ permissionMode: e.target.value as PermissionMode })
+          }
+          disabled={saving}
+          className="rounded border border-gray-300 bg-white px-2 py-1 text-xs"
+        >
+          {PERMISSION_MODE_OPTIONS.map((m) => (
+            <option key={m} value={m}>
+              {t(`settings.vinf.permission_mode_${m}`)}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-[10px] italic text-gray-400">
+          {t(`settings.vinf.permission_mode_${permissionMode}_hint`)}
         </p>
       </section>
 

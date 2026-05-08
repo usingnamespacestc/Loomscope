@@ -21,6 +21,16 @@ import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+/** Subset of SDK's PermissionMode that we expose in Settings. The
+ *  SDK also offers `dontAsk` and `auto` — left out of the menu
+ *  pending more docs on what they actually do; they're still
+ *  acceptable values if a user hand-edits the JSON. */
+export type LoomscopePermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "bypassPermissions"
+  | "plan";
+
 export interface LoomscopePreferences {
   /**
    * Minutes of inactivity before SessionRegistry closes a session's
@@ -42,12 +52,36 @@ export interface LoomscopePreferences {
    * exists and only API key is configured.
    */
   useApiKey: boolean;
+  /**
+   * Permission mode passed to SDK `query({ permissionMode })`.
+   * Mirrors what `claude --permission-mode` would set on a terminal
+   * launch. `default` matches the strictest behavior (= every
+   * write tool prompts; in non-TTY SDK mode that means silent
+   * deny). `bypassPermissions` is the equivalent of starting CC
+   * with `--dangerously-skip-permissions`. `acceptEdits` only
+   * auto-allows file Edits / Writes (Bash etc still prompt).
+   * `plan` runs in read-only plan mode.
+   *
+   * Default: `default` (safest). Users coming from a terminal CC
+   * with `--dangerously-skip-permissions` should set
+   * `bypassPermissions` to mirror that behavior in Loomscope-driven
+   * sessions.
+   */
+  permissionMode: LoomscopePermissionMode;
 }
 
 const DEFAULTS: LoomscopePreferences = {
   idleTimeoutMin: 30,
   useApiKey: false,
+  permissionMode: "default",
 };
+
+const PERMISSION_MODE_VALUES: LoomscopePermissionMode[] = [
+  "default",
+  "acceptEdits",
+  "bypassPermissions",
+  "plan",
+];
 
 const MIN_IDLE = 5;
 const MAX_IDLE = 240;
@@ -71,7 +105,13 @@ function normalize(raw: unknown): LoomscopePreferences {
   const useApiKeyRaw = r["useApiKey"];
   const useApiKey =
     typeof useApiKeyRaw === "boolean" ? useApiKeyRaw : DEFAULTS.useApiKey;
-  return { idleTimeoutMin: idle, useApiKey };
+  const permRaw = r["permissionMode"];
+  const permissionMode = PERMISSION_MODE_VALUES.includes(
+    permRaw as LoomscopePermissionMode,
+  )
+    ? (permRaw as LoomscopePermissionMode)
+    : DEFAULTS.permissionMode;
+  return { idleTimeoutMin: idle, useApiKey, permissionMode };
 }
 
 export async function loadPreferences(): Promise<LoomscopePreferences> {

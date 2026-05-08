@@ -95,6 +95,7 @@ export function createApp(opts: AppOptions) {
       queryFactory: realSdkQuery,
       idleTimeoutMin: 30, // default; PATCH /preferences updates live
       useApiKey: false,   // default subscription; PATCH updates live
+      permissionMode: "default", // strictest; PATCH updates live
     });
   // Asynchronously sync persisted preferences into the new registry
   // — production path. Tests pass their own registry and skip this.
@@ -102,6 +103,7 @@ export function createApp(opts: AppOptions) {
     void loadPreferences().then((p) => {
       registry.setIdleTimeoutMin(p.idleTimeoutMin);
       registry.setUseApiKey(p.useApiKey);
+      registry.setPermissionMode(p.permissionMode);
     });
   }
   app.route("/api/sessions", turnsRouter({ registry }));
