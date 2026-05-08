@@ -64,6 +64,14 @@
     "copy_message_action": "复制",
     "copy_message_done": "✓ 已复制"
   },
+  "canvas": {
+    "context_menu": {
+      "fork_from_here": "从这里 fork（创建新 session）",
+      "fork_from_here_hint": "Claude Code 会复制对话到该节点为止，写入新的 jsonl",
+      "jump_to_source": "跳到 session {{sid}}…",
+      "jump_to_source_hint": "此节点位于 sibling fork 的 jsonl 中"
+    }
+  },
   "drill_panel": {
     "tab_detail": "详情",
     "tab_conversation": "对话",

@@ -118,7 +118,17 @@ export async function deleteQueueItem(
 
 export async function postFork(
   sessionId: string,
-  payload: { upToMessageId?: string; title?: string },
+  payload: {
+    upToMessageId?: string;
+    title?: string;
+    /** When forking from a sibling-fork ChatNode visible via closure
+     *  merge, this is the session that physically owns the record.
+     *  Server uses it as the forkSession source instead of `sessionId`
+     *  (the URL param). Frontend reads it from
+     *  `ChatNode.contributingSessions`. Omit on the same-session
+     *  on-chain fork case. */
+    sourceSessionId?: string;
+  },
 ): Promise<{ ok: true; sessionId: string } | ApiError> {
   const r = await post<{ sessionId: string }>(
     `/api/sessions/${sessionId}/fork`,

@@ -64,6 +64,14 @@
     "copy_message_action": "Copy",
     "copy_message_done": "✓ Copied"
   },
+  "canvas": {
+    "context_menu": {
+      "fork_from_here": "Fork from here (new session)",
+      "fork_from_here_hint": "Claude Code will copy the transcript up to this node into a new jsonl",
+      "jump_to_source": "Jump to session {{sid}}…",
+      "jump_to_source_hint": "This node lives on a sibling-fork jsonl"
+    }
+  },
   "drill_panel": {
     "tab_detail": "Detail",
     "tab_conversation": "Conversation",

@@ -13,6 +13,7 @@
 // `requirements.md`).
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   Background,
@@ -28,8 +29,10 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
+import { postFork } from "@/api/turns";
 import { CanvasPanContext } from "@/canvas/CanvasPanContext";
 import { useConversationScrollShim } from "@/canvas/ConversationScrollContext";
+import { ContextMenu, type ContextMenuItem } from "@/canvas/ContextMenu";
 import {
   useLatestChatNodeId,
   useSessionLiveness,
@@ -306,6 +309,91 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     },
     [],
   );
+
+  // PR 2 of fork-UX rework: right-click context menu state. Built per-
+  // canvas because the menu's fork/jump actions need access to chatFlow
+  // (lookup ChatNode by id) + sessionId + the activeSession setter.
+  const { t } = useTranslation();
+  const setActiveSession = useStore((s) => s.setActiveSession);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    chatNodeId: string;
+  } | null>(null);
+  const onNodeContextMenu = useCallback(
+    (e: React.MouseEvent, node: { id: string }) => {
+      // Skip synthetic chatFold nodes — they're not real ChatNodes,
+      // there's nothing to fork from / jump to.
+      if (isChatFoldId(node.id)) return;
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY, chatNodeId: node.id });
+    },
+    [],
+  );
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  const menuItems = useMemo<ContextMenuItem[]>(() => {
+    if (!contextMenu) return [];
+    const cn = chatFlow.chatNodes.find((c) => c.id === contextMenu.chatNodeId);
+    if (!cn) return [];
+    const cs = cn.contributingSessions ?? [];
+    const onActiveChain =
+      cs.length === 0 || cs.includes(sessionId);
+    // For off-chain nodes, the "source session" is whichever session
+    // contributed records (== the sibling fork's sid). When a node
+    // somehow contributes to multiple non-active sessions, picking
+    // the first is fine — practical case is single-source.
+    const sourceSid = onActiveChain
+      ? undefined
+      : cs.find((s) => s !== sessionId);
+    // Fork point = userMessage.uuid (the bucket's root user record).
+    // CC's forkSession copies up to and including this uuid, so the
+    // fork's last turn is the user's prompt; the assistant's response
+    // to that turn is dropped. Lite payload doesn't expose the
+    // bucket's last record uuid; falling back to userMessage.uuid is
+    // the same convention v∞.2's auto-fork used. For "include the
+    // assistant's response" UX a future patch can lazy-fetch the
+    // workflow + read its tail uuid.
+    const upToMessageId = cn.userMessage.uuid;
+
+    const items: ContextMenuItem[] = [];
+    items.push({
+      key: "fork-from-here",
+      label: t("canvas.context_menu.fork_from_here"),
+      description: t("canvas.context_menu.fork_from_here_hint"),
+      onClick: async () => {
+        const r = await postFork(sessionId, {
+          upToMessageId,
+          sourceSessionId: sourceSid,
+        });
+        if ("error" in r) {
+          // Fork errors land here; for now just console — a toast
+          // system would slot in cleanly when one exists.
+          // eslint-disable-next-line no-console
+          console.error("[loomscope:fork] failed:", r.error);
+          return;
+        }
+        // chokidar should pick up the new jsonl within ~1 RAF and
+        // populate the workspace. setActiveSession schedules the
+        // switch — first paint may briefly show empty state until
+        // the new chatFlow loads, that's expected.
+        setActiveSession(r.sessionId);
+      },
+    });
+    if (sourceSid) {
+      items.push({
+        key: "jump-to-source",
+        label: t("canvas.context_menu.jump_to_source", {
+          sid: sourceSid.slice(0, 8),
+        }),
+        description: t("canvas.context_menu.jump_to_source_hint"),
+        onClick: () => {
+          setActiveSession(sourceSid);
+        },
+      });
+    }
+    return items;
+  }, [contextMenu, chatFlow, sessionId, t, setActiveSession]);
 
   const rf = useReactFlow();
 
@@ -652,6 +740,7 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onNodeClick={onNodeClick}
+      onNodeContextMenu={onNodeContextMenu}
       onNodeMouseEnter={onNodeMouseEnter}
       onNodeMouseLeave={onNodeMouseLeave}
       onEdgeMouseEnter={(_e, edge: Edge) =>
@@ -686,6 +775,14 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
         }
       />
     </ReactFlow>
+    {contextMenu && menuItems.length > 0 && (
+      <ContextMenu
+        x={contextMenu.x}
+        y={contextMenu.y}
+        items={menuItems}
+        onClose={closeContextMenu}
+      />
+    )}
     </div>
     </FoldAnchorContext.Provider>
   );

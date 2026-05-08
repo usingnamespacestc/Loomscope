@@ -32,6 +32,17 @@ const SESSION_ID_RE =
 const forkSchema = z.object({
   upToMessageId: z.string().optional(),
   title: z.string().optional(),
+  // PR 2 of fork-UX rework: when forking from an off-chain ChatNode
+  // (user right-clicked a sibling-fork node in the merged-closure
+  // canvas view), upToMessageId lives in the SIBLING jsonl, not the
+  // URL :id session's. Frontend already knows which session owns the
+  // node via ChatNode.contributingSessions, so it passes that here.
+  // Server uses sourceSessionId for forkSession when set; otherwise
+  // falls back to URL :id (the on-chain fork case).
+  sourceSessionId: z
+    .string()
+    .regex(SESSION_ID_RE)
+    .optional(),
 });
 
 export function forkRouter() {
@@ -44,8 +55,9 @@ export function forkRouter() {
     async (c) => {
       const { id } = c.req.valid("param");
       const body = c.req.valid("json");
+      const sourceSid = body.sourceSessionId ?? id;
       try {
-        const result = await forkSession(id, {
+        const result = await forkSession(sourceSid, {
           upToMessageId: body.upToMessageId,
           title: body.title,
         });
