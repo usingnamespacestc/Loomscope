@@ -100,11 +100,20 @@ describe("sdkChannelSlice — respawn notice", () => {
   // queue-state. The frontend MUST keep the respawnNotice alive
   // through the close so the composer banner doesn't blink off
   // mid-respawn. This test pins that contract.
-  it("clearSdkSession preserves respawnNotice when set (mid-respawn close)", () => {
+  it("clearSdkSession preserves respawnNotice + pendingPrompts when set (mid-respawn close)", () => {
+    const pending = [
+      {
+        id: "p-1",
+        text: "queued",
+        imageCount: 0,
+        priority: "next" as const,
+        createdAt: 0,
+      },
+    ];
     useStore.getState().applySdkQueueState(SID_A, {
       state: "running",
       currentRun: { promptItemId: "x", startedAt: 0 },
-      pendingPrompts: [],
+      pendingPrompts: pending,
     });
     useStore.getState().setSdkError(SID_A, "stale-error");
     useStore.getState().setRespawnNotice(SID_A, {
@@ -116,8 +125,12 @@ describe("sdkChannelSlice — respawn notice", () => {
     useStore.getState().clearSdkSession(SID_A);
 
     const after = getInflight(useStore.getState(), SID_A);
-    // Notice survives.
+    // Notice survives — composer banner stays visible.
     expect(after.respawnNotice).toEqual({ startedAt: 1, reason: "per-send" });
+    // Pendings survive — the user's PendingBubble doesn't flicker off
+    // during the close→spawn window. Server-side respawnPreservingQueue
+    // keeps the queue intact; frontend mirrors that.
+    expect(after.pendingPrompts).toEqual(pending);
     // Queue/error state is reset (the old Query is gone).
     expect(after.state).toBe("idle");
     expect(after.lastError).toBeNull();

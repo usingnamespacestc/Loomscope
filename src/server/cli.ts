@@ -29,7 +29,22 @@ async function main(): Promise<void> {
   // for graceful-degradation semantics.
   // Prime the in-memory cache; routes use `getCurrentSecret` so a
   // mid-run rotate-secret takes effect without restart.
-  await getOrCreateSecret();
+  const bootSecret = await getOrCreateSecret();
+  // Re-export into our own process env (idempotent — overwrites any
+  // stale value) so Loomscope-spawned CC subprocesses (via SDK
+  // `query()` in SessionRegistry) inherit it automatically. Without
+  // this, when the user runs `npm run dev:server` from a shell that
+  // didn't source ~/.bashrc, both this server AND every CC child
+  // it spawns lack LOOMSCOPE_SECRET — every hook fire then resolves
+  // `$LOOMSCOPE_SECRET` to "" and the secret-validating middleware
+  // 403s the entire cc-hook bus, so PermissionRequest banners /
+  // PreToolUse activity / SessionStart pings never reach the
+  // browser. Terminal-side CC instances the user starts manually
+  // are independent — they need their own shell-rc export, which
+  // the onboarding modal already prompts for.
+  if (!process.env.LOOMSCOPE_SECRET) {
+    process.env.LOOMSCOPE_SECRET = bootSecret;
+  }
 
   // v1.0 ship prep: detect a built frontend bundle. If `dist/` exists
   // next to the cwd, serve it (production mode = single process for

@@ -452,6 +452,33 @@ export class SessionRegistry {
         resume: sessionId,
         env: childEnv,
         permissionMode: this.opts.permissionMode,
+        // ──────────────────────────────────────────────────────────
+        // CRITICAL for hooks: SDK's `query()` defaults
+        // `settingSources` to `[]` (empty), which means NO
+        // settings.json sources are loaded into the spawned CC —
+        // so user/project/local hooks (PreToolUse / PostToolUse /
+        // SessionStart / TaskCreated / etc.) DO NOT fire. The
+        // `sdk.d.ts` comment claims "When omitted, all sources are
+        // loaded" but the actual minified runtime is
+        // `settingSources ?? []` — the doc is wrong.
+        //
+        // Loomscope's whole observability story (cc-hook events
+        // reaching the browser SSE bus) depends on hooks firing,
+        // so we explicitly pass the full source set. This matches
+        // CLI behavior — terminal-launched `claude` reads all three
+        // — and is why terminal CC fires hooks but SDK-spawn CC
+        // never did before this fix.
+        // ──────────────────────────────────────────────────────────
+        settingSources: ["user", "project", "local"],
+        // bypassPermissions requires this opt-in flag per the SDK
+        // contract: "Must be set to `true` when using
+        // `permissionMode: 'bypassPermissions'`". Without it, the
+        // SDK silently downgrades to default permissionMode (which
+        // in non-TTY context = silent deny on every tool that needs
+        // approval). User has explicitly chosen bypassPermissions
+        // via Settings → v∞ tab; respecting that intent.
+        allowDangerouslySkipPermissions:
+          this.opts.permissionMode === "bypassPermissions",
       },
     });
     entry.query = query;

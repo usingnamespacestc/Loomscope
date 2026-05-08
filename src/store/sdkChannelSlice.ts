@@ -123,7 +123,16 @@ export const createSdkChannelSlice: StateCreator<
       m.set(sessionId, {
         state: "idle",
         currentRun: null,
-        pendingPrompts: [],
+        // PR fix-a: preserve pendingPrompts too. Between sdk-session-
+        // closed and the next sdk-queue-state(running, pendings=[])
+        // arrival, the registry's `respawnPreservingQueue` keeps the
+        // server-side pending list intact. If the frontend wipes them
+        // here, the user's PendingBubble flickers off for the spawn
+        // window (~hundreds of ms), making "send" feel like nothing
+        // happened. Keeping them visible until the next queue-state
+        // overwrites with the post-dispatch state matches the
+        // server's actual behaviour.
+        pendingPrompts: cur.pendingPrompts,
         lastError: null,
         respawnNotice: cur.respawnNotice,
       });
