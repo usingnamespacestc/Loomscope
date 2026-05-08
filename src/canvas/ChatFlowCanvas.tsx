@@ -357,29 +357,36 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     const upToMessageId = cn.userMessage.uuid;
 
     const items: ContextMenuItem[] = [];
-    items.push({
-      key: "fork-from-here",
-      label: t("canvas.context_menu.fork_from_here"),
-      description: t("canvas.context_menu.fork_from_here_hint"),
-      onClick: async () => {
-        const r = await postFork(sessionId, {
-          upToMessageId,
-          sourceSessionId: sourceSid,
-        });
-        if ("error" in r) {
-          // Fork errors land here; for now just console — a toast
-          // system would slot in cleanly when one exists.
-          // eslint-disable-next-line no-console
-          console.error("[loomscope:fork] failed:", r.error);
-          return;
-        }
-        // chokidar should pick up the new jsonl within ~1 RAF and
-        // populate the workspace. setActiveSession schedules the
-        // switch — first paint may briefly show empty state until
-        // the new chatFlow loads, that's expected.
-        setActiveSession(r.sessionId);
-      },
-    });
+    if (onActiveChain) {
+      // Fork from a node ON the active chain: source = active session,
+      // intent is unambiguous ("I'm working in session A, branch from
+      // this point on A's chain"). Off-chain nodes deliberately omit
+      // this item — forking from a gray sibling-fork node would
+      // create a new session that descends from a session the user
+      // isn't currently viewing, which is confusing + easy to mis-
+      // trigger. The user is expected to jump-to-source first, then
+      // fork from there if needed.
+      items.push({
+        key: "fork-from-here",
+        label: t("canvas.context_menu.fork_from_here"),
+        description: t("canvas.context_menu.fork_from_here_hint"),
+        onClick: async () => {
+          const r = await postFork(sessionId, { upToMessageId });
+          if ("error" in r) {
+            // Fork errors land here; for now just console — a toast
+            // system would slot in cleanly when one exists.
+            // eslint-disable-next-line no-console
+            console.error("[loomscope:fork] failed:", r.error);
+            return;
+          }
+          // chokidar should pick up the new jsonl within ~1 RAF and
+          // populate the workspace. setActiveSession schedules the
+          // switch — first paint may briefly show empty state until
+          // the new chatFlow loads, that's expected.
+          setActiveSession(r.sessionId);
+        },
+      });
+    }
     if (sourceSid) {
       items.push({
         key: "jump-to-source",
