@@ -248,7 +248,11 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
           lazy Composer chunk until the user actually needs it. */}
       {tab === "conversation" && (
         <Suspense fallback={null}>
-          <Composer onResize={adjustScrollForComposer} />
+          <Composer
+            sessionId={sessionId}
+            cwd={chatFlow.cwd ?? ""}
+            onResize={adjustScrollForComposer}
+          />
         </Suspense>
       )}
     </aside>

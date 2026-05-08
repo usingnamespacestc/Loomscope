@@ -72,8 +72,10 @@
   },
   "composer": {
     "placeholder_input": "Type a message… (Enter to send, Shift+Enter for newline)",
-    "placeholder_notice": "v∞.1 write path not yet wired — composer is a UI placeholder",
     "send_tooltip": "Send (Enter — Shift+Enter for newline)",
+    "stop_tooltip": "Stop the current turn",
+    "stop_and_send_tooltip": "Stop and send immediately (now priority)",
+    "queue_count": "{{count}} queued",
     "attach_tooltip": "Add image (paste / drag / click)",
     "attach_remove": "Remove",
     "drop_hint": "Drop to attach image",

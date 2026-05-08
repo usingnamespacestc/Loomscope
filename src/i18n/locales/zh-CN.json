@@ -72,8 +72,10 @@
   },
   "composer": {
     "placeholder_input": "输入消息…（Enter 发送，Shift+Enter 换行）",
-    "placeholder_notice": "v∞.1 写功能未接通，输入框先做 UI 占位",
     "send_tooltip": "Enter 发送（Shift+Enter 换行）",
+    "stop_tooltip": "中断当前 turn",
+    "stop_and_send_tooltip": "中断并立刻发送（now 优先级）",
+    "queue_count": "{{count}} 条排队中",
     "attach_tooltip": "添加图片（粘贴 / 拖拽 / 点击选择）",
     "attach_remove": "移除",
     "drop_hint": "放开以添加图片",

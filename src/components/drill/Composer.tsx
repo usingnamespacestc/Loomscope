@@ -41,6 +41,10 @@ import {
 import type { PointerEvent as RPointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 
+import { postInterrupt, postTurn } from "@/api/turns";
+import { useStore } from "@/store/index";
+import { getInflight } from "@/store/sdkChannelSlice";
+
 const MIN_HEIGHT = 96;
 const MAX_HEIGHT = 480;
 const DEFAULT_HEIGHT = 140;
@@ -73,9 +77,13 @@ const DEFAULT_SETTINGS: ComposerSettings = {
 };
 
 interface Props {
-  // Disabled while SDK isn't wired. When eventually true, Send becomes
-  // active and clears + dispatches the typed text. v∞.1 will flip it.
-  disabled?: boolean;
+  // Currently active session id. Required for the v∞.2 wiring —
+  // submit / interrupt / cancel all hit /api/sessions/:sid/...
+  sessionId: string;
+  // Working directory of the session. Passed back to the server on
+  // every POST /turns so SessionRegistry can spawn (or reuse) a
+  // Query rooted at the right directory.
+  cwd: string;
   // Placeholder override for callers that want a custom hint.
   placeholder?: string;
   // Notification of height changes during drag. Parent uses this to
@@ -102,7 +110,12 @@ interface AttachmentItem {
 // below to leave headroom for prompt + other blocks.
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
-export function Composer({ disabled = true, placeholder, onResize }: Props) {
+export function Composer({
+  sessionId,
+  cwd,
+  placeholder,
+  onResize,
+}: Props) {
   const { t } = useTranslation();
   const [height, setHeight] = useState<number>(() => loadHeight());
   const [text, setText] = useState("");
@@ -195,30 +208,69 @@ export function Composer({ disabled = true, placeholder, onResize }: Props) {
     }
   }, []);
 
+  // Inflight state for THIS session. Drives button variant (idle vs
+  // running) and surfaces lastError as an inline message.
+  const inflight = useStore((s) => getInflight(s, sessionId));
+  const setSdkError = useStore((s) => s.setSdkError);
+  const isRunning = inflight.state === "running";
+
   // Attachments alone (no text) can be a valid prompt — the model can
   // still respond to "describe this image" implicitly. claude.ai
-  // allows it; mirror. Note `disabled` is NOT a gate here on
-  // purpose: when the SDK isn't wired yet (v∞.1 placeholder mode),
-  // we still want users to type, paste, drag images, and click Send
-  // to feel out the UX. Send becomes a console.log no-op in that
-  // mode; the disclaimer below the card explains.
+  // allows it; mirror.
   const canSend = text.trim().length > 0 || attachments.length > 0;
 
-  const onSend = () => {
-    if (!canSend) return;
-    // v∞.1 replaces this with the actual SDK query dispatch.
-    console.log("[loomscope:composer] submit (placeholder):", {
-      text,
-      attachments: attachments.map((a) => ({
-        mediaType: a.mediaType,
-        sizeBytes: a.sizeBytes,
-        name: a.name,
-      })),
-      settings,
-    });
-    setText("");
-    setAttachments([]);
-  };
+  // Optimistic clear: textarea + attachments empty out immediately
+  // on submit, the API call runs in the background. If it fails,
+  // restore both so the user can retry. Matches Slack/Discord ux —
+  // network blip shouldn't lose the typed prompt.
+  const sendWithPriority = useCallback(
+    async (priority: "now" | "next" | "later") => {
+      if (!canSend) return;
+      const snapshotText = text;
+      const snapshotAttachments = attachments;
+      setText("");
+      setAttachments([]);
+      setSdkError(sessionId, null);
+      const r = await postTurn(sessionId, {
+        text: snapshotText,
+        cwd,
+        images: snapshotAttachments.map((a) => ({
+          mediaType: a.mediaType,
+          base64: a.base64,
+        })),
+        priority,
+      });
+      if (!("ok" in r) || r.ok !== true) {
+        // Restore typed content + record error for inline display.
+        setText(snapshotText);
+        setAttachments(snapshotAttachments);
+        setSdkError(
+          sessionId,
+          "error" in r ? r.error : "send failed",
+        );
+      }
+    },
+    [canSend, text, attachments, sessionId, cwd, setSdkError],
+  );
+
+  const onSendDefault = useCallback(() => {
+    void sendWithPriority("next");
+  }, [sendWithPriority]);
+
+  const onStopAndSend = useCallback(() => {
+    void sendWithPriority("now");
+  }, [sendWithPriority]);
+
+  const onStop = useCallback(async () => {
+    setSdkError(sessionId, null);
+    const r = await postInterrupt(sessionId);
+    if (!("ok" in r) || r.ok !== true) {
+      setSdkError(
+        sessionId,
+        "error" in r ? r.error : "interrupt failed",
+      );
+    }
+  }, [sessionId, setSdkError]);
 
   const ingestFiles = useCallback(async (files: File[]) => {
     const next: AttachmentItem[] = [];
@@ -323,7 +375,12 @@ export function Composer({ disabled = true, placeholder, onResize }: Props) {
       !e.nativeEvent.isComposing
     ) {
       e.preventDefault();
-      onSend();
+      // Enter ALWAYS submits with `next` priority — never an
+      // automatic interrupt. While a turn is running, the prompt
+      // queues at the head and runs after the current turn
+      // finishes. Users who want to abort + send must click the
+      // explicit ⚡ button (Stop & Send / now priority).
+      onSendDefault();
     }
   };
 
@@ -474,23 +531,71 @@ export function Composer({ disabled = true, placeholder, onResize }: Props) {
                 />
               )}
 
-              <button
-                type="button"
-                data-testid="composer-send"
-                disabled={!canSend}
-                onClick={onSend}
-                title={t("composer.send_tooltip")}
-                className="flex h-7 w-7 items-center justify-center rounded-full bg-gray-900 text-white transition-colors hover:bg-gray-700 disabled:bg-gray-200 disabled:text-gray-400"
-              >
-                <ArrowUpIcon />
-              </button>
+              {/* Idle: single ↑ submit (next priority).
+                  Running: ⏸ stop (interrupt only) + ⚡ stop-and-send
+                  (now priority). The ⚡ button is hidden when there's
+                  nothing typed — interrupting without a follow-up is
+                  what ⏸ is for. */}
+              {!isRunning ? (
+                <button
+                  type="button"
+                  data-testid="composer-send"
+                  disabled={!canSend}
+                  onClick={onSendDefault}
+                  title={t("composer.send_tooltip")}
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-gray-900 text-white transition-colors hover:bg-gray-700 disabled:bg-gray-200 disabled:text-gray-400"
+                >
+                  <ArrowUpIcon />
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    data-testid="composer-stop"
+                    onClick={onStop}
+                    title={t("composer.stop_tooltip")}
+                    className="flex h-7 w-7 items-center justify-center rounded-full bg-gray-200 text-gray-700 transition-colors hover:bg-gray-300"
+                  >
+                    <StopIcon />
+                  </button>
+                  {canSend && (
+                    <button
+                      type="button"
+                      data-testid="composer-stop-and-send"
+                      onClick={onStopAndSend}
+                      title={t("composer.stop_and_send_tooltip")}
+                      className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-500 text-white transition-colors hover:bg-rose-600"
+                    >
+                      <BoltIcon />
+                    </button>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </div>
 
-        {disabled && (
-          <div className="mt-1 px-2 text-center text-[10px] italic text-gray-400">
-            {t("composer.placeholder_notice")}
+        {/* Inline error from the last failed API call. Cleared on
+            next successful send / stop. */}
+        {inflight.lastError && (
+          <div
+            data-testid="composer-error"
+            className="mt-1 px-2 text-center text-[10px] text-rose-600"
+          >
+            {inflight.lastError}
+          </div>
+        )}
+
+        {/* Pending count: when the queue has items waiting (above
+            and beyond the in-flight turn), surface a tiny status
+            line so users know their typing went somewhere. The
+            full pending-bubble UI lands in PR 3; this is a stop-
+            gap signal until then. */}
+        {inflight.pendingPrompts.length > 0 && (
+          <div className="mt-1 px-2 text-center text-[10px] italic text-gray-500">
+            {t("composer.queue_count", {
+              count: inflight.pendingPrompts.length,
+            })}
           </div>
         )}
       </div>
@@ -652,6 +757,28 @@ function ArrowUpIcon() {
     >
       <line x1="12" y1="19" x2="12" y2="5" />
       <polyline points="5 12 12 5 19 12" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+      <rect x="6" y="6" width="12" height="12" rx="1.5" />
+    </svg>
+  );
+}
+
+function BoltIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      stroke="none"
+    >
+      <path d="M13 2 L4 14 L11 14 L11 22 L20 10 L13 10 Z" />
     </svg>
   );
 }

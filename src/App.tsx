@@ -147,6 +147,63 @@ export default function App() {
         console.error("[loomscope] sse cc-hook parse failed:", err);
       }
     });
+    // v∞.2: SDK channel events. SessionRegistry on the server emits
+    // these whenever a turn enqueues / runs / completes. Three event
+    // types — queue-state (snapshot), sdk-message (per-frame stream),
+    // session-closed (registry dropped this entry).
+    es.addEventListener("sdk-queue-state", (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          sessionId: string;
+          state: "idle" | "running";
+          currentRun: { promptItemId: string; startedAt: number } | null;
+          pendingPrompts: Array<{
+            id: string;
+            text: string;
+            imageCount: number;
+            priority: "now" | "next" | "later";
+            createdAt: number;
+          }>;
+        };
+        if (payload.sessionId !== activeId) return;
+        useStore.getState().applySdkQueueState(activeId, {
+          state: payload.state,
+          currentRun: payload.currentRun,
+          pendingPrompts: payload.pendingPrompts,
+        });
+      } catch (err) {
+        console.error("[loomscope] sse sdk-queue-state parse failed:", err);
+      }
+    });
+    es.addEventListener("sdk-session-closed", (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          sessionId: string;
+        };
+        if (payload.sessionId !== activeId) return;
+        useStore.getState().clearSdkSession(activeId);
+      } catch {
+        /* ignore */
+      }
+    });
+    // sdk-message: every SDKMessage frame. We don't keep a log here
+    // (the jsonl file watcher path persists everything); we just bump
+    // session activity so the running pulse stays lit even when
+    // there's no jsonl-write between consecutive frames.
+    es.addEventListener("sdk-message", (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          type: string;
+        };
+        useStore.getState().markSessionActivity(activeId);
+        // Future: route specific message types to UI (e.g. surface
+        // SDKRateLimitEvent.retryAt for the auto-retry timer).
+        void payload; // silence unused-var until we route specific types
+      } catch {
+        /* ignore */
+      }
+    });
+
     es.addEventListener("hello", () => {
       // Belt-and-suspenders: some browsers fire onopen before the
       // hello frame arrives; mark open on either signal.
