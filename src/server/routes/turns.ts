@@ -12,12 +12,18 @@
 // the current turn and pre-empts pending items with the new prompt.
 // No separate endpoint needed.
 
+import { promises as fsp } from "node:fs";
+import * as path from "node:path";
+import * as readline from "node:readline";
+import { createReadStream } from "node:fs";
+
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 
 import { forkSession } from "@anthropic-ai/claude-agent-sdk";
 
+import { findForkClosure } from "@/server/services/forkTree";
 import type { SessionRegistry } from "@/server/services/sessionRegistry";
 
 const SESSION_ID_RE =
@@ -52,6 +58,14 @@ const turnSchema = z.object({
 
 export interface TurnsRouterOptions {
   registry: SessionRegistry;
+  /** Root of `~/.claude/projects` — needed by the auto-fork path
+   *  to resolve which jsonl in the entry's fork closure actually
+   *  contains the requested upToMessageId. Without this, fork
+   *  requests pointing at a record that lives in a sibling jsonl
+   *  (= when Loomscope's canvas merged closure ChatNodes into the
+   *  active session view) would 500 because SDK forkSession
+   *  reads only the named sid's jsonl. */
+  rootDir: string;
 }
 
 export function turnsRouter(opts: TurnsRouterOptions) {
@@ -74,10 +88,30 @@ export function turnsRouter(opts: TurnsRouterOptions) {
       // from a non-leaf ChatNode. Slice the transcript via SDK's
       // forkSession, then redirect the rest of this request onto the
       // fork's session id so the new turn lands on the new branch.
+      //
+      // Cross-closure resolution: the active session id (URL :id)
+      // may not actually own the upToMessageId record — Loomscope's
+      // canvas merges fork closure ChatNodes into one view, so a
+      // user clicking a closure-extra ChatNode hands us a uuid that
+      // lives in a sibling jsonl. Walk the closure to find which
+      // member's jsonl contains it; fork from THAT member.
       let forkedSessionId: string | null = null;
       if (body.forkFrom) {
+        const sourceSid = await resolveForkSourceSession(
+          opts.rootDir,
+          id,
+          body.forkFrom.upToMessageId,
+        );
+        if (!sourceSid) {
+          return c.json(
+            {
+              error: `fork failed: upToMessageId not found in any closure member of ${id}`,
+            },
+            400,
+          );
+        }
         try {
-          const r = await forkSession(id, {
+          const r = await forkSession(sourceSid, {
             upToMessageId: body.forkFrom.upToMessageId,
             title: body.forkFrom.title,
           });
@@ -145,4 +179,95 @@ export function turnsRouter(opts: TurnsRouterOptions) {
   );
 
   return app;
+}
+
+// Locate the jsonl path for a given session id by scanning project
+// dirs under rootDir. Returns null if not found. (Inlined from
+// sessions.ts where it lives as a private helper — could be hoisted
+// to workspaceScanner if a third caller appears.)
+async function locateSessionJsonl(
+  rootDir: string,
+  sessionId: string,
+): Promise<string | null> {
+  let entries: string[];
+  try {
+    entries = await fsp.readdir(rootDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  for (const dir of entries) {
+    const candidate = path.join(rootDir, dir, `${sessionId}.jsonl`);
+    const stat = await fsp.stat(candidate).catch(() => null);
+    if (stat?.isFile()) return candidate;
+  }
+  return null;
+}
+
+// Walk the entry session's fork closure (incl. parent sessions
+// reachable via forkedFrom + child sessions via inverse map) and
+// find which jsonl contains the requested record uuid. Returns the
+// session id of the matching jsonl, or null if no closure member
+// has it.
+//
+// Used when the user composes from a ChatNode whose physical record
+// lives in a sibling jsonl rather than the active session's own
+// jsonl (e.g. closure-merged canvas view). Without this resolution,
+// SDK forkSession would try to read the wrong jsonl and 500.
+async function resolveForkSourceSession(
+  rootDir: string,
+  entrySessionId: string,
+  upToMessageId: string,
+): Promise<string | null> {
+  const entryJsonl = await locateSessionJsonl(rootDir, entrySessionId);
+  if (!entryJsonl) return null;
+  const projectDir = path.dirname(entryJsonl);
+  const closure = await findForkClosure({ projectDir, entrySessionId });
+  // Closure can be empty for non-fork sessions (just the entry); the
+  // entry jsonl IS the only candidate then. findForkClosure usually
+  // returns the entry as element 0; still scan in case ordering
+  // changes.
+  const candidates =
+    closure.length > 0
+      ? closure.map((m) => ({ sid: m.sessionId, path: m.jsonlPath }))
+      : [{ sid: entrySessionId, path: entryJsonl }];
+  // Try the entry first (most common case), then sibling members.
+  candidates.sort((a, b) => (a.sid === entrySessionId ? -1 : b.sid === entrySessionId ? 1 : 0));
+  for (const cand of candidates) {
+    if (await jsonlContainsUuid(cand.path, upToMessageId)) {
+      return cand.sid;
+    }
+  }
+  return null;
+}
+
+// Stream-scan a jsonl line by line for a record whose `uuid` matches
+// `target`. Returns true on first match. Cheap when the record is
+// near the head of the file; bounded full scan when not. We don't
+// JSON.parse — just substring-match `"uuid":"<target>"` because the
+// target is a UUID with hyphens (no escaping concerns).
+async function jsonlContainsUuid(
+  jsonlPath: string,
+  target: string,
+): Promise<boolean> {
+  const needle = `"uuid":"${target}"`;
+  return new Promise((resolve, reject) => {
+    let stream: ReturnType<typeof createReadStream> | null = null;
+    try {
+      stream = createReadStream(jsonlPath, { encoding: "utf8" });
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const rl = readline.createInterface({ input: stream });
+    rl.on("line", (line) => {
+      if (line.includes(needle)) {
+        rl.close();
+        stream?.destroy();
+        resolve(true);
+      }
+    });
+    rl.on("close", () => resolve(false));
+    rl.on("error", (err) => reject(err));
+  });
 }

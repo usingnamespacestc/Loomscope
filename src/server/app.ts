@@ -106,7 +106,10 @@ export function createApp(opts: AppOptions) {
       registry.setPermissionMode(p.permissionMode);
     });
   }
-  app.route("/api/sessions", turnsRouter({ registry }));
+  app.route(
+    "/api/sessions",
+    turnsRouter({ registry, rootDir: opts.rootDir }),
+  );
   app.route("/api/sessions", forkRouter());
   app.route("/api/preferences", preferencesRouter({ registry }));
   // v∞.0 PR 3: parse allowedOrigin to recover the listening port —
