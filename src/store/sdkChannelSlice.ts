@@ -106,7 +106,32 @@ export const createSdkChannelSlice: StateCreator<
   },
 
   clearSdkSession: (sessionId) => {
-    if (!get().inflightBySession.has(sessionId)) return;
+    const cur = get().inflightBySession.get(sessionId);
+    if (!cur) return;
+    // Race-mitigation respawn path: SessionRegistry's
+    // `respawnPreservingQueue` calls close() which broadcasts
+    // sdk-session-closed RIGHT BEFORE the new spawn fires its first
+    // sdk-queue-state. If we full-clear the entry here, the
+    // respawnNotice we set milliseconds earlier (from the
+    // sdk-respawn-notice event) gets wiped and the composer banner
+    // never visibly appears. Treat session-closed as transient when
+    // a respawn is mid-flight: reset queue state but PRESERVE the
+    // notice so the banner survives until the new Query's first
+    // sdk-message arrival clears it normally.
+    if (cur.respawnNotice) {
+      const m = new Map(get().inflightBySession);
+      m.set(sessionId, {
+        state: "idle",
+        currentRun: null,
+        pendingPrompts: [],
+        lastError: null,
+        respawnNotice: cur.respawnNotice,
+      });
+      set({ inflightBySession: m });
+      return;
+    }
+    // Genuine close (idle eviction, shutdown, abnormal subprocess
+    // exit) — drop the entry entirely so no stale state lingers.
     const m = new Map(get().inflightBySession);
     m.delete(sessionId);
     set({ inflightBySession: m });

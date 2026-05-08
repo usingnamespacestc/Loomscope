@@ -93,4 +93,45 @@ describe("sdkChannelSlice — respawn notice", () => {
       reason: "staleness-detected",
     });
   });
+
+  // Respawn-aware close: when the registry closes a Query for the
+  // sake of immediately respawning (per-send / staleness-detected),
+  // the SSE order is sdk-respawn-notice → sdk-session-closed → new
+  // queue-state. The frontend MUST keep the respawnNotice alive
+  // through the close so the composer banner doesn't blink off
+  // mid-respawn. This test pins that contract.
+  it("clearSdkSession preserves respawnNotice when set (mid-respawn close)", () => {
+    useStore.getState().applySdkQueueState(SID_A, {
+      state: "running",
+      currentRun: { promptItemId: "x", startedAt: 0 },
+      pendingPrompts: [],
+    });
+    useStore.getState().setSdkError(SID_A, "stale-error");
+    useStore.getState().setRespawnNotice(SID_A, {
+      startedAt: 1,
+      reason: "per-send",
+    });
+
+    // session-closed fires from the registry's close() during respawn.
+    useStore.getState().clearSdkSession(SID_A);
+
+    const after = getInflight(useStore.getState(), SID_A);
+    // Notice survives.
+    expect(after.respawnNotice).toEqual({ startedAt: 1, reason: "per-send" });
+    // Queue/error state is reset (the old Query is gone).
+    expect(after.state).toBe("idle");
+    expect(after.lastError).toBeNull();
+    expect(after.currentRun).toBeNull();
+  });
+
+  it("clearSdkSession drops the entry entirely when no respawn notice", () => {
+    useStore.getState().applySdkQueueState(SID_A, {
+      state: "running",
+      currentRun: { promptItemId: "x", startedAt: 0 },
+      pendingPrompts: [],
+    });
+    useStore.getState().clearSdkSession(SID_A);
+    // Map entry is gone — no stale "idle empty" carcass left behind.
+    expect(useStore.getState().inflightBySession.has(SID_A)).toBe(false);
+  });
 });
