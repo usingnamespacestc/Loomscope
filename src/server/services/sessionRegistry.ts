@@ -327,11 +327,28 @@ export class SessionRegistry {
 
     // Start the Query with the AsyncIterable input form so we can
     // streamInput multiple turns through the same Query.
+    //
+    // ── auth: prefer subscription (OAuth) over API key billing ──
+    // The spawned `claude` binary picks `ANTHROPIC_API_KEY` env over
+    // `~/.claude/.credentials.json` when both are present, which
+    // silently shifts billing from the user's claude.ai subscription
+    // to per-token API credits. Loomscope server may inherit
+    // `ANTHROPIC_API_KEY` (e.g. when launched via `npm run dev`
+    // nested inside an existing Claude Code session, or simply
+    // because the user exported it for unrelated tooling). Strip it
+    // here so the default path is OAuth/subscription. Users who
+    // genuinely want API-key billing can set `LOOMSCOPE_USE_API_KEY=
+    // 1` to opt back in (TBD: Settings UI for this in a later PR).
+    const childEnv = { ...process.env };
+    if (process.env.LOOMSCOPE_USE_API_KEY !== "1") {
+      delete childEnv.ANTHROPIC_API_KEY;
+    }
     const query = this.opts.queryFactory({
       prompt: pumpController.iterable(),
       options: {
         cwd,
         resume: sessionId,
+        env: childEnv,
       },
     });
     entry.query = query;
