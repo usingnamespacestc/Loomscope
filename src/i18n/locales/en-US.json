@@ -100,7 +100,9 @@
     "fast_chip_tooltip": "Fast mode enabled",
     "effort_chip_tooltip": "Reasoning effort: {{level}}",
     "blocked_non_leaf": "Selected node isn't this chain's leaf — right-click → \"fork from here\" to continue.",
-    "blocked_offchain": "Selected node lives on session {{sid}} — right-click → \"jump to source session\"."
+    "blocked_offchain": "Selected node lives on session {{sid}} — right-click → \"jump to source session\".",
+    "respawning_per_send": "Spawning a fresh SDK Query (race protection)",
+    "respawning_staleness": "External write detected — respawning SDK to sync file state"
   },
   "effective_context": {
     "placeholder_no_node": "Pick a ChatNode to see the inbound context it actually receives (after auto-compact truncation)",

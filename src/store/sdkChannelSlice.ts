@@ -31,6 +31,8 @@ export interface SdkPendingPrompt {
   createdAt: number;
 }
 
+export type RespawnReason = "per-send" | "staleness-detected";
+
 export interface SdkInflight {
   state: SdkSessionState;
   currentRun: { promptItemId: string; startedAt: number } | null;
@@ -38,6 +40,14 @@ export interface SdkInflight {
   // Last error from a failed POST (network / 4xx). Cleared on next
   // successful action. Composer renders this inline.
   lastError: string | null;
+  /** Server announced a respawn (close + fresh spawn) before
+   *  dispatching the next turn — see
+   *  `docs/dual-writer-race-mitigation.md`. Composer renders a brief
+   *  banner so the user understands the few-hundred-ms latency
+   *  bump. Auto-cleared on the next `sdk-message` arrival (= the
+   *  fresh Query produced output) or by a 10s timeout, whichever
+   *  fires first. Null when no respawn is in flight. */
+  respawnNotice: { startedAt: number; reason: RespawnReason } | null;
 }
 
 const EMPTY_INFLIGHT: SdkInflight = {
@@ -45,6 +55,7 @@ const EMPTY_INFLIGHT: SdkInflight = {
   currentRun: null,
   pendingPrompts: [],
   lastError: null,
+  respawnNotice: null,
 };
 
 export interface SdkChannelSlice {
@@ -62,6 +73,14 @@ export interface SdkChannelSlice {
   clearSdkSession: (sessionId: string) => void;
   // Set/clear an inline error message after a failed API call.
   setSdkError: (sessionId: string, message: string | null) => void;
+  // Race-mitigation respawn notice (see docs/dual-writer-race-
+  // mitigation.md). Set on `sdk-respawn-notice` SSE arrival;
+  // cleared on next `sdk-message` arrival or 10s timeout, both
+  // driven from App.tsx.
+  setRespawnNotice: (
+    sessionId: string,
+    notice: { startedAt: number; reason: RespawnReason } | null,
+  ) => void;
 }
 
 export const createSdkChannelSlice: StateCreator<
@@ -79,6 +98,7 @@ export const createSdkChannelSlice: StateCreator<
       currentRun: payload.currentRun,
       pendingPrompts: payload.pendingPrompts,
       lastError: cur.lastError, // queue-state events don't override errors
+      respawnNotice: cur.respawnNotice, // ditto for the race banner
     };
     const m = new Map(get().inflightBySession);
     m.set(sessionId, next);
@@ -96,6 +116,17 @@ export const createSdkChannelSlice: StateCreator<
     const cur = get().inflightBySession.get(sessionId) ?? EMPTY_INFLIGHT;
     const m = new Map(get().inflightBySession);
     m.set(sessionId, { ...cur, lastError: message });
+    set({ inflightBySession: m });
+  },
+
+  setRespawnNotice: (sessionId, notice) => {
+    const cur = get().inflightBySession.get(sessionId);
+    // Skip allocation when clearing a session that was never set —
+    // common case: every `sdk-message` arrival fires a clear, and
+    // most sessions never had a notice set.
+    if (!cur && notice === null) return;
+    const m = new Map(get().inflightBySession);
+    m.set(sessionId, { ...(cur ?? EMPTY_INFLIGHT), respawnNotice: notice });
     set({ inflightBySession: m });
   },
 });

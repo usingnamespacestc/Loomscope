@@ -664,6 +664,28 @@ export function Composer({
               : t("composer.blocked_non_leaf")}
           </div>
         )}
+        {/* Race-mitigation respawn notice (see
+            docs/dual-writer-race-mitigation.md). Shown briefly while
+            SessionRegistry closes + respawns the SDK Query before
+            dispatching the next turn. Auto-clears on next sdk-message
+            arrival (App.tsx) or 10s timeout. Slate-50 bg / sky-700
+            text — distinct from the amber composer-blocked hint and
+            the rose lastError, so users can tell at a glance which
+            kind of "transient state" the composer is in. */}
+        {inflight.respawnNotice && (
+          <div
+            data-testid="composer-respawn-notice"
+            data-reason={inflight.respawnNotice.reason}
+            className="mt-1 px-2 text-center text-[10px] text-sky-700"
+          >
+            <span className="inline-flex items-center gap-1 rounded bg-sky-50 px-1.5 py-0.5">
+              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-sky-400" />
+              {inflight.respawnNotice.reason === "staleness-detected"
+                ? t("composer.respawning_staleness")
+                : t("composer.respawning_per_send")}
+            </span>
+          </div>
+        )}
         {/* Pending count line was removed in PR 3 — full pending
             bubble UI now renders inline in ConversationView's path
             tail (showPendingQueue prop). */}

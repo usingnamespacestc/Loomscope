@@ -190,17 +190,57 @@ export default function App() {
     // (the jsonl file watcher path persists everything); we just bump
     // session activity so the running pulse stays lit even when
     // there's no jsonl-write between consecutive frames.
+    //
+    // Also doubles as the early-clear signal for any in-flight
+    // respawn notice — the fresh Query produced output, so the
+    // "spawning…" banner can come down even before the 10s timeout.
     es.addEventListener("sdk-message", (ev) => {
       try {
         const payload = JSON.parse((ev as MessageEvent).data) as {
           type: string;
         };
         useStore.getState().markSessionActivity(activeId);
+        useStore.getState().setRespawnNotice(activeId, null);
         // Future: route specific message types to UI (e.g. surface
         // SDKRateLimitEvent.retryAt for the auto-retry timer).
         void payload; // silence unused-var until we route specific types
       } catch {
         /* ignore */
+      }
+    });
+
+    // sdk-respawn-notice: emitted by SessionRegistry's race-
+    // mitigation path before close+respawn. Composer renders a brief
+    // banner (see docs/dual-writer-race-mitigation.md) so the user
+    // understands the small latency bump on this send.
+    //
+    // Auto-clear policy: 10s safety-net timeout in case the next
+    // `sdk-message` frame doesn't arrive (failed spawn, abort, …).
+    // The sdk-message handler clears earlier when output starts
+    // flowing — typical case is the banner stays visible for ~300ms.
+    es.addEventListener("sdk-respawn-notice", (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          sessionId: string;
+          reason: "per-send" | "staleness-detected";
+        };
+        if (payload.sessionId !== activeId) return;
+        useStore.getState().setRespawnNotice(activeId, {
+          startedAt: Date.now(),
+          reason: payload.reason,
+        });
+        window.setTimeout(() => {
+          // Only clear if it's still ours — a fresh notice could have
+          // landed in the interim and we shouldn't clobber it.
+          const cur = useStore
+            .getState()
+            .inflightBySession.get(activeId)?.respawnNotice;
+          if (cur && cur.reason === payload.reason) {
+            useStore.getState().setRespawnNotice(activeId, null);
+          }
+        }, 10_000);
+      } catch (err) {
+        console.error("[loomscope] sse sdk-respawn-notice parse failed:", err);
       }
     });
 
