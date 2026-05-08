@@ -30,6 +30,7 @@ import {
   useLatestChatNodeId,
   useSessionLiveness,
 } from "@/store/livenessHooks";
+import { deleteQueueItem } from "@/api/turns";
 import { LazyMarkdownView } from "@/components/MarkdownView";
 import {
   extractText,
@@ -77,6 +78,12 @@ interface Props {
   // shown in the EffectiveContextView's compact summary banner; the
   // post-compact tail is rendered as a dedicated block above instead.
   omitChatNodeIds?: ReadonlySet<string> | null;
+  // v∞.2 PR 3: render pending queue bubbles at the end of the path
+  // when this is the LIVE conversation view (vs the Effective
+  // Context tab's read-only mirror). Each pending becomes a
+  // dashed-blue card with × cancel. Default false keeps
+  // EffectiveContext clean.
+  showPendingQueue?: boolean;
 }
 
 // Shared sentinel — Zustand uses Object.is referential equality on
@@ -116,6 +123,7 @@ export function ConversationView({
   focusLock = null,
   headCutoffChatNodeId = null,
   omitChatNodeIds = null,
+  showPendingQueue = false,
 }: Props) {
   const storeSelectedId = useStore(
     (s) => s.sessions.get(sessionId)?.selectedNodeId ?? null,
@@ -660,10 +668,123 @@ export function ConversationView({
           </Fragment>
         );
       })}
+      {/* v∞.2 PR 3: pending queue bubbles. Renders only on the live
+          conversation path (showPendingQueue=true). Each pending
+          item gets a dashed-blue card matching Agentloom's
+          PendingBubble visual, plus an external × cancel button. */}
+      {showPendingQueue && (
+        <PendingQueueBlock sessionId={sessionId} />
+      )}
       {/* v0.8.1 #3: scroll-to-bottom anchor. */}
       <div ref={bottomMarkerRef} data-testid="conversation-bottom-marker" />
     </div>
     </ConversationObserverContext.Provider>
+  );
+}
+
+// ─── PR 3: pending queue ─────────────────────────────────────────
+//
+// Reads inflight state from the SDK channel slice and renders one
+// dashed-blue card per pending prompt. × button on each calls
+// DELETE /api/sessions/:sid/queue/:itemId; on success, the next
+// `sdk-queue-state` SSE event removes the bubble from view.
+function PendingQueueBlock({ sessionId }: { sessionId: string }) {
+  const { t } = useTranslation();
+  const pending = useStore(
+    (s) => s.inflightBySession.get(sessionId)?.pendingPrompts ?? EMPTY_PENDING,
+  );
+  if (pending.length === 0) return null;
+  return (
+    <div
+      data-testid="pending-queue"
+      className="space-y-2"
+    >
+      {pending.map((p) => (
+        <PendingBubble
+          key={p.id}
+          itemId={p.id}
+          text={p.text}
+          imageCount={p.imageCount}
+          priority={p.priority}
+          sessionId={sessionId}
+          t={t}
+        />
+      ))}
+    </div>
+  );
+}
+
+const EMPTY_PENDING: ReadonlyArray<never> = Object.freeze([]);
+
+function PendingBubble({
+  itemId,
+  text,
+  imageCount,
+  priority,
+  sessionId,
+  t,
+}: {
+  itemId: string;
+  text: string;
+  imageCount: number;
+  priority: "now" | "next" | "later";
+  sessionId: string;
+  t: (k: string, opts?: Record<string, unknown>) => string;
+}) {
+  const setSdkError = useStore((s) => s.setSdkError);
+  const onCancel = async () => {
+    setSdkError(sessionId, null);
+    const r = await deleteQueueItem(sessionId, itemId);
+    if (!("ok" in r) || r.ok !== true) {
+      setSdkError(sessionId, "error" in r ? r.error : "cancel failed");
+    }
+  };
+  return (
+    <div
+      data-testid={`pending-bubble-${itemId}`}
+      className="flex items-start justify-end gap-1.5"
+    >
+      <div className="max-w-[85%] rounded-2xl border border-dashed border-blue-300 bg-blue-50 px-3 py-2 text-[12px] text-blue-700 whitespace-pre-wrap break-words">
+        <span className="mr-1 text-[10px] uppercase tracking-wide text-blue-400">
+          {t("composer.pending_label")}
+        </span>
+        {priority === "now" && (
+          <span
+            className="mr-1 rounded bg-rose-200 px-1 text-[9px] font-semibold text-rose-700"
+            title={t("composer.priority_now_tooltip")}
+          >
+            ⚡ now
+          </span>
+        )}
+        {priority === "later" && (
+          <span
+            className="mr-1 rounded bg-gray-200 px-1 text-[9px] text-gray-600"
+            title={t("composer.priority_later_tooltip")}
+          >
+            later
+          </span>
+        )}
+        {imageCount > 0 && (
+          <span className="mr-1 text-[10px] text-blue-500">
+            📎 {imageCount}
+          </span>
+        )}
+        {text || (
+          <span className="italic text-blue-400">
+            {t("composer.pending_image_only")}
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onCancel}
+        data-testid={`pending-cancel-${itemId}`}
+        className="mt-1 text-[12px] text-red-400 hover:text-red-600"
+        title={t("composer.queue_cancel_tooltip")}
+      >
+        ✕
+      </button>
+    </div>
   );
 }
 

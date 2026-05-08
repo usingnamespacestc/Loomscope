@@ -585,19 +585,9 @@ export function Composer({
             {inflight.lastError}
           </div>
         )}
-
-        {/* Pending count: when the queue has items waiting (above
-            and beyond the in-flight turn), surface a tiny status
-            line so users know their typing went somewhere. The
-            full pending-bubble UI lands in PR 3; this is a stop-
-            gap signal until then. */}
-        {inflight.pendingPrompts.length > 0 && (
-          <div className="mt-1 px-2 text-center text-[10px] italic text-gray-500">
-            {t("composer.queue_count", {
-              count: inflight.pendingPrompts.length,
-            })}
-          </div>
-        )}
+        {/* Pending count line was removed in PR 3 — full pending
+            bubble UI now renders inline in ConversationView's path
+            tail (showPendingQueue prop). */}
       </div>
     </div>
   );

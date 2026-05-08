@@ -212,6 +212,12 @@ export function DrillPanel({ sessionId, chatFlow, viewMode, drilledChatNode }: P
               focusLock={
                 viewMode === "workflow" ? drilledChatNode?.id ?? null : null
               }
+              // v∞.2 PR 3: live conversation view — render pending
+              // queue at the tail. EffectiveContext (which also wraps
+              // ConversationView) leaves this false because its bubble
+              // stream is a read-only inbound-context preview, not the
+              // live editing surface.
+              showPendingQueue
             />
           </div>
           <div
