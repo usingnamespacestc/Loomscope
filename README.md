@@ -135,9 +135,10 @@ Ordered by user-facing capability rather than version. Per-version commit refere
 
 The path from "graphical reader" to "graphical CC client":
 
-- **v∞.1** — Loomscope spawns new CC sessions via [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk)'s `query()`. Per-tool-use permission decision returns through SDK's `canUseTool` callback → **the user clicks ✓ Allow / ✗ Deny in browser** instead of typing y/n in terminal. Adds capabilities terminal CC doesn't have: edit tool input before allowing, allow-list per session, attach a reason on deny that CC's next turn sees.
-- **v∞.2** — composer input box at the bottom of the conversation panel; submitted prompts continue the active session via SDK `query({ resume: sessionId })`. Prerequisite: mtime-based advisory lock to prevent terminal-CC + Loomscope dual-write conflicts.
-- **v∞.3** — fork from any ChatNode (including assistants and sibling branches), powered by SDK's `resumeSessionAt: messageId`. **CC's terminal can only fork from leaves**; Loomscope unlocks the full DAG as fork-able. The "120 % of CC" capability.
+- **v∞.2 — Composer + queue + auto-fork ✓ shipped 2026-05-08.** Loomscope drives existing sessions via SDK `query({ resume: sid })`. Composer at the bottom of the Conversation tab; pending bubble queue with `now` / `next` / `later` priority semantics matching CC's internal `messageQueueManager`; submitting a turn from a non-leaf ChatNode auto-forks via SDK `forkSession({ upToMessageId })`; image attachments via paste / drag / picker; running indicator chip in Header + per-session pulse in Sidebar. Settings → v∞ exposes idle-timeout, auth (subscription vs API key), and permission mode.
+- **v∞.3 — `canUseTool` browser permission banner (next).** Each tool prompt that the SDK would normally raise to terminal y/n is intercepted server-side and forwarded to the browser via SSE; Loomscope renders an in-app banner (mirrors the existing `PermissionRequest` CC-hook banner shape) where the user clicks ✓ Allow / ✗ Deny / Edit / Always allow. Lets users keep the safer `default` permission mode while still being able to interact, instead of falling back to `bypassPermissions`. **Promoted from backlog 2026-05-08.**
+- **v∞.4 — Rate-limit auto-resume.** Capture `SDKRateLimitEvent`'s `retryAt`, surface countdown chip, auto-retry queued turn when the window opens.
+- **v∞.5 — Slash-command UI extraction + new-session creation.** UI buttons for the high-frequency slash commands (`/compact`, `/clear`); cwd picker for spawning a fresh session; interactive slash elicitation (e.g. `/branch <name?>`) handled in browser banner.
 
 ### Post-v1.0 polish (deferred from rc.1)
 

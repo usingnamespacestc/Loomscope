@@ -135,9 +135,10 @@ CC CLI 是 agent 的运行时，Loomscope 是配套的**只读图形化阅读器
 
 从"图形化阅读器"走向"图形化 CC 客户端"：
 
-- **v∞.1** — Loomscope 用 [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk) 的 `query()` 起新 CC session。每次工具调用通过 SDK 的 `canUseTool` callback 返回 → **用户在浏览器点 ✓ 允许 / ✗ 拒绝**，不再需要敲终端 y/n。比终端 CC 多的能力：编辑 tool input 后允许、per-session allow-list、拒绝时附带原因 CC 下一轮看得到
-- **v∞.2** — Conversation panel 底部加 composer 输入框；提交的 prompt 通过 SDK `query({ resume: sessionId })` 续接当前 session。前置条件：mtime advisory lock 防止终端 CC 跟 Loomscope 双写冲突
-- **v∞.3** — 任意 ChatNode（含 assistant、旁支 sibling）作为 fork 起点，靠 SDK `resumeSessionAt: messageId` 实现。**CC 终端只能从 leaf fork**；Loomscope 把整个 DAG 都打开 fork。这是相比 CC 的"120%"能力
+- **v∞.2 — Composer + 队列 + auto-fork ✓ 已 ship 2026-05-08。** Loomscope 用 SDK `query({ resume: sid })` 驱动现有 session。Conversation tab 底部 composer；pending bubble 队列带 `now` / `next` / `later` 优先级（对齐 CC 内部 `messageQueueManager`）；从非 leaf 节点发消息自动通过 SDK `forkSession({ upToMessageId })` 派生新分支；图片支持粘贴 / 拖拽 / 选择三种方式；Header running 芯片 + Sidebar 单 session pulse 指示。Settings → v∞ 行为暴露 idle timeout / 计费认证（订阅 vs API key）/ 工具权限模式
+- **v∞.3 — `canUseTool` 浏览器权限 banner（下一站）。** SDK 本来要弹给终端 y/n 的工具权限请求被服务端拦截，通过 SSE 推到浏览器，Loomscope 渲染在线 banner（沿用现有 `PermissionRequest` CC-hook banner 视觉），用户点 ✓ 允许 / ✗ 拒绝 / 编辑后允许 / 总是允许。让用户能保持安全的 `default` 权限模式同时还能正常交互，不必降级到 `bypassPermissions`。**2026-05-08 从 backlog 提到 roadmap**
+- **v∞.4 — 限流自动续。** 捕 `SDKRateLimitEvent` 的 `retryAt` 时间戳，UI 显示倒计时，到时间自动 retry 队列里的 turn
+- **v∞.5 — Slash command UI 化 + 新 session 创建。** 高频 slash 出按钮（`/compact`、`/clear`）；新 session 走 cwd picker；交互式 slash elicitation（如 `/branch <name?>`）走浏览器 banner
 
 ### 1.0 之后的 polish（rc.1 推迟项）
 

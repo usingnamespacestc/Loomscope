@@ -56,7 +56,8 @@ First release candidate. Internal / friends-only — not publicly announced.
 - Bundle size: index 537 KB / MarkdownView 498 KB (each ~150 KB gzipped) — works fine, more code-splitting deferred to v1.1
 
 ### Coming after 1.0
-- **v∞.1** — Loomscope spawns CC sessions via [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk); per-tool permission decisions return through SDK's `canUseTool` callback so users click ✓ Allow / ✗ Deny in browser instead of terminal y/n
-- **v∞.2** — composer input at the bottom of the conversation panel; submit prompts continue the active session via SDK `query({ resume: sessionId })`
-- **v∞.3** — fork from any ChatNode (CC's terminal can only fork from leaves; Loomscope unlocks the full DAG via SDK's `resumeSessionAt`)
+- **v∞.2 — composer + auto-fork ✓ shipped 2026-05-08.** SDK `query({ resume: sid })` drives existing sessions; pending bubble queue with priority semantics; non-leaf send auto-forks via `forkSession`; image attachments + Header running chip + Sidebar dot + permission-mode setting.
+- **v∞.3 — `canUseTool` browser permission banner (next, promoted from backlog 2026-05-08).** SDK tool-permission prompts intercepted server-side, forwarded via SSE to the browser, rendered as an in-app banner (✓ Allow / ✗ Deny / Edit / Always allow). Lets users keep `default` permission mode safely instead of falling back to `bypassPermissions`.
+- **v∞.4** — rate-limit auto-resume (`SDKRateLimitEvent.retryAt` countdown chip + auto-retry on window open)
+- **v∞.5** — slash-command UI extraction + new-session creation (cwd picker; UI buttons for `/compact`, `/clear`; interactive slash elicitation via browser banner)
 - **B (read-only enrichment)** — real `git status` workspace-dirty view (distinct from the existing CC-tracked-files chip; clears after `git commit`)
