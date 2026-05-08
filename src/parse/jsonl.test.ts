@@ -829,6 +829,44 @@ describe("buildChatFlow / parseJsonlText (synthetic fixture)", () => {
     expect(cf.gitBranch).toBe("main");
   });
 
+  it("ChatNode.contributingSessions = unique sessionIds across the bucket", () => {
+    // Single-jsonl fixture: every record carries SESSION_ID, so
+    // every ChatNode's contributingSessions = [SESSION_ID].
+    const cf = fixtureChatFlow();
+    for (const cn of cf.chatNodes) {
+      expect(cn.contributingSessions).toEqual([SESSION_ID]);
+    }
+  });
+
+  it("contributingSessions unions across mixed-source records (closure-merge case)", () => {
+    // Simulate what loadMergedChatFlow feeds buildChatFlow when
+    // viewing a session with a fork sibling: prefix records carry the
+    // sibling's sessionId, post-fork records carry the entry's. Both
+    // sets share promptId 'p1' (CC's forkSession preserves promptId
+    // across the copy). Result: one bucket with two contributing sids.
+    const records: RawRecord[] = [
+      {
+        type: "user",
+        uuid: "u1",
+        promptId: "p1",
+        sessionId: "sid-A",
+        message: { role: "user", content: "hi" },
+      } as RawRecord,
+      {
+        type: "user",
+        uuid: "u1-copy",
+        promptId: "p1",
+        sessionId: "sid-B",
+        message: { role: "user", content: "hi" },
+      } as RawRecord,
+    ];
+    const cf = buildChatFlow(records, "/synthetic/merged.jsonl");
+    expect(cf.chatNodes).toHaveLength(1);
+    const cn = cf.chatNodes[0];
+    expect(cn.contributingSessions).not.toBeUndefined();
+    expect([...(cn.contributingSessions ?? [])].sort()).toEqual(["sid-A", "sid-B"]);
+  });
+
   it("produces ChatNode parent links via parentUuid backwalk", () => {
     const cf = fixtureChatFlow();
     const byId = new Map(cf.chatNodes.map((c) => [c.id, c]));

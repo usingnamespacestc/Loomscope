@@ -923,6 +923,16 @@ function buildChatNode(
   //                  identifier" in the original session
   // Non-fork buckets (no forkedFrom on rootUser) → undefined.
   const forkedFrom = detectForkedFrom(rootUser, bucket);
+  // Set of distinct sessionIds across the bucket's records. After a
+  // closure merge, a shared-prefix bucket has records from MULTIPLE
+  // sessions (entry + sibling forks); post-fork buckets are exclusive
+  // to one. Empty when no record carries sessionId (legacy fixtures /
+  // hand-built rawRecords) — treated as "unknown provenance" upstream.
+  const sessionSet = new Set<string>();
+  for (const r of bucket.records) {
+    if (r.sessionId) sessionSet.add(r.sessionId);
+  }
+  const contributingSessions = sessionSet.size > 0 ? [...sessionSet] : undefined;
   return {
     kind: "chat",
     id: bucket.promptId,
@@ -938,6 +948,7 @@ function buildChatNode(
       compactWorkNode && compactWorkNode.kind === "compact" ? compactWorkNode : undefined,
     slashCommand,
     forkedFrom,
+    contributingSessions,
     meta,
   };
 }

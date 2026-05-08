@@ -22,7 +22,11 @@ import { NodeIdLine } from "@/canvas/nodes/chrome/NodeIdLine";
 import { TokenBar } from "@/canvas/nodes/chrome/TokenBar";
 import { useStore } from "@/store/index";
 import { useIsChatNodeRunning } from "@/store/livenessHooks";
-import { useIsChatNodeSelected, useIsConversationHovered } from "@/store/selectionHooks";
+import {
+  useIsChatNodeSelected,
+  useIsConversationHovered,
+  useIsOffActiveChain,
+} from "@/store/selectionHooks";
 
 export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
   const { t } = useTranslation();
@@ -52,6 +56,11 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
   const isRoot = cn.parentChatNodeId === null && !data.hasIncomingEdge;
   const isLeaf =
     !data.hasOutgoingEdge && !isRoot && !compact && !triggerSchedule && !slash;
+  // True when this ChatNode lives only on a sibling fork's jsonl —
+  // not on the active session's writable chain. Renders dim so the
+  // user can tell at a glance "this turn isn't continuable from
+  // here". PR 2 will add right-click "jump to source session".
+  const offChain = useIsOffActiveChain(cn.contributingSessions);
 
   // Slash-command ChatNodes get their own dedicated card body — no
   // 用户/助手 sections, no 进入工作流, no token bar, no stats. They're
@@ -125,6 +134,11 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
         // ChatNode + session is live. CSS keyframe in index.css.
         // 中: 运行中且是最新节点时的脉动绿光，keyframe 在 index.css。
         running ? "loomscope-running-pulse" : "",
+        // Sibling-fork ChatNodes render at reduced contrast — saturation
+        // dropped + slight transparency. Selection ring still pierces
+        // through (selected:ring is inside the card) so picking an
+        // off-chain node for "jump to source session" stays visible.
+        offChain ? "opacity-60 saturate-50" : "",
       ].join(" ")}
       style={
         conversationHovered
@@ -364,12 +378,14 @@ function CompactCard({
   const trigger = cn.compactMetadata?.trigger;
   const preTokens = cn.compactMetadata?.preTokens;
   const palette = compactPalette(trigger);
+  const offChain = useIsOffActiveChain(cn.contributingSessions);
   const containerClass = [
     "group/card relative w-52 rounded-lg border border-dashed shadow-sm p-2.5 text-xs",
     "transition-colors leading-snug",
     palette.bg,
     palette.accent,
     selected ? `${palette.selectedBorder} ring-2 ${palette.ring}` : palette.border,
+    offChain ? "opacity-60 saturate-50" : "",
   ].join(" ");
   return (
     <div
@@ -703,11 +719,13 @@ function SlashCommandCard({
   hasIncoming: boolean;
   hasOutgoing: boolean;
 }) {
+  const offChain = useIsOffActiveChain(cn.contributingSessions);
   const containerClass = [
     "group/card relative w-52 rounded-lg border shadow-sm p-2.5 text-xs",
     "transition-colors leading-snug bg-violet-50",
     "border-l-[3px] border-l-violet-500",
     selected ? "border-violet-500 ring-2 ring-violet-200" : "border-violet-300",
+    offChain ? "opacity-60 saturate-50" : "",
   ].join(" ");
   return (
     <div className={containerClass} data-testid={`chat-node-${cn.id}`}>

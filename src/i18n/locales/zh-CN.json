@@ -90,7 +90,9 @@
     "menu_fast_mode_hint": "Opus + 优先路由",
     "fast_chip": "fast",
     "fast_chip_tooltip": "Fast mode 已启用",
-    "effort_chip_tooltip": "Reasoning effort: {{level}}"
+    "effort_chip_tooltip": "Reasoning effort: {{level}}",
+    "blocked_non_leaf": "所选节点不在当前链末端 — 右键节点选择「从这里 fork」",
+    "blocked_offchain": "所选节点位于 session {{sid}} — 右键节点选择「跳转到该 session」"
   },
   "effective_context": {
     "placeholder_no_node": "选个 ChatNode 看它实际收到的上下文（auto-compact 截断后）",

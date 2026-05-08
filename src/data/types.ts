@@ -406,6 +406,27 @@ export interface ChatNode extends NodeBase {
    * source ChatNode in the original session). null when the ChatNode
    * isn't part of a /branch-created fork session. */
   forkedFrom?: { sessionId: string; messageUuid: string };
+  /** Which jsonls' records contributed to this ChatNode bucket.
+   *
+   * CC's forkSession assigns NEW record uuids but PRESERVES promptId
+   * across the copied prefix. The closure-merge parser groups records
+   * by promptId, so the shared prefix lands in ONE ChatNode whose
+   * records came from BOTH the entry session's jsonl AND a sibling
+   * fork's jsonl. Post-fork buckets (records exclusive to one jsonl)
+   * carry just that one sessionId.
+   *
+   * Used by canvas + composer to distinguish the active session's
+   * writable chain from sibling-fork side branches:
+   *   - viewing session X, ChatNode is on X's chain
+   *     ⇔ contributingSessions includes X
+   *   - off-chain ChatNodes render gray (read-only). Composing from
+   *     them is blocked at the composer; the user uses the right-click
+   *     menu to fork-from-here or jump-to-source-session (PR 2).
+   *
+   * Optional in the type (not all callers / fixtures populate it);
+   * parser fills it deterministically. Empty array = legacy / unknown
+   * provenance (treat as "on every chain" for safety). */
+  contributingSessions?: string[];
   meta: ChatNodeMeta;
 }
 

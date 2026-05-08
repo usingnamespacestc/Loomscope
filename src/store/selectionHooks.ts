@@ -40,3 +40,34 @@ export function useIsWorkNodeSelected(id: string): boolean {
 export function useIsConversationHovered(id: string): boolean {
   return useStore((s) => s.conversationHoveredChatNodeId === id);
 }
+
+/** True iff this ChatNode does NOT belong to the active session's own
+ * jsonl. CC's forkSession copies records with new uuids but preserves
+ * promptId, so the parser merges shared prefix into one ChatNode whose
+ * `contributingSessions` lists every jsonl that contributed records.
+ *
+ * When the active session id is NOT in that list, the ChatNode lives
+ * exclusively on a sibling fork — read-only from this view. Cards
+ * render with reduced opacity; composing from such a node is blocked
+ * at the composer (PR 2 adds right-click "jump to source session").
+ *
+ * Caller passes the contributingSessions snapshot from its ChatNode
+ * (already in scope on every card) — the selector only depends on
+ * activeSessionId so re-render frequency matches activeSessionId
+ * changes (= rare), not arbitrary store churn. Object.is on the
+ * boolean output keeps card re-renders to enter/leave pairs. */
+export function useIsOffActiveChain(
+  contributingSessions: string[] | undefined,
+): boolean {
+  return useStore((s) => {
+    const sid = s.activeSessionId;
+    if (!sid) return false;
+    // Empty or missing contributingSessions = legacy / unknown
+    // provenance (hand-built fixtures, pre-PR-1 cached payloads).
+    // Be permissive — treat as on-chain.
+    if (!contributingSessions || contributingSessions.length === 0) {
+      return false;
+    }
+    return !contributingSessions.includes(sid);
+  });
+}

@@ -35,6 +35,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -215,10 +216,57 @@ export function Composer({
   const setSdkError = useStore((s) => s.setSdkError);
   const isRunning = inflight.state === "running";
 
+  // Subscribe to the active session's selection + chatFlow refs so we
+  // can decide whether the composer should be enabled. Two cheap
+  // selectors instead of one heavy one — keeps re-render frequency
+  // tied to the inputs that actually move (selection clicks,
+  // chatFlow refresh on append) rather than every store tick.
+  const selectedNodeId = useStore(
+    (s) => s.sessions.get(sessionId)?.selectedNodeId ?? null,
+  );
+  const chatFlow = useStore(
+    (s) => s.sessions.get(sessionId)?.chatFlow ?? null,
+  );
+
+  // Composer enable rule (PR 1 of fork-UX rework):
+  //   - No selection OR selection is the active session's chronological
+  //     leaf  → ENABLED (send goes to the leaf)
+  //   - Selection is on a sibling-fork chain (contributingSessions
+  //     doesn't include this sessionId) → BLOCKED, hint to right-click
+  //     "jump to source session" (PR 2)
+  //   - Selection is on the active chain but NOT the leaf → BLOCKED,
+  //     hint to right-click "fork from here" (PR 2)
+  // The previous auto-fork-on-non-leaf path was removed — CC's
+  // forkSession does a full transcript copy (heavy + creates a new
+  // sid), so making it implicit produced confusing surprises. Explicit
+  // user intent only.
+  const composerBlock = useMemo<
+    | null
+    | { reason: "off-chain"; sourceSid: string | undefined }
+    | { reason: "non-leaf" }
+  >(() => {
+    if (!chatFlow || !selectedNodeId) return null;
+    const leafId = findLatestLeafId(chatFlow);
+    if (selectedNodeId === leafId) return null;
+    const sel = chatFlow.chatNodes.find((c) => c.id === selectedNodeId);
+    if (!sel) return null;
+    const cs = sel.contributingSessions ?? [];
+    // Empty/missing contributingSessions = unknown provenance; treat
+    // as on-chain to stay permissive for legacy fixtures.
+    if (cs.length > 0 && !cs.includes(sessionId)) {
+      // Pick any contributing session as the "source" for the jump
+      // hint. PR 2 will surface a real picker if the node belongs to
+      // multiple sibling forks, but practical case is single-source.
+      return { reason: "off-chain", sourceSid: cs[0] };
+    }
+    return { reason: "non-leaf" };
+  }, [chatFlow, selectedNodeId, sessionId]);
+
   // Attachments alone (no text) can be a valid prompt — the model can
   // still respond to "describe this image" implicitly. claude.ai
   // allows it; mirror.
-  const canSend = text.trim().length > 0 || attachments.length > 0;
+  const canSend =
+    (text.trim().length > 0 || attachments.length > 0) && !composerBlock;
 
   // Optimistic clear: textarea + attachments empty out immediately
   // on submit, the API call runs in the background. If it fails,
@@ -233,54 +281,9 @@ export function Composer({
       setAttachments([]);
       setSdkError(sessionId, null);
 
-      // Auto-fork: when the user is composing from a non-leaf
-      // ChatNode, the turn must fork from there rather than blindly
-      // appending to the leaf. Resolve the upToMessageId from the
-      // selected ChatNode's last record uuid (the chronologically
-      // latest record in that bucket; falls back to user message
-      // uuid for live-tail buckets with no llm_call yet).
-      const session = useStore.getState().sessions.get(sessionId);
-      const cf = session?.chatFlow;
-      const selectedId = session?.selectedNodeId ?? null;
-      const leafId = cf ? findLatestLeafId(cf) : null;
-      let forkFrom: { upToMessageId: string } | undefined;
-      let forkReason = "no-fork";
-      if (!cf) {
-        forkReason = "no-chatflow";
-      } else if (!selectedId) {
-        forkReason = "no-selection";
-      } else if (selectedId === leafId) {
-        forkReason = "selection-is-leaf";
-      } else {
-        const sel = cf.chatNodes.find((c) => c.id === selectedId);
-        if (!sel) {
-          forkReason = "selection-not-in-chatNodes";
-        } else {
-          const lastNode =
-            sel.workflow.nodes[sel.workflow.nodes.length - 1];
-          forkFrom = {
-            upToMessageId: lastNode?.id ?? sel.userMessage.uuid,
-          };
-          forkReason = lastNode
-            ? "fork-from-last-workflow-node"
-            : "fork-from-user-message";
-        }
-      }
-      // Diagnostic: when users report "I thought it would fork but it
-      // didn't", or vice versa, the console output here pins down
-      // which branch the resolver took.
-      console.log("[loomscope:composer] fork resolution:", {
-        sessionId,
-        selectedId,
-        leafId,
-        forkReason,
-        forkFrom,
-        chatNodeCount: cf?.chatNodes.length ?? 0,
-        selectionInChatNodes: cf
-          ? cf.chatNodes.some((c) => c.id === selectedId)
-          : false,
-      });
-
+      // Always sends to the active session's leaf — no fork
+      // semantics. composerBlock above guarantees we only get here
+      // when selection is null or === leaf.
       const r = await postTurn(sessionId, {
         text: snapshotText,
         cwd,
@@ -289,7 +292,6 @@ export function Composer({
           base64: a.base64,
         })),
         priority,
-        forkFrom,
       });
       if (!("ok" in r) || r.ok !== true) {
         // Restore typed content + record error for inline display.
@@ -300,14 +302,6 @@ export function Composer({
           "error" in r ? r.error : "send failed",
         );
         return;
-      }
-      // If the server forked, switch active session to the new
-      // branch so the user follows their turn into the new jsonl.
-      // The fork's jsonl will be picked up by chokidar within ~1
-      // RAF; setActiveSession + the existing post-active load
-      // pipeline does the rest.
-      if (r.forkedSessionId && r.forkedSessionId !== sessionId) {
-        useStore.getState().setActiveSession(r.forkedSessionId);
       }
     },
     [canSend, text, attachments, sessionId, cwd, setSdkError],
@@ -649,6 +643,25 @@ export function Composer({
             className="mt-1 px-2 text-center text-[10px] text-rose-600"
           >
             {inflight.lastError}
+          </div>
+        )}
+        {/* Composer-blocked hint (PR 1 of fork-UX rework). Shown
+            below the card when the user has selected a non-leaf or
+            sibling-fork ChatNode. Both branches point at right-click
+            menu (PR 2) — for now plain text. Off-chain hint also
+            surfaces the sibling session id so the user can switch
+            via the sidebar manually. */}
+        {composerBlock && (
+          <div
+            data-testid="composer-blocked-hint"
+            data-reason={composerBlock.reason}
+            className="mt-1 px-2 text-center text-[10px] text-amber-700"
+          >
+            {composerBlock.reason === "off-chain"
+              ? t("composer.blocked_offchain", {
+                  sid: composerBlock.sourceSid?.slice(0, 8) ?? "?",
+                })
+              : t("composer.blocked_non_leaf")}
           </div>
         )}
         {/* Pending count line was removed in PR 3 — full pending
