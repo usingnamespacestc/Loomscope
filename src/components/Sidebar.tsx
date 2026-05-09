@@ -21,9 +21,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ContextMenu, type ContextMenuItem } from "@/canvas/ContextMenu";
+import { ConfirmBanner } from "@/components/ConfirmBanner";
 import { useStore } from "@/store/index";
 import { useJumpToHit, type JumpHit } from "@/components/sidebar/useJumpToHit";
 import type { TrashedSession } from "@/api/trash";
+
+type ConfirmAction =
+  | { kind: "empty" }
+  | { kind: "purge"; sessionId: string; title: string };
 
 type SearchMode = "filter" | "jump";
 
@@ -80,6 +85,12 @@ export function Sidebar() {
     cwd: string;
     title: string;
   } | null>(null);
+  // Destructive-confirm banner state. Replaces window.confirm so the
+  // confirmation UX matches Loomscope's design language (and survives
+  // browser confirm-dialog quirks like "prevent further dialogs"
+  // checkboxes that disable subsequent confirms).
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   // PR 2.5 search state — local to Sidebar; not persisted across
   // remounts. Cross-remount memory of the user's preferred search
@@ -488,31 +499,66 @@ export function Sidebar() {
                 window.alert(t("sidebar.trash_action_failed", { error: r.error }));
               }
             }}
-            onPurge={async (sid, title) => {
-              if (
-                !window.confirm(
-                  t("sidebar.trash_purge_confirm", { title }),
-                )
-              ) {
-                return;
-              }
-              const r = await purgeSession(sid);
-              if (!r.ok) {
-                window.alert(t("sidebar.trash_action_failed", { error: r.error }));
-              }
+            onPurge={(sid, title) => {
+              setConfirmError(null);
+              setConfirmAction({ kind: "purge", sessionId: sid, title });
             }}
-            onEmpty={async () => {
-              if (!window.confirm(t("sidebar.trash_empty_confirm"))) return;
-              const r = await emptyTrash();
-              if (!r.ok) {
-                window.alert(t("sidebar.trash_action_failed", { error: r.error }));
-              }
+            onEmpty={() => {
+              setConfirmError(null);
+              setConfirmAction({ kind: "empty" });
             }}
             t={t}
           />
           </>
         )}
       </div>
+      <ConfirmBanner
+        open={!!confirmAction}
+        title={
+          confirmAction?.kind === "empty"
+            ? t("sidebar.confirm_empty_title")
+            : confirmAction?.kind === "purge"
+              ? t("sidebar.confirm_purge_title", { title: confirmAction.title })
+              : ""
+        }
+        message={
+          confirmAction?.kind === "empty"
+            ? t("sidebar.confirm_empty_message")
+            : confirmAction?.kind === "purge"
+              ? t("sidebar.confirm_purge_message")
+              : ""
+        }
+        confirmLabel={
+          confirmAction?.kind === "empty"
+            ? t("sidebar.confirm_empty_button")
+            : t("sidebar.confirm_purge_button")
+        }
+        cancelLabel={t("sidebar.confirm_cancel")}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => {
+          if (!confirmAction) return;
+          const action = confirmAction;
+          setConfirmAction(null);
+          void (async () => {
+            const r =
+              action.kind === "empty"
+                ? await emptyTrash()
+                : await purgeSession(action.sessionId);
+            if (!r.ok) {
+              setConfirmError(r.error);
+              // Re-open with the failure visible — caller can retry
+              // or cancel. (Error inline inside the same banner avoids
+              // a separate alert dialog.)
+              setConfirmAction(action);
+            }
+          })();
+        }}
+        errorMessage={
+          confirmError
+            ? t("sidebar.trash_action_failed", { error: confirmError })
+            : undefined
+        }
+      />
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
@@ -569,8 +615,11 @@ function TrashSection({
   expanded: boolean;
   onToggle: () => void;
   onRestore: (sid: string) => void | Promise<void>;
-  onPurge: (sid: string, title: string) => void | Promise<void>;
-  onEmpty: () => void | Promise<void>;
+  /** Caller is responsible for confirmation UX before actually
+   *  purging — TrashSection just hands off the click. Sidebar
+   *  triggers a ConfirmBanner; tests can stub a no-op. */
+  onPurge: (sid: string, title: string) => void;
+  onEmpty: () => void;
   t: (k: string, opts?: Record<string, unknown>) => string;
 }) {
   return (

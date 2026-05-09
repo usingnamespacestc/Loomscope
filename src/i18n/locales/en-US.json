@@ -30,15 +30,20 @@
     "trash_folder": "Trash",
     "trash_empty_button": "Empty",
     "trash_empty_button_title": "Permanently delete all sessions in trash",
-    "trash_empty_confirm": "Permanently delete all sessions in trash? This cannot be undone.",
-    "trash_purge_confirm": "Permanently delete \"{{title}}\"? This cannot be undone.",
     "trash_loading": "Loading trash…",
     "trash_empty_state": "(trash is empty)",
     "trash_restore": "Restore",
     "trash_restore_title": "Move this session back to its original workspace",
     "trash_purge": "Delete forever",
     "trash_purge_title": "Permanently remove this session from disk",
-    "trash_action_failed": "Action failed: {{error}}"
+    "trash_action_failed": "Action failed: {{error}}",
+    "confirm_cancel": "Cancel",
+    "confirm_empty_title": "Empty trash",
+    "confirm_empty_message": "Permanently delete all sessions in trash? This cannot be undone.",
+    "confirm_empty_button": "Delete all permanently",
+    "confirm_purge_title": "Delete \"{{title}}\" permanently",
+    "confirm_purge_message": "Remove this session from disk. This cannot be undone.",
+    "confirm_purge_button": "Delete permanently"
   },
   "chat_node": {
     "user": "User",

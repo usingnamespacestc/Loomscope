@@ -30,15 +30,20 @@
     "trash_folder": "回收站",
     "trash_empty_button": "清空",
     "trash_empty_button_title": "永久删除回收站内全部 session",
-    "trash_empty_confirm": "确认永久删除回收站内全部 session？此操作不可撤销。",
-    "trash_purge_confirm": "确认永久删除「{{title}}」？此操作不可撤销。",
     "trash_loading": "加载回收站…",
     "trash_empty_state": "（回收站为空）",
     "trash_restore": "还原",
     "trash_restore_title": "把这条 session 移回原 workspace",
     "trash_purge": "永久删除",
     "trash_purge_title": "永久从磁盘删除这条 session",
-    "trash_action_failed": "操作失败：{{error}}"
+    "trash_action_failed": "操作失败：{{error}}",
+    "confirm_cancel": "取消",
+    "confirm_empty_title": "清空回收站",
+    "confirm_empty_message": "永久删除回收站内全部 session？此操作不可撤销。",
+    "confirm_empty_button": "全部永久删除",
+    "confirm_purge_title": "永久删除「{{title}}」",
+    "confirm_purge_message": "永久从磁盘删除这条 session，此操作不可撤销。",
+    "confirm_purge_button": "永久删除"
   },
   "chat_node": {
     "user": "用户",
