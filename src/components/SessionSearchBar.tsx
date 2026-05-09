@@ -236,7 +236,14 @@ export function SessionSearchBar({ sessionId }: Props) {
   return (
     <div
       data-testid="session-search-bar"
-      className="absolute left-1/2 top-3 z-30 -translate-x-1/2"
+      // top-14 (56px) clears the DrillBreadcrumb pinned at left-3
+      // top-3 (~48px tall including the pill chrome) when in
+      // workflow / sub-chatflow modes. Was top-3 originally; user
+      // reported the overlap in narrow-viewport workflow drill on
+      // 2026-05-08. Chatflow mode has no breadcrumb so the extra
+      // ~44px gap looks slightly empty but not misaligned —
+      // accepted tradeoff vs adding mode-conditional positioning.
+      className="absolute left-1/2 top-14 z-30 -translate-x-1/2"
       style={{ width: "min(480px, calc(100% - 32px))" }}
     >
       {/* Pill input */}
