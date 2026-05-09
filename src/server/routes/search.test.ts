@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "@/server/app";
 import { _setCacheRootForTests } from "@/server/services/chatFlowDiskCache";
+import { TrashService } from "@/server/services/trash";
 
 let tmpRoot: string;
 let app: ReturnType<typeof createApp>;
@@ -189,5 +190,60 @@ describe("/api/search/uuid", () => {
     expect(workHit).toBeTruthy();
     // Backend should have resolved parentChatNodeId via second-pass parse.
     expect(workHit?.parentChatNodeId).toBe(CHATNODE_ID);
+  });
+
+  // Trash exclusion regression — search must never surface trashed
+  // sessions. Structural guarantee: TrashService physically moves
+  // the jsonl out of rootDir into a sibling trashDir; search.ts
+  // only ever reads from rootDir, so post-trash there's no candidate
+  // file to grep. This test pins that invariant by trashing the
+  // fixture and asserting all search modes go cold.
+  describe("trash exclusion", () => {
+    let trashDir: string;
+    let trash: TrashService;
+
+    beforeEach(async () => {
+      trashDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "loomscope-search-trash-"),
+      );
+      trash = new TrashService({
+        trashDir,
+        // Search test doesn't care about meta detail — return shape
+        // matching workspaceScanner's contract.
+        extractMeta: async () => ({
+          title: "fixture",
+          messageCount: 3,
+          cwd: "/tmp/fixture",
+        }),
+      });
+    });
+
+    afterEach(async () => {
+      await fs.rm(trashDir, { recursive: true, force: true });
+    });
+
+    it("returns 0 hits for trashed session id, ChatNode id, and WorkNode uuid", async () => {
+      // Sanity: pre-trash all three kinds of hits exist.
+      const pre = await search(SESSION_ID.slice(0, 8));
+      expect((pre.body.hits as unknown[]).length).toBeGreaterThan(0);
+
+      // Trash the fixture session.
+      await trash.trash(tmpRoot, SESSION_ID);
+
+      // Post-trash: jsonl is gone from rootDir → search has no
+      // candidate file to scan. All three lookup modes (session id /
+      // ChatNode promptId / WorkNode uuid) must come back empty.
+      const sessionMiss = await search(SESSION_ID.slice(0, 8));
+      expect(sessionMiss.body.hits).toEqual([]);
+
+      const chatMiss = await search(CHATNODE_ID.slice(0, 8));
+      expect(chatMiss.body.hits).toEqual([]);
+
+      const workMiss = await search(ASSISTANT_UUID.slice(0, 8));
+      expect(workMiss.body.hits).toEqual([]);
+
+      const toolMiss = await search(TOOL_USE_ID);
+      expect(toolMiss.body.hits).toEqual([]);
+    });
   });
 });
