@@ -23,6 +23,10 @@ import {
 import { preferencesRouter } from "@/server/routes/preferences";
 import { searchRouter } from "@/server/routes/search";
 import { sessionsRouter } from "@/server/routes/sessions";
+import {
+  trashOnSessionRouter,
+  trashRouter,
+} from "@/server/routes/trash";
 import { turnsRouter } from "@/server/routes/turns";
 import { workspacesRouter } from "@/server/routes/workspaces";
 import { initHookSseForwarder } from "@/server/services/hookSseForwarder";
@@ -31,6 +35,8 @@ import { initPendingPermissionTracker } from "@/server/services/pendingPermissio
 import { loadPreferences } from "@/server/services/preferences";
 import { realSdkQuery } from "@/server/services/sdkAdapter";
 import { SessionRegistry } from "@/server/services/sessionRegistry";
+import { TrashService } from "@/server/services/trash";
+import { readTrashSnapshotMeta } from "@/server/services/workspaceScanner";
 
 export interface AppOptions {
   rootDir: string; // e.g. ~/.claude/projects
@@ -138,6 +144,21 @@ export function createApp(opts: AppOptions) {
     turnsRouter({ registry, rootDir: opts.rootDir }),
   );
   app.route("/api/sessions", forkRouter());
+  // Soft-delete surface. Mounted alongside other /api/sessions verbs
+  // for trash-on-sid; the broader trash CRUD lives at /api/trash.
+  const trashService = new TrashService({ extractMeta: readTrashSnapshotMeta });
+  app.route(
+    "/api/sessions",
+    trashOnSessionRouter({
+      rootDir: opts.rootDir,
+      trashService,
+      registry,
+    }),
+  );
+  app.route(
+    "/api/trash",
+    trashRouter({ rootDir: opts.rootDir, trashService, registry }),
+  );
   app.route("/api/sessions", permissionPromptsRouter({ registry }));
   app.route("/api/permission-rules", permissionRulesRouter({ registry }));
   app.route("/api/preferences", preferencesRouter({ registry }));

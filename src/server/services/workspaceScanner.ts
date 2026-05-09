@@ -112,6 +112,22 @@ export async function listSessions(projectDir: string): Promise<SessionSummary[]
   return out;
 }
 
+// Helper for the trash service: parse a single jsonl into the
+// frozen-at-trash-time fields (title / messageCount / cwd). Returns
+// safe defaults when fields are missing rather than throwing — the
+// trash sidecar can tolerate "Untitled" and a null cwd.
+export async function readTrashSnapshotMeta(
+  jsonlPath: string,
+): Promise<{ title: string; messageCount: number; cwd: string | null }> {
+  const meta = await extractSessionMeta(jsonlPath);
+  const cwd = await firstCwdInJsonl(jsonlPath, CWD_SCAN_LINE_BUDGET);
+  return {
+    title: meta.title ?? "Untitled",
+    messageCount: meta.messageCount,
+    cwd,
+  };
+}
+
 // ─── Internal helpers ───────────────────────────────────────────────────────
 
 async function sortByMtimeDesc(paths: string[]): Promise<string[]> {
