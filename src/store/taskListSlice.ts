@@ -2,6 +2,11 @@
 //   - `tasksBySession`: latest fetched task array per session
 //   - inflight AbortController per session (race guard — fast SSE
 //     bursts can fire refresh-while-load; last-write-wins)
+//   - per-session debounce timer so SSE-invalidate + TaskCreated-hook
+//     bursts (which fire within ~50ms of each other for the same
+//     ~/.claude/tasks/<sid>/*.json write) coalesce into one fetch
+//     instead of cancel-then-retry showing up as "(failed)" + "200"
+//     pairs in devtools network panel.
 //   - the panel collapsed/expanded UI pref
 //   - load / refresh / clear actions
 //
@@ -50,6 +55,17 @@ async function fetchTasks(
   return data.tasks ?? [];
 }
 
+// SSE invalidate (kind:"tasks") and TaskCreated hook fire for the
+// same disk write within ~50-100ms of each other. Without coalescing,
+// each pair produces a "(canceled)" + "200" in devtools network. 80ms
+// window is short enough that a real successive change (user
+// completing one task right after creating another) still gets a
+// fresh fetch within ~100ms of its triggering invalidate; long
+// enough to absorb the SSE-vs-hook duplicate.
+const REFRESH_DEBOUNCE_MS = 80;
+const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const refreshResolvers = new Map<string, Array<() => void>>();
+
 export const createTaskListSlice: StateCreator<
   LoomscopeStore,
   [],
@@ -79,45 +95,75 @@ export const createTaskListSlice: StateCreator<
     await get().refreshTasks(sessionId);
   },
 
-  refreshTasks: async (sessionId) => {
-    // Cancel any prior fetch — last-write-wins.
-    const prior = get().taskFetchControllers.get(sessionId);
-    prior?.abort();
+  refreshTasks: (sessionId) =>
+    new Promise<void>((resolve) => {
+      // Coalesce SSE-invalidate + TaskCreated-hook duplicates. Each
+      // call (re)schedules a single fetch at REFRESH_DEBOUNCE_MS
+      // from now; earlier callers' returned Promises still resolve
+      // when that single fetch completes.
+      const existing = refreshTimers.get(sessionId);
+      if (existing) clearTimeout(existing);
+      const resolvers = refreshResolvers.get(sessionId) ?? [];
+      resolvers.push(resolve);
+      refreshResolvers.set(sessionId, resolvers);
 
-    const ctrl = new AbortController();
-    set((s) => {
-      const next = new Map(s.taskFetchControllers);
-      next.set(sessionId, ctrl);
-      return { taskFetchControllers: next };
-    });
+      const timer = setTimeout(async () => {
+        refreshTimers.delete(sessionId);
+        const pending = refreshResolvers.get(sessionId) ?? [];
+        refreshResolvers.delete(sessionId);
 
-    try {
-      const tasks = await fetchTasks(sessionId, ctrl.signal);
-      // Race guard: another refresh may have superseded ours.
-      if (get().taskFetchControllers.get(sessionId) !== ctrl) return;
-      set((s) => {
-        const next = new Map(s.tasksBySession);
-        next.set(sessionId, tasks);
-        return { tasksBySession: next };
-      });
-    } catch (err) {
-      // AbortError means a newer refresh took over — silent.
-      if ((err as Error)?.name === "AbortError") return;
-      console.error("[taskListSlice] fetch failed:", err);
-    } finally {
-      // Only clear our controller if it's still ours.
-      if (get().taskFetchControllers.get(sessionId) === ctrl) {
+        // If a fetch is still inflight from a previous batch (very
+        // rare — would mean prior fetch took >REFRESH_DEBOUNCE_MS),
+        // abort it. The new fetch carries fresher state anyway.
+        const prior = get().taskFetchControllers.get(sessionId);
+        prior?.abort();
+
+        const ctrl = new AbortController();
         set((s) => {
           const next = new Map(s.taskFetchControllers);
-          next.delete(sessionId);
+          next.set(sessionId, ctrl);
           return { taskFetchControllers: next };
         });
-      }
-    }
-  },
+
+        try {
+          const tasks = await fetchTasks(sessionId, ctrl.signal);
+          if (get().taskFetchControllers.get(sessionId) !== ctrl) return;
+          set((s) => {
+            const next = new Map(s.tasksBySession);
+            next.set(sessionId, tasks);
+            return { tasksBySession: next };
+          });
+        } catch (err) {
+          if ((err as Error)?.name === "AbortError") return;
+          console.error("[taskListSlice] fetch failed:", err);
+        } finally {
+          if (get().taskFetchControllers.get(sessionId) === ctrl) {
+            set((s) => {
+              const next = new Map(s.taskFetchControllers);
+              next.delete(sessionId);
+              return { taskFetchControllers: next };
+            });
+          }
+          for (const r of pending) r();
+        }
+      }, REFRESH_DEBOUNCE_MS);
+      refreshTimers.set(sessionId, timer);
+    }),
 
   clearTasks: (sessionId) => {
     get().taskFetchControllers.get(sessionId)?.abort();
+    // Cancel any pending debounced refresh + resolve waiters as no-op
+    // so callers don't hang on a Promise we'll never fulfil.
+    const t = refreshTimers.get(sessionId);
+    if (t) {
+      clearTimeout(t);
+      refreshTimers.delete(sessionId);
+    }
+    const pending = refreshResolvers.get(sessionId);
+    if (pending) {
+      refreshResolvers.delete(sessionId);
+      for (const r of pending) r();
+    }
     set((s) => {
       const tasks = new Map(s.tasksBySession);
       tasks.delete(sessionId);
