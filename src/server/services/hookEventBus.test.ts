@@ -75,23 +75,39 @@ describe("hookEventBus — dedup", () => {
     expect(seen).toEqual([SID, SID_OTHER]);
   });
 
-  it("events without tool_use_id dedup by 1s timestamp bucket", () => {
+  it("events without tool_use_id dedup by content + 500ms bucket", () => {
     // UserPromptSubmit / Stop / SessionStart have no per-fire id; the
-    // bus falls back to coarse bucket. Lock the clock to a single
-    // bucket so the test is deterministic.
+    // bus falls back to (tool_name + tool_input + 500ms-bucket).
+    // Same content within the bucket → suppressed.
     vi.useFakeTimers();
-    vi.setSystemTime(1_700_000_000_000); // some round second
+    vi.setSystemTime(1_700_000_000_000);
     const seen: number[] = [];
     subscribeHooks((_event) => {
       seen.push(Date.now());
     });
-    publishHook("UserPromptSubmit", envWith({ prompt: "first" }));
+    publishHook("UserPromptSubmit", envWith({ tool_name: "x", tool_input: "same" }));
     // SDK programmatic + HTTP path arrive ~100ms apart; both within
-    // the same second.
+    // the same 500ms bucket; identical content → dup suppressed.
     vi.setSystemTime(1_700_000_000_100);
-    publishHook("UserPromptSubmit", envWith({ prompt: "second-but-actually-dup" }));
-    expect(seen).toHaveLength(1); // dup suppressed
+    publishHook("UserPromptSubmit", envWith({ tool_name: "x", tool_input: "same" }));
+    expect(seen).toHaveLength(1);
     expect(_suppressedDupCountForTests()).toBe(1);
+  });
+
+  it("events without tool_use_id but DIFFERENT content both deliver (regression)", () => {
+    // pendingPermissionTracker case: two consecutive PermissionRequest
+    // events for different tools should NOT collapse just because
+    // they share session_id + event_name + time bucket. Earlier
+    // (time-only key) collapsed them. Now key includes tool_name +
+    // tool_input.
+    const seen: string[] = [];
+    subscribeHooks((_event, payload) => {
+      seen.push(String(payload.extras.tool_name));
+    });
+    publishHook("PermissionRequest", envWith({ tool_name: "Bash" }));
+    publishHook("PermissionRequest", envWith({ tool_name: "Edit" }));
+    expect(seen).toEqual(["Bash", "Edit"]);
+    expect(_suppressedDupCountForTests()).toBe(0);
   });
 
   it("after TTL elapses, same key is allowed again", () => {

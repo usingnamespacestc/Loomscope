@@ -102,11 +102,23 @@ const recentKeys = new Map<string, number>();
 let suppressedCount = 0;
 
 function deriveDedupKey(event: HookEventName, payload: HookEnvelope): string {
-  const tuid = payload.extras?.tool_use_id;
+  const extras = payload.extras as Record<string, unknown> | undefined;
+  const tuid = extras?.tool_use_id;
   if (typeof tuid === "string" && tuid.length > 0) {
     return `${payload.session_id}:${event}:${tuid}`;
   }
-  return `${payload.session_id}:${event}:${Math.floor(Date.now() / 1000)}`;
+  // No tool_use_id (PermissionRequest, UserPromptSubmit, Stop,
+  // SessionStart, etc.). Use tool_name + serialized tool_input for
+  // content-aware match — two consecutive PermissionRequest events
+  // for DIFFERENT tools within the same time bucket should both
+  // fire (the original time-only key collapsed them, regression
+  // caught by pendingPermissionTracker tests). 500ms time bucket
+  // still bounds dup HTTP-vs-programmatic firings (typical gap
+  // <200ms) without merging legit successive events (model
+  // throughput + user interaction >>500ms).
+  const toolName = String(extras?.tool_name ?? "");
+  const toolInputJson = JSON.stringify(extras?.tool_input ?? null);
+  return `${payload.session_id}:${event}:${toolName}:${toolInputJson}:${Math.floor(Date.now() / 500)}`;
 }
 
 function gcOldKeys(now: number): void {
@@ -155,9 +167,16 @@ export function _resetDedupForTests(): void {
   suppressedCount = 0;
 }
 
-/** Test helper. */
+/** Test helper. Resets BOTH listeners and dedup state — pre-dedup
+ *  tests that don't know about `_resetDedupForTests` would otherwise
+ *  see leaked recent-keys across runs (e.g. two consecutive
+ *  PermissionRequests for the same session in the same second
+ *  would dedup the second). Keeping the reset surface unified
+ *  matches the original "fresh bus per test" expectation. */
 export function _resetHookBusForTests(): void {
   listeners.clear();
+  recentKeys.clear();
+  suppressedCount = 0;
 }
 
 /** Test helper: peek listener count. */

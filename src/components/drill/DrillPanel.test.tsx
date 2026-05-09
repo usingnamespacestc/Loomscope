@@ -5,12 +5,39 @@
 // The real ChatNodeDetail / WorkNodeDetail rendering paths are covered
 // by details.test.tsx; here we just assert the dispatch + scope plumbing.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
 import { DrillPanel } from "@/components/drill/DrillPanel";
 import { useStore } from "@/store/index";
 import type { ChatFlow, ChatNode } from "@/data/types";
+
+// happy-dom resolves relative-URL fetches against http://localhost:3000
+// by default, which has no listener in tests → ECONNREFUSED. Several
+// slices the panel touches (gitFilesSlice → /api/sessions/:id/git/
+// commits-files, possibly more) fire-and-forget fetches in useEffects,
+// so the rejection lands as an "unhandled promise rejection" outside
+// any specific test body — vitest counts it as the file failing even
+// though every individual `it(...)` passes. Stub global.fetch with an
+// empty-OK response so all those flush quietly. Tests that need a
+// specific response wire their own mock per-call (none currently do).
+beforeEach(() => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = typeof input === "string" ? input : (input as Request).url;
+    // Sensible default: empty-shaped OK JSON. Slices that read specific
+    // fields fall back to defaults when the field's missing.
+    if (url.includes("/git/commits-files")) {
+      return new Response(JSON.stringify({ commits: [], files: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response("{}", {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+});
 
 const SID = "11111111-1111-4000-8000-000000000aaa";
 
@@ -73,6 +100,7 @@ beforeEach(() => {
 
 afterEach(() => {
   useStore.setState({ sessions: new Map(), activeSessionId: null });
+  vi.restoreAllMocks();
 });
 
 describe("DrillPanel viewMode dispatch", () => {
