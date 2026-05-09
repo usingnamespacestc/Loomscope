@@ -141,6 +141,10 @@
     "effort_chip_tooltip": "Reasoning effort: {{level}}",
     "blocked_non_leaf": "所选节点不在当前链末端 — 右键节点选择「从这里 fork」",
     "blocked_offchain": "所选节点位于 session {{sid}} — 右键节点选择「跳转到该 session」",
+    "blocked_trashed": "此 session 已删除 — 还原后才能输入",
+    "placeholder_trashed": "（已删除 — 只读）",
+    "placeholder_offchain": "（旁支节点 — 只读）",
+    "placeholder_non_leaf": "（非末端节点 — 只读）",
     "respawning_per_send": "起新 SDK 进程读最新文件（race 保护）",
     "respawning_staleness": "检测到外部写入，重启 SDK 同步文件状态"
   },

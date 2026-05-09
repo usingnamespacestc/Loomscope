@@ -682,16 +682,28 @@ function TrashSection({
           )}
           {sessions.map((s) => {
             const isActive = activeId === s.sessionId;
+            // Row is a div with role=button (NOT a real <button>) so
+            // the inline 还原 / ✕ buttons don't violate the
+            // "no <button> inside <button>" DOM nesting rule. Keyboard
+            // activation via Enter/Space matches native button UX.
             return (
               <li
                 key={s.sessionId}
                 data-testid={`sidebar-trash-row-${s.sessionId}`}
               >
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   onClick={() => onOpen(s.sessionId)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onOpen(s.sessionId);
+                    }
+                  }}
                   className={[
-                    "w-full text-left pl-6 pr-2 py-1.5 transition-colors border-l-2",
+                    "w-full text-left pl-6 pr-2 py-1.5 transition-colors border-l-2 cursor-pointer",
+                    "focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-400",
                     isActive
                       ? "bg-blue-50 border-blue-500 text-blue-900"
                       : "border-transparent text-gray-500 hover:bg-gray-100",
@@ -746,7 +758,7 @@ function TrashSection({
                       </button>
                     </span>
                   </div>
-                </button>
+                </div>
               </li>
             );
           })}

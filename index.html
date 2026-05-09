@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Silence browser auto-request for /favicon.ico → 404. Empty
+         data URI is a one-line fix; a real favicon can come later. -->
+    <link rel="icon" href="data:," />
     <title>Loomscope</title>
   </head>
   <body>

@@ -141,6 +141,10 @@
     "effort_chip_tooltip": "Reasoning effort: {{level}}",
     "blocked_non_leaf": "Selected node isn't this chain's leaf — right-click → \"fork from here\" to continue.",
     "blocked_offchain": "Selected node lives on session {{sid}} — right-click → \"jump to source session\".",
+    "blocked_trashed": "This session is deleted — restore to enable input.",
+    "placeholder_trashed": "(deleted — read-only)",
+    "placeholder_offchain": "(sibling branch — read-only)",
+    "placeholder_non_leaf": "(non-leaf node — read-only)",
     "respawning_per_send": "Spawning a fresh SDK Query (race protection)",
     "respawning_staleness": "External write detected — respawning SDK to sync file state"
   },

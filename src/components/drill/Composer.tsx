@@ -227,6 +227,13 @@ export function Composer({
   const chatFlow = useStore(
     (s) => s.sessions.get(sessionId)?.chatFlow ?? null,
   );
+  // Trashed-state subscription. When the active session is in trash,
+  // the composer must be fully locked — textarea + attach + send all
+  // disabled (M3 read-only). Cheap selector: just resolves true/false
+  // by membership; renders only flip on trash/restore boundary.
+  const isTrashed = useStore((s) =>
+    s.trashedSessions.some((t) => t.sessionId === sessionId),
+  );
 
   // Composer enable rule (PR 1 of fork-UX rework):
   //   - No selection OR selection is the active session's chronological
@@ -242,9 +249,13 @@ export function Composer({
   // user intent only.
   const composerBlock = useMemo<
     | null
+    | { reason: "trashed" }
     | { reason: "off-chain"; sourceSid: string | undefined }
     | { reason: "non-leaf" }
   >(() => {
+    // Trash check first — supersedes off-chain / non-leaf hints since
+    // the entire session is read-only regardless of selection.
+    if (isTrashed) return { reason: "trashed" };
     if (!chatFlow || !selectedNodeId) return null;
     const leafId = findLatestLeafId(chatFlow);
     if (selectedNodeId === leafId) return null;
@@ -260,7 +271,7 @@ export function Composer({
       return { reason: "off-chain", sourceSid: cs[0] };
     }
     return { reason: "non-leaf" };
-  }, [chatFlow, selectedNodeId, sessionId]);
+  }, [isTrashed, chatFlow, selectedNodeId, sessionId]);
 
   // Attachments alone (no text) can be a valid prompt — the model can
   // still respond to "describe this image" implicitly. claude.ai
@@ -517,9 +528,23 @@ export function Composer({
             // Min keeps textarea reachable; the card naturally
             // overflows downward if all of it doesn't fit, but
             // typically the user resizes up via the drag handle.
-            className="min-h-[24px] flex-1 resize-none border-0 bg-transparent text-[13px] leading-relaxed text-gray-800 placeholder:text-gray-400 focus:outline-none"
-            placeholder={placeholder ?? t("composer.placeholder_input")}
+            className={[
+              "min-h-[24px] flex-1 resize-none border-0 bg-transparent text-[13px] leading-relaxed placeholder:text-gray-400 focus:outline-none",
+              composerBlock
+                ? "text-gray-400 cursor-not-allowed"
+                : "text-gray-800",
+            ].join(" ")}
+            placeholder={
+              composerBlock?.reason === "trashed"
+                ? t("composer.placeholder_trashed")
+                : composerBlock?.reason === "off-chain"
+                  ? t("composer.placeholder_offchain")
+                  : composerBlock?.reason === "non-leaf"
+                    ? t("composer.placeholder_non_leaf")
+                    : (placeholder ?? t("composer.placeholder_input"))
+            }
             value={text}
+            disabled={!!composerBlock}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
@@ -542,8 +567,9 @@ export function Composer({
               type="button"
               data-testid="composer-attach"
               title={t("composer.attach_tooltip")}
+              disabled={!!composerBlock}
               onClick={() => filePickerRef.current?.click()}
-              className="flex h-7 w-7 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+              className="flex h-7 w-7 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent"
             >
               <PlusIcon />
             </button>
@@ -657,11 +683,13 @@ export function Composer({
             data-reason={composerBlock.reason}
             className="mt-1 px-2 text-center text-[10px] text-amber-700"
           >
-            {composerBlock.reason === "off-chain"
-              ? t("composer.blocked_offchain", {
-                  sid: composerBlock.sourceSid?.slice(0, 8) ?? "?",
-                })
-              : t("composer.blocked_non_leaf")}
+            {composerBlock.reason === "trashed"
+              ? t("composer.blocked_trashed")
+              : composerBlock.reason === "off-chain"
+                ? t("composer.blocked_offchain", {
+                    sid: composerBlock.sourceSid?.slice(0, 8) ?? "?",
+                  })
+                : t("composer.blocked_non_leaf")}
           </div>
         )}
         {/* Race-mitigation respawn notice (see
