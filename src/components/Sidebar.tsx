@@ -492,7 +492,9 @@ export function Sidebar() {
             sessions={trashedSessions}
             loading={trashLoading}
             expanded={trashExpanded}
+            activeId={activeId}
             onToggle={toggleTrashExpanded}
+            onOpen={(sid) => setActive(sid)}
             onRestore={async (sid) => {
               const r = await restoreSession(sid);
               if (!r.ok) {
@@ -604,7 +606,9 @@ function TrashSection({
   sessions,
   loading,
   expanded,
+  activeId,
   onToggle,
+  onOpen,
   onRestore,
   onPurge,
   onEmpty,
@@ -613,7 +617,15 @@ function TrashSection({
   sessions: TrashedSession[];
   loading: boolean;
   expanded: boolean;
+  /** Currently-active sessionId from the store. Trashed rows pick up
+   *  the same blue-border active styling as live rows when matched —
+   *  the canvas will render the deleted session read-only. */
+  activeId: string | null;
   onToggle: () => void;
+  /** Click on a trashed row body. Sets the active session so the
+   *  canvas renders it (with the read-only banner painted by
+   *  ChatFlowCanvas via useIsActiveSessionTrashed). */
+  onOpen: (sid: string) => void;
   onRestore: (sid: string) => void | Promise<void>;
   /** Caller is responsible for confirmation UX before actually
    *  purging — TrashSection just hands off the click. Sidebar
@@ -668,45 +680,76 @@ function TrashSection({
               {t("sidebar.trash_empty_state")}
             </li>
           )}
-          {sessions.map((s) => (
-            <li key={s.sessionId} data-testid={`sidebar-trash-row-${s.sessionId}`}>
-              <div
-                className="pl-6 pr-2 py-1.5 border-l-2 border-transparent text-gray-500 group/trashrow hover:bg-gray-100"
-                title={`${s.sessionId} · ${formatBytes(s.fileSize)} · ${
-                  s.messageCount
-                } ${t("sidebar.session_records_unit")} · ${t("sidebar.trash_folder")}`}
+          {sessions.map((s) => {
+            const isActive = activeId === s.sessionId;
+            return (
+              <li
+                key={s.sessionId}
+                data-testid={`sidebar-trash-row-${s.sessionId}`}
               >
-                <div className="flex items-center gap-1 truncate text-[11px]">
-                  <span className="truncate line-through decoration-gray-400/60">
-                    {s.title}
-                  </span>
-                </div>
-                <div className="text-[10px] text-gray-400 flex justify-between mt-0.5">
-                  <span className="font-mono">{s.sessionId.slice(0, 8)}</span>
-                  <span className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => void onRestore(s.sessionId)}
-                      className="px-1 py-0.5 rounded hover:bg-blue-100 hover:text-blue-700 transition-colors"
-                      title={t("sidebar.trash_restore_title")}
-                      data-testid={`sidebar-trash-restore-${s.sessionId}`}
+                <button
+                  type="button"
+                  onClick={() => onOpen(s.sessionId)}
+                  className={[
+                    "w-full text-left pl-6 pr-2 py-1.5 transition-colors border-l-2",
+                    isActive
+                      ? "bg-blue-50 border-blue-500 text-blue-900"
+                      : "border-transparent text-gray-500 hover:bg-gray-100",
+                  ].join(" ")}
+                  title={`${s.sessionId} · ${formatBytes(s.fileSize)} · ${
+                    s.messageCount
+                  } ${t("sidebar.session_records_unit")} · ${t("sidebar.trash_folder")}`}
+                  data-testid={`sidebar-trash-open-${s.sessionId}`}
+                >
+                  <div className="flex items-center gap-1 truncate text-[11px]">
+                    <span
+                      className={[
+                        "truncate",
+                        isActive
+                          ? ""
+                          : "line-through decoration-gray-400/60",
+                      ].join(" ")}
                     >
-                      ↩ {t("sidebar.trash_restore")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void onPurge(s.sessionId, s.title)}
-                      className="px-1 py-0.5 rounded hover:bg-rose-100 hover:text-rose-700 transition-colors"
-                      title={t("sidebar.trash_purge_title")}
-                      data-testid={`sidebar-trash-purge-${s.sessionId}`}
-                    >
-                      ✕
-                    </button>
-                  </span>
-                </div>
-              </div>
-            </li>
-          ))}
+                      {s.title}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-gray-400 flex justify-between mt-0.5">
+                    <span className="font-mono">
+                      {s.sessionId.slice(0, 8)}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      {/* Inline action buttons stop propagation so
+                          clicking 还原 / ✕ doesn't also fire onOpen. */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void onRestore(s.sessionId);
+                        }}
+                        className="px-1 py-0.5 rounded hover:bg-blue-100 hover:text-blue-700 transition-colors"
+                        title={t("sidebar.trash_restore_title")}
+                        data-testid={`sidebar-trash-restore-${s.sessionId}`}
+                      >
+                        ↩ {t("sidebar.trash_restore")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPurge(s.sessionId, s.title);
+                        }}
+                        className="px-1 py-0.5 rounded hover:bg-rose-100 hover:text-rose-700 transition-colors"
+                        title={t("sidebar.trash_purge_title")}
+                        data-testid={`sidebar-trash-purge-${s.sessionId}`}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  </div>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

@@ -33,7 +33,12 @@ import {
 } from "@/server/services/chatFlowCache";
 import { getPendingPermission } from "@/server/services/pendingPermissionTracker";
 import { findForkClosure, type ClosureMember } from "@/server/services/forkTree";
-import { locateSessionJsonl } from "@/server/services/locateJsonl";
+// Read paths use the with-trash locator so a session that was soft-
+// deleted via /api/sessions/:id/trash still loads (the canvas shows
+// it read-only via the frontend-side banner). Mutating routes in
+// turns.ts / fork.ts continue to use the projects-only locator —
+// trashed sessions naturally 404 there, blocking writes.
+import { locateSessionJsonlWithTrash as locateSessionJsonl } from "@/server/services/locateJsonl";
 import {
   sidecarSubagentsDir,
   watchSessionClosure,

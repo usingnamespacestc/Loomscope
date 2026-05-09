@@ -43,7 +43,10 @@
     "confirm_empty_button": "全部永久删除",
     "confirm_purge_title": "永久删除「{{title}}」",
     "confirm_purge_message": "永久从磁盘删除这条 session，此操作不可撤销。",
-    "confirm_purge_button": "永久删除"
+    "confirm_purge_button": "永久删除",
+    "deleted_banner_title": "此 session 已删除",
+    "deleted_banner_message": "正在以只读模式浏览。还原后可继续操作。",
+    "deleted_banner_restore": "还原"
   },
   "chat_node": {
     "user": "用户",

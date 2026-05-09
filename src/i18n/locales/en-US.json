@@ -43,7 +43,10 @@
     "confirm_empty_button": "Delete all permanently",
     "confirm_purge_title": "Delete \"{{title}}\" permanently",
     "confirm_purge_message": "Remove this session from disk. This cannot be undone.",
-    "confirm_purge_button": "Delete permanently"
+    "confirm_purge_button": "Delete permanently",
+    "deleted_banner_title": "This session is deleted",
+    "deleted_banner_message": "Browsing in read-only mode. Restore to continue.",
+    "deleted_banner_restore": "Restore"
   },
   "chat_node": {
     "user": "User",

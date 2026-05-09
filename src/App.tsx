@@ -27,6 +27,7 @@ import { Header } from "@/components/Header";
 import { HookOnboardingModal } from "@/components/HookOnboardingModal";
 import { InteractivePermissionBanner } from "@/components/InteractivePermissionBanner";
 import { PermissionBanner } from "@/components/PermissionBanner";
+import { TrashedSessionBanner } from "@/components/TrashedSessionBanner";
 import { Sidebar } from "@/components/Sidebar";
 import { useKeyboardNav } from "@/hooks/useKeyboardNav";
 import { useStore } from "@/store/index";
@@ -412,6 +413,7 @@ export default function App() {
           {activeId && session?.error && <ErrorState message={session.error} />}
           {activeId && <PermissionBanner sessionId={activeId} />}
           {activeId && <InteractivePermissionBanner sessionId={activeId} />}
+          {activeId && <TrashedSessionBanner sessionId={activeId} />}
           {/* v0.10 perf: top-level ChatFlowCanvas stays mounted across
               drill in/out — hidden via display:none when not the
               active view. Prevents the 187-card unmount/remount spike
