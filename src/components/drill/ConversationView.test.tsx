@@ -474,7 +474,13 @@ describe("ConversationView — content rendering", () => {
     expect(strongTexts).toContain("answer");
   });
 
-  it("falls back to compact summaryText when no llm_call exists", () => {
+  it("v1.2: pure compact ChatNodes are hidden from Conversation view", () => {
+    // Per v1.2 design (handoff-v1.2-summary-spike.md): compact nodes
+    // are model-context plumbing, not real conversation content.
+    // ConversationView filters out `isCompactSummary && !hasInnerCompact`
+    // ChatNodes; their summary is still visible in Effective Context view.
+    // This test pins the filter — a session that contains ONLY a pure
+    // compact ChatNode should render the empty state.
     const cf = flow([
       {
         ...cn("c", null, "[Compact summary]", null),
@@ -490,7 +496,27 @@ describe("ConversationView — content rendering", () => {
     ]);
     seed(cf, "c");
     render(<ConversationView sessionId={SID} chatFlow={cf} />);
-    expect(screen.getByText("compacted prior段")).toBeTruthy();
+    // The compact summary text must NOT appear (was previously shown
+    // as fallback bubble; v1.2 hides pure compacts entirely).
+    expect(screen.queryByText("compacted prior段")).toBeNull();
+    // Conversation falls back to its empty state since no visible
+    // ChatNodes remain on the path.
+    expect(screen.getByTestId("conversation-empty")).toBeTruthy();
+  });
+
+  it("v1.2: ChatNode with hasInnerCompact still renders (manual /compact mid-turn)", () => {
+    // hasInnerCompact = a normal turn that *contains* a compact
+    // tool_use (e.g. user typed /compact); these still render so the
+    // user can see their manual slash invocation.
+    const cf = flow([
+      {
+        ...cn("a", null, "user prompt", "assistant reply"),
+        hasInnerCompact: true,
+      },
+    ]);
+    seed(cf, "a");
+    render(<ConversationView sessionId={SID} chatFlow={cf} />);
+    expect(screen.getByText("user prompt")).toBeTruthy();
   });
 
   it("MessageMeta surfaces model + token sum when last llm_call has usage", () => {

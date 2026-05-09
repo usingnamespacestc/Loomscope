@@ -146,19 +146,69 @@ export function ConversationView({
 
   const { path, forks, selectedIndex } = useMemo(() => {
     const resolved = resolvePath(chatFlow, selectedId);
-    if (!headCutoffChatNodeId) return resolved;
-    const cutIdx = resolved.path.indexOf(headCutoffChatNodeId);
-    if (cutIdx <= 0) return resolved;
+
+    // v1.2: hide pure compact nodes from Conversation view. They
+    // are model-context plumbing (a /compact-emitted summary), not
+    // real conversation content. Filtering happens AFTER resolvePath
+    // so the resolution still includes them on the chain (selection
+    // logic / fork detection treat them as ChatNodes). Effective
+    // Context view keeps showing them — that's where they belong.
+    //
+    // "Pure compact" = isCompactSummary && !hasInnerCompact. The
+    // hasInnerCompact case is a normal turn that *contains* a compact
+    // tool_use (e.g. user wrote `/compact` mid-conversation); those
+    // still render so the user sees the manual slash invocation.
+    let visible = resolved;
+    if (chatFlow) {
+      const cnById = new Map(chatFlow.chatNodes.map((c) => [c.id, c]));
+      const isPureCompact = (id: string) => {
+        const cn = cnById.get(id);
+        return Boolean(cn && cn.isCompactSummary && !cn.hasInnerCompact);
+      };
+      const filteredPath = resolved.path.filter((id) => !isPureCompact(id));
+      if (filteredPath.length !== resolved.path.length) {
+        // Recompute selectedIndex against the filtered path. If the
+        // selected node was itself a pure compact, fall back to the
+        // closest visible ancestor (or 0 if none above).
+        let newSelectedIdx = filteredPath.indexOf(
+          resolved.path[resolved.selectedIndex],
+        );
+        if (newSelectedIdx < 0) {
+          // Walk back from the selection looking for a visible
+          // ancestor.
+          for (let i = resolved.selectedIndex - 1; i >= 0; i -= 1) {
+            const idx = filteredPath.indexOf(resolved.path[i]);
+            if (idx >= 0) {
+              newSelectedIdx = idx;
+              break;
+            }
+          }
+          if (newSelectedIdx < 0) newSelectedIdx = 0;
+        }
+        const filteredForks = resolved.forks.filter((f) =>
+          filteredPath.indexOf(f.nodeId) >= 0,
+        );
+        visible = {
+          path: filteredPath,
+          forks: filteredForks,
+          selectedIndex: newSelectedIdx,
+        };
+      }
+    }
+
+    if (!headCutoffChatNodeId) return visible;
+    const cutIdx = visible.path.indexOf(headCutoffChatNodeId);
+    if (cutIdx <= 0) return visible;
     // Slice at the cutoff (inclusive) and drop forks that lived above.
     // selectedIndex shifts left by cutIdx; if the selection lived ABOVE
     // the cutoff (rare — Effective Context only sets this when focused
     // is at or below the cutoff), clamp to the cutoff itself so the
     // dim-past-selection logic doesn't dim the whole visible slice.
-    const slicedPath = resolved.path.slice(cutIdx);
-    const slicedForks = resolved.forks.filter(
+    const slicedPath = visible.path.slice(cutIdx);
+    const slicedForks = visible.forks.filter(
       (f) => slicedPath.indexOf(f.nodeId) >= 0,
     );
-    const slicedSelectedIdx = Math.max(0, resolved.selectedIndex - cutIdx);
+    const slicedSelectedIdx = Math.max(0, visible.selectedIndex - cutIdx);
     return {
       path: slicedPath,
       forks: slicedForks,
