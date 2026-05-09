@@ -183,10 +183,19 @@ interface CanvasInnerProps extends ChatFlowCanvasProps {
 // y is down in RF coords; setCenter then pans further so the card
 // appears above the geometric midpoint by this amount).
 //
+// Used by BOTH first-paint fitView-then-recenter AND click-focus
+// panToNodeCenter so the two paths land cards at identical screen
+// y. 32 was the original click-focus value; first-paint had no
+// bias, so refresh-then-click produced visible vertical drift.
+// 16 is the midpoint between "no bias" (auto-display lower) and
+// "32 bias" (click-focus higher), matching user preference for
+// the in-between position 2026-05-08.
+//
 // 中: 由于画布底部 chrome 比顶部重（左下 zoom controls + 右下
 // TaskListPanel），几何居中的卡片视觉上偏下；把目标点世界 y +
 // bias/zoom，setCenter 多 pan 一点，卡片屏幕位置上移 bias px。
-const CANVAS_FOCUS_BIAS_Y_PX = 32;
+// 首屏 + 点击 focus 两条路径共用此 bias，消除刷新前后视觉漂移。
+const CANVAS_FOCUS_BIAS_Y_PX = 16;
 
 function panToNodeCenter(
   rf: ReturnType<typeof useReactFlow>,
@@ -541,6 +550,11 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     if (!latestNodeMeasured) return;
     if (!latestNodeId) return;
     if (focusedSessionRef.current === chatFlow.id) return;
+    // Two-step focus: fitView computes the zoom (constrained 0.5–1.0
+    // with padding 0.4), then setCenter re-anchors at the same zoom
+    // but with CANVAS_FOCUS_BIAS_Y_PX applied — matching the click-
+    // focus path (panToNodeCenter) so a refresh-then-click sequence
+    // doesn't produce visible vertical drift.
     rf.fitView({
       nodes: [{ id: latestNodeId }],
       padding: 0.4,
@@ -548,6 +562,17 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
       minZoom: 0.5,
       duration: 0,
     });
+    const node = rf.getNode(latestNodeId);
+    if (node) {
+      const vp = rf.getViewport();
+      const w = node.measured?.width ?? NODE_WIDTH;
+      const h = node.measured?.height ?? NODE_HEIGHT;
+      rf.setCenter(
+        node.position.x + w / 2,
+        node.position.y + h / 2 + CANVAS_FOCUS_BIAS_Y_PX / vp.zoom,
+        { zoom: vp.zoom, duration: 0 },
+      );
+    }
     focusedSessionRef.current = chatFlow.id;
     setFirstPaintReady(true);
   }, [chatFlow.id, latestNodeId, latestNodeMeasured, rf]);
