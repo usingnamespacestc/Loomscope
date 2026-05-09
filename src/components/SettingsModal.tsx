@@ -290,6 +290,9 @@ function HooksPanel() {
         <p className="text-gray-500">
           {t("settings.hooks.events_description")}
         </p>
+        <p className="text-[11px] italic text-amber-700">
+          {t("settings.hooks.events_paths_note")}
+        </p>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
