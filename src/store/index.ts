@@ -11,6 +11,7 @@ import { createSessionSlice } from "@/store/sessionSlice";
 import { createTaskListSlice } from "@/store/taskListSlice";
 import { createGitFilesSlice } from "@/store/gitFilesSlice";
 import { createSdkChannelSlice } from "@/store/sdkChannelSlice";
+import { createTrashSlice } from "@/store/trashSlice";
 import { createUISlice } from "@/store/uiSlice";
 import { createWorkspaceSlice } from "@/store/workspaceSlice";
 
@@ -24,6 +25,7 @@ export const useStore = create<LoomscopeStore>()(
       ...createTaskListSlice(set, get, api),
       ...createGitFilesSlice(set, get, api),
       ...createSdkChannelSlice(set, get, api),
+      ...createTrashSlice(set, get, api),
     }),
     {
       name: "loomscope:state",
@@ -49,6 +51,7 @@ export const useStore = create<LoomscopeStore>()(
         // loadSession sets session.error and the user sees a clean
         // hint to pick a new one.
         activeSessionId: state.activeSessionId,
+        trashExpanded: state.trashExpanded,
       }),
     },
   ),

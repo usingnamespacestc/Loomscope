@@ -23,7 +23,22 @@
     "no_sessions_root": "未在 ~/.claude/projects/ 找到 CC session。",
     "error_label": "✗ 错误",
     "session_records_unit": "条记录",
-    "scanning": "扫描 ~/.claude/projects/…"
+    "scanning": "扫描 ~/.claude/projects/…",
+    "context_menu_trash": "移到回收站",
+    "context_menu_trash_desc": "软删，可在回收站还原",
+    "context_menu_copy_id": "复制 session id",
+    "trash_folder": "回收站",
+    "trash_empty_button": "清空",
+    "trash_empty_button_title": "永久删除回收站内全部 session",
+    "trash_empty_confirm": "确认永久删除回收站内全部 session？此操作不可撤销。",
+    "trash_purge_confirm": "确认永久删除「{{title}}」？此操作不可撤销。",
+    "trash_loading": "加载回收站…",
+    "trash_empty_state": "（回收站为空）",
+    "trash_restore": "还原",
+    "trash_restore_title": "把这条 session 移回原 workspace",
+    "trash_purge": "永久删除",
+    "trash_purge_title": "永久从磁盘删除这条 session",
+    "trash_action_failed": "操作失败：{{error}}"
   },
   "chat_node": {
     "user": "用户",

@@ -523,4 +523,5 @@ export type LoomscopeStore = UISlice &
   LiveEventSlice &
   TaskListSlice &
   import("./gitFilesSlice").GitFilesSlice &
-  import("./sdkChannelSlice").SdkChannelSlice;
+  import("./sdkChannelSlice").SdkChannelSlice &
+  import("./trashSlice").TrashSlice;

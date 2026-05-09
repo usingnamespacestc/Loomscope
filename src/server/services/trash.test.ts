@@ -17,7 +17,7 @@ import { TrashError, TrashService } from "@/server/services/trash";
 const SID = "11111111-1111-4000-8000-000000000aaa";
 const SID_OTHER = "22222222-2222-4000-8000-000000000bbb";
 
-const fakeMeta = async (jsonlPath: string) => ({
+const fakeMeta = async (_jsonlPath: string) => ({
   title: "fixture title",
   messageCount: 7,
   cwd: "/home/user/repo",

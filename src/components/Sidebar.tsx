@@ -20,8 +20,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ContextMenu, type ContextMenuItem } from "@/canvas/ContextMenu";
 import { useStore } from "@/store/index";
 import { useJumpToHit, type JumpHit } from "@/components/sidebar/useJumpToHit";
+import type { TrashedSession } from "@/api/trash";
 
 type SearchMode = "filter" | "jump";
 
@@ -58,6 +60,26 @@ export function Sidebar() {
   const activeId = useStore((s) => s.activeSessionId);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const collapsed = useStore((s) => s.sidebarCollapsed);
+  const trashedSessions = useStore((s) => s.trashedSessions);
+  const trashLoading = useStore((s) => s.trashLoading);
+  const trashExpanded = useStore((s) => s.trashExpanded);
+  const refreshTrash = useStore((s) => s.refreshTrash);
+  const trashSession = useStore((s) => s.trashSession);
+  const restoreSession = useStore((s) => s.restoreSession);
+  const purgeSession = useStore((s) => s.purgeSession);
+  const emptyTrash = useStore((s) => s.emptyTrash);
+  const toggleTrashExpanded = useStore((s) => s.toggleTrashExpanded);
+
+  // Right-click context menu state. {sessionId, cwd} identifies the
+  // target row; {x, y} are pixel coords from the contextmenu event.
+  // Single-instance — only one menu open at a time.
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    sessionId: string;
+    cwd: string;
+    title: string;
+  } | null>(null);
 
   // PR 2.5 search state — local to Sidebar; not persisted across
   // remounts. Cross-remount memory of the user's preferred search
@@ -74,6 +96,7 @@ export function Sidebar() {
 
   useEffect(() => {
     void refresh();
+    void refreshTrash();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -345,7 +368,11 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* Body — either candidate panel (jump mode active) or workspace tree */}
+      {/* Body — either candidate panel (jump mode active) or workspace
+          tree + trash folder. Trash sits at the bottom as a distinct
+          section so it's always visible after scrolling past
+          workspaces; it's intentionally part of the same scroll area
+          rather than absolute-pinned to keep small-screen UX simple. */}
       <div className="overflow-y-auto flex-1">
         {showCandidatePanel ? (
           <CandidatePanel
@@ -355,6 +382,7 @@ export function Sidebar() {
             t={t}
           />
         ) : (
+          <>
           <ul data-testid="sidebar-workspace-tree">
             {visibleWorkspaces.map((ws) => {
               const isOpen = expanded.has(ws.cwd);
@@ -414,6 +442,16 @@ export function Sidebar() {
                                   : "border-transparent text-gray-700 hover:bg-blue-50/60 hover:border-blue-200",
                               ].join(" ")}
                               onClick={() => setActive(s.sessionId)}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                setContextMenu({
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                  sessionId: s.sessionId,
+                                  cwd: ws.cwd,
+                                  title: s.title,
+                                });
+                              }}
                               data-testid={`session-row-${s.sessionId}`}
                               title={`${s.sessionId} · ${formatBytes(s.fileSize)} · ${s.messageCount} ${t("sidebar.session_records_unit")}`}
                             >
@@ -439,9 +477,190 @@ export function Sidebar() {
               );
             })}
           </ul>
+          <TrashSection
+            sessions={trashedSessions}
+            loading={trashLoading}
+            expanded={trashExpanded}
+            onToggle={toggleTrashExpanded}
+            onRestore={async (sid) => {
+              const r = await restoreSession(sid);
+              if (!r.ok) {
+                window.alert(t("sidebar.trash_action_failed", { error: r.error }));
+              }
+            }}
+            onPurge={async (sid, title) => {
+              if (
+                !window.confirm(
+                  t("sidebar.trash_purge_confirm", { title }),
+                )
+              ) {
+                return;
+              }
+              const r = await purgeSession(sid);
+              if (!r.ok) {
+                window.alert(t("sidebar.trash_action_failed", { error: r.error }));
+              }
+            }}
+            onEmpty={async () => {
+              if (!window.confirm(t("sidebar.trash_empty_confirm"))) return;
+              const r = await emptyTrash();
+              if (!r.ok) {
+                window.alert(t("sidebar.trash_action_failed", { error: r.error }));
+              }
+            }}
+            t={t}
+          />
+          </>
         )}
       </div>
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          items={[
+            {
+              key: "trash",
+              label: t("sidebar.context_menu_trash"),
+              description: t("sidebar.context_menu_trash_desc"),
+              accent: "danger",
+              onClick: () => {
+                void (async () => {
+                  const r = await trashSession(contextMenu.sessionId, contextMenu.cwd);
+                  if (!r.ok) {
+                    window.alert(
+                      t("sidebar.trash_action_failed", { error: r.error }),
+                    );
+                  }
+                })();
+              },
+            },
+            {
+              key: "copy-id",
+              label: t("sidebar.context_menu_copy_id"),
+              onClick: () => {
+                void navigator.clipboard
+                  .writeText(contextMenu.sessionId)
+                  .catch(() => undefined);
+              },
+            },
+          ] satisfies ContextMenuItem[]}
+        />
+      )}
     </aside>
+  );
+}
+
+// 回收站文件夹 — pinned visually under workspaces with a top border
+// + neutral-gray styling. Always renders the header (so user can
+// expand/collapse even when empty); body renders only when expanded.
+function TrashSection({
+  sessions,
+  loading,
+  expanded,
+  onToggle,
+  onRestore,
+  onPurge,
+  onEmpty,
+  t,
+}: {
+  sessions: TrashedSession[];
+  loading: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  onRestore: (sid: string) => void | Promise<void>;
+  onPurge: (sid: string, title: string) => void | Promise<void>;
+  onEmpty: () => void | Promise<void>;
+  t: (k: string, opts?: Record<string, unknown>) => string;
+}) {
+  return (
+    <div
+      className="border-t border-gray-200 bg-gray-50/50"
+      data-testid="sidebar-trash-section"
+    >
+      <div className="flex items-center w-full">
+        <button
+          className="flex-1 flex items-center gap-1.5 px-2 py-1.5 hover:bg-gray-100 text-left transition-colors"
+          onClick={onToggle}
+          data-testid="sidebar-trash-toggle"
+          aria-expanded={expanded}
+        >
+          <span className="inline-block w-3 text-center text-[9px] text-gray-400">
+            {expanded ? "▾" : "▸"}
+          </span>
+          <span className="text-[12px]">🗑️</span>
+          <span className="text-[11px] text-gray-700 font-medium flex-1">
+            {t("sidebar.trash_folder")}
+          </span>
+          <span className="text-[10px] text-gray-400 font-mono">
+            {sessions.length}
+          </span>
+        </button>
+        {expanded && sessions.length > 0 && (
+          <button
+            className="mr-2 px-1.5 py-0.5 rounded text-[10px] text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition-colors"
+            onClick={() => void onEmpty()}
+            title={t("sidebar.trash_empty_button_title")}
+            data-testid="sidebar-trash-empty"
+          >
+            {t("sidebar.trash_empty_button")}
+          </button>
+        )}
+      </div>
+      {expanded && (
+        <ul data-testid="sidebar-trash-list">
+          {loading && sessions.length === 0 && (
+            <li className="px-6 py-1.5 text-[10px] text-gray-400 italic">
+              {t("sidebar.trash_loading")}
+            </li>
+          )}
+          {!loading && sessions.length === 0 && (
+            <li className="px-6 py-1.5 text-[10px] text-gray-400 italic">
+              {t("sidebar.trash_empty_state")}
+            </li>
+          )}
+          {sessions.map((s) => (
+            <li key={s.sessionId} data-testid={`sidebar-trash-row-${s.sessionId}`}>
+              <div
+                className="pl-6 pr-2 py-1.5 border-l-2 border-transparent text-gray-500 group/trashrow hover:bg-gray-100"
+                title={`${s.sessionId} · ${formatBytes(s.fileSize)} · ${
+                  s.messageCount
+                } ${t("sidebar.session_records_unit")} · ${t("sidebar.trash_folder")}`}
+              >
+                <div className="flex items-center gap-1 truncate text-[11px]">
+                  <span className="truncate line-through decoration-gray-400/60">
+                    {s.title}
+                  </span>
+                </div>
+                <div className="text-[10px] text-gray-400 flex justify-between mt-0.5">
+                  <span className="font-mono">{s.sessionId.slice(0, 8)}</span>
+                  <span className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => void onRestore(s.sessionId)}
+                      className="px-1 py-0.5 rounded hover:bg-blue-100 hover:text-blue-700 transition-colors"
+                      title={t("sidebar.trash_restore_title")}
+                      data-testid={`sidebar-trash-restore-${s.sessionId}`}
+                    >
+                      ↩ {t("sidebar.trash_restore")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onPurge(s.sessionId, s.title)}
+                      className="px-1 py-0.5 rounded hover:bg-rose-100 hover:text-rose-700 transition-colors"
+                      title={t("sidebar.trash_purge_title")}
+                      data-testid={`sidebar-trash-purge-${s.sessionId}`}
+                    >
+                      ✕
+                    </button>
+                  </span>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

@@ -39,9 +39,11 @@ const CSRF_BYPASS_PATHS = new Set([
 // tabs without Origin headers) are explicitly out of scope.
 const CSRF_BYPASS_PREFIXES = [
   "/api/sessions/", // /:id/turns, /:id/queue/:itemId, /:id/interrupt,
-                    // /:id/permission-prompts/:promptId/decision (v∞.3)
+                    // /:id/permission-prompts/:promptId/decision (v∞.3),
+                    // /:id/trash (v1.x soft-delete)
   "/api/preferences", // GET + PATCH
   "/api/permission-rules", // v∞.3: GET / POST / DELETE
+  "/api/trash", // /empty, /:sid/restore, DELETE /:sid (v1.x soft-delete)
 ];
 
 export function csrfMiddleware(token: string): MiddlewareHandler {

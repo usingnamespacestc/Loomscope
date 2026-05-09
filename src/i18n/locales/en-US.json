@@ -23,7 +23,22 @@
     "no_sessions_root": "No CC sessions found in ~/.claude/projects/.",
     "error_label": "✗ Error",
     "session_records_unit": "records",
-    "scanning": "Scanning ~/.claude/projects/…"
+    "scanning": "Scanning ~/.claude/projects/…",
+    "context_menu_trash": "Move to trash",
+    "context_menu_trash_desc": "Soft delete; can be restored from trash",
+    "context_menu_copy_id": "Copy session id",
+    "trash_folder": "Trash",
+    "trash_empty_button": "Empty",
+    "trash_empty_button_title": "Permanently delete all sessions in trash",
+    "trash_empty_confirm": "Permanently delete all sessions in trash? This cannot be undone.",
+    "trash_purge_confirm": "Permanently delete \"{{title}}\"? This cannot be undone.",
+    "trash_loading": "Loading trash…",
+    "trash_empty_state": "(trash is empty)",
+    "trash_restore": "Restore",
+    "trash_restore_title": "Move this session back to its original workspace",
+    "trash_purge": "Delete forever",
+    "trash_purge_title": "Permanently remove this session from disk",
+    "trash_action_failed": "Action failed: {{error}}"
   },
   "chat_node": {
     "user": "User",
