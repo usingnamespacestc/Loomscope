@@ -103,7 +103,7 @@
     "deny": "Deny"
   },
   "permission_rules": {
-    "section_title": "Saved \"always allow\" rules",
+    "section_title": "Always-allowed tools",
     "section_description": "Loomscope intercepts Claude's tool permission requests via the SDK canUseTool callback. Clicking \"Allow always\" saves the tool to ~/.loomscope/permissions.json so future calls auto-allow without prompting. Remove rules here.",
     "empty": "No rules yet. Click \"Allow always\" the first time you grant a tool to save one here.",
     "header_tool": "Tool",
@@ -249,23 +249,29 @@
     "open": "Open settings",
     "close": "Close",
     "tab_hooks": "Hooks",
-    "tab_vinf": "v∞ behavior",
-    "vinf": {
-      "section_auth": "Billing / auth",
-      "auth_description": "Defaults to OAuth credentials from your claude.ai subscription. Toggle the switch below to use ANTHROPIC_API_KEY (per-token API billing) instead.",
+    "tab_account": "Account",
+    "tab_permissions": "Permissions",
+    "tab_runtime": "Session runtime",
+    "account": {
+      "section_title": "Billing / auth",
+      "description": "Defaults to OAuth credentials from your claude.ai subscription. Toggle the switch below to use ANTHROPIC_API_KEY (per-token API billing) instead.",
       "use_api_key_label": "Use API key (per-token billing)",
       "use_api_key_on": "Enabled: ANTHROPIC_API_KEY env passes through to spawned `claude`; uses API credits.",
-      "use_api_key_off": "Disabled (default): ANTHROPIC_API_KEY is stripped at spawn time; uses subscription.",
-      "section_permission": "Tool permission mode",
-      "permission_description": "Maps to `claude --permission-mode` startup flag. Loomscope passes this through when spawning. In `default` mode, SDK non-TTY context silently denies tools that need approval. Pick bypassPermissions to mirror terminal `--dangerously-skip-permissions`. Full canUseTool browser banner (each tool prompts in Loomscope) is on the v∞.next backlog.",
-      "permission_mode_default": "default — Prompt every time (silent deny in SDK)",
-      "permission_mode_default_hint": "Strictest: write tools require approval; non-TTY context (Loomscope) silently denies them.",
-      "permission_mode_acceptEdits": "acceptEdits — Auto-allow file edits",
-      "permission_mode_acceptEdits_hint": "Edit/Write/MultiEdit auto-approved; Bash etc still gated.",
-      "permission_mode_bypassPermissions": "bypassPermissions — Allow everything",
-      "permission_mode_bypassPermissions_hint": "Equivalent to --dangerously-skip-permissions; all tool calls allowed.",
-      "permission_mode_plan": "plan — Plan mode (read-only)",
-      "permission_mode_plan_hint": "Plan mode; tools restricted to read-only.",
+      "use_api_key_off": "Disabled (default): ANTHROPIC_API_KEY is stripped at spawn time; uses subscription."
+    },
+    "permissions": {
+      "section_title": "Tool permission mode",
+      "description": "Maps to `claude --permission-mode` startup flag. Loomscope passes this through when spawning. In `default` mode, SDK non-TTY context silently denies tools that need approval. Pick bypassPermissions to mirror terminal `--dangerously-skip-permissions`. Full canUseTool browser banner (each tool prompts in Loomscope) is on the future backlog.",
+      "mode_default": "default — Prompt every time (silent deny in SDK)",
+      "mode_default_hint": "Strictest: write tools require approval; non-TTY context (Loomscope) silently denies them.",
+      "mode_acceptEdits": "acceptEdits — Auto-allow file edits",
+      "mode_acceptEdits_hint": "Edit/Write/MultiEdit auto-approved; Bash etc still gated.",
+      "mode_bypassPermissions": "bypassPermissions — Allow everything",
+      "mode_bypassPermissions_hint": "Equivalent to --dangerously-skip-permissions; all tool calls allowed.",
+      "mode_plan": "plan — Plan mode (read-only)",
+      "mode_plan_hint": "Plan mode; tools restricted to read-only."
+    },
+    "runtime": {
       "section_respawn": "Dual-writer race mitigation",
       "respawn_description": "Claude Code's SDK doesn't lock or tail the underlying jsonl, so when a Loomscope-spawned CC and a terminal CC both append to the same session id, each writes records based on a stale view of the chain — producing duplicate uuids + multi-parent fork artifacts. Enabling this option respawns the SDK Query before every send, so each spawn re-reads the jsonl from disk; race window narrows to sub-second. With it disabled the Query persists (subject to the idle timeout below) and the server only respawns when a pre-send staleness check detects a foreign-writer append. Both modes converge on \"always read fresh before write\"; the difference is just spawn frequency. See docs/dual-writer-race-mitigation.md for the full rationale.",
       "respawn_label": "Respawn SDK Query per send (recommended)",

@@ -15,11 +15,13 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type TabId = "hooks" | "vinf";
+type TabId = "hooks" | "account" | "permissions" | "runtime";
 
 const TABS: Array<{ id: TabId; labelKey: string; icon: string }> = [
   { id: "hooks", labelKey: "settings.tab_hooks", icon: "🪝" },
-  { id: "vinf", labelKey: "settings.tab_vinf", icon: "✏️" },
+  { id: "account", labelKey: "settings.tab_account", icon: "💳" },
+  { id: "permissions", labelKey: "settings.tab_permissions", icon: "🔒" },
+  { id: "runtime", labelKey: "settings.tab_runtime", icon: "⚙️" },
 ];
 
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
@@ -86,7 +88,9 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
 
           <div className="flex-1 overflow-auto px-5 py-4">
             {activeTab === "hooks" && <HooksPanel />}
-            {activeTab === "vinf" && <VinfPanel />}
+            {activeTab === "account" && <AccountPanel />}
+            {activeTab === "permissions" && <PermissionsPanel />}
+            {activeTab === "runtime" && <SessionRuntimePanel />}
           </div>
         </div>
       </div>
@@ -478,21 +482,21 @@ function HooksPanel() {
   );
 }
 
-// ─── v∞.2 behavior panel ────────────────────────────────────────
+// ─── settings panels ────────────────────────────────────────────
 //
-// Two settings exposed today:
-//   - idleTimeoutMin: how long an SDK Query stays alive after the
-//     user goes idle. Lower = faster recycle, higher = warmer cache
-//     for follow-up turns. Bounded [5, 240] minutes.
-//   - useApiKey: when true, leaves `ANTHROPIC_API_KEY` env in place
-//     so the spawned `claude` binary uses API-credit billing. Off
-//     by default so users' claude.ai subscriptions are used
-//     transparently.
+// Settings persist server-side (~/.loomscope/preferences.json);
+// GET /api/preferences loads, PATCH /api/preferences flushes
+// through to SessionRegistry's live setters. The four knobs
+// span three tabs (v1.1 settings refactor):
+//   - account: useApiKey
+//   - permissions: permissionMode (+ saved permission rules)
+//   - runtime: respawnPerSend, idleTimeoutMin
+// Hook-path enables (`enableHookHttpPath` / `enableHookSdkPath`)
+// belong to hook config and live in the Hooks tab via
+// HookPathsSection.
 //
-// State is persisted server-side (~/.loomscope/preferences.json);
-// PATCH /api/preferences flushes it through to SessionRegistry's
-// live setters. A failed save surfaces as inline error text;
-// success silently returns.
+// Each panel mounts its own usePreferences() so tab switches
+// re-fetch fresh — keeps panels in sync without prop drilling.
 type PermissionMode =
   | "default"
   | "acceptEdits"
@@ -506,21 +510,28 @@ const PERMISSION_MODE_OPTIONS: PermissionMode[] = [
   "plan",
 ];
 
-function VinfPanel() {
-  const { t } = useTranslation();
-  const [idleTimeoutMin, setIdleTimeoutMin] = useState<number>(30);
-  const [useApiKey, setUseApiKey] = useState<boolean>(false);
-  const [permissionMode, setPermissionMode] =
-    useState<PermissionMode>("default");
-  const [respawnPerSend, setRespawnPerSend] = useState<boolean>(true);
-  // Hook-path enables (`enableHookHttpPath` / `enableHookSdkPath`)
-  // are managed in the Hooks tab via HookPathsSection — they
-  // logically belong with hook config, not SDK-Query settings.
+interface Preferences {
+  idleTimeoutMin: number;
+  useApiKey: boolean;
+  permissionMode: PermissionMode;
+  respawnPerSend: boolean;
+}
+
+const DEFAULT_PREFS: Preferences = {
+  idleTimeoutMin: 30,
+  useApiKey: false,
+  permissionMode: "default",
+  respawnPerSend: true,
+};
+
+function usePreferences() {
+  const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
       try {
         const res = await fetch("/api/preferences", {
@@ -528,51 +539,80 @@ function VinfPanel() {
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const p = await res.json();
-        setIdleTimeoutMin(
-          typeof p.idleTimeoutMin === "number" ? p.idleTimeoutMin : 30,
-        );
-        setUseApiKey(typeof p.useApiKey === "boolean" ? p.useApiKey : false);
-        if (PERMISSION_MODE_OPTIONS.includes(p.permissionMode)) {
-          setPermissionMode(p.permissionMode);
+        if (cancelled) return;
+        setPrefs({
+          idleTimeoutMin:
+            typeof p.idleTimeoutMin === "number" ? p.idleTimeoutMin : 30,
+          useApiKey: typeof p.useApiKey === "boolean" ? p.useApiKey : false,
+          permissionMode: PERMISSION_MODE_OPTIONS.includes(p.permissionMode)
+            ? p.permissionMode
+            : "default",
+          respawnPerSend:
+            typeof p.respawnPerSend === "boolean" ? p.respawnPerSend : true,
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
         }
-        setRespawnPerSend(
-          typeof p.respawnPerSend === "boolean" ? p.respawnPerSend : true,
-        );
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const patch = useCallback(
+    async (body: Partial<Preferences>) => {
+      setSaving(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/preferences", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          credentials: "same-origin",
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const next = await res.json();
+        setPrefs((cur) => ({
+          idleTimeoutMin:
+            typeof next.idleTimeoutMin === "number"
+              ? next.idleTimeoutMin
+              : cur.idleTimeoutMin,
+          useApiKey:
+            typeof next.useApiKey === "boolean" ? next.useApiKey : cur.useApiKey,
+          permissionMode: PERMISSION_MODE_OPTIONS.includes(next.permissionMode)
+            ? next.permissionMode
+            : cur.permissionMode,
+          respawnPerSend:
+            typeof next.respawnPerSend === "boolean"
+              ? next.respawnPerSend
+              : cur.respawnPerSend,
+        }));
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
-        setLoading(false);
+        setSaving(false);
       }
-    })();
-  }, []);
+    },
+    [],
+  );
 
-  const patch = async (body: Record<string, unknown>) => {
-    setSaving(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/preferences", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        credentials: "same-origin",
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const next = await res.json();
-      setIdleTimeoutMin(next.idleTimeoutMin);
-      setUseApiKey(next.useApiKey);
-      if (PERMISSION_MODE_OPTIONS.includes(next.permissionMode)) {
-        setPermissionMode(next.permissionMode);
-      }
-      if (typeof next.respawnPerSend === "boolean") {
-        setRespawnPerSend(next.respawnPerSend);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  };
+  return { prefs, setPrefs, loading, saving, error, patch };
+}
 
+function PrefsErrorLine({ error }: { error: string | null }) {
+  if (!error) return null;
+  return (
+    <div className="text-[11px] italic text-rose-600">✗ {error}</div>
+  );
+}
+
+function AccountPanel() {
+  const { t } = useTranslation();
+  const { prefs, loading, saving, error, patch } = usePreferences();
   if (loading) {
     return (
       <div className="text-xs text-gray-500">
@@ -580,55 +620,61 @@ function VinfPanel() {
       </div>
     );
   }
-
   return (
     <div className="flex flex-col gap-6">
-      {/* Auth mode (subscription vs api key) */}
       <section>
         <h3 className="mb-1 text-xs font-semibold text-gray-700">
-          {t("settings.vinf.section_auth")}
+          {t("settings.account.section_title")}
         </h3>
         <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
-          {t("settings.vinf.auth_description")}
+          {t("settings.account.description")}
         </p>
         <label className="flex cursor-pointer items-center gap-3">
           <input
             type="checkbox"
-            data-testid="settings-vinf-use-api-key"
-            checked={useApiKey}
-            onChange={(e) =>
-              void patch({ useApiKey: e.target.checked })
-            }
+            data-testid="settings-account-use-api-key"
+            checked={prefs.useApiKey}
+            onChange={(e) => void patch({ useApiKey: e.target.checked })}
             disabled={saving}
             className="h-4 w-4 cursor-pointer"
           />
           <span className="text-xs text-gray-700">
-            {t("settings.vinf.use_api_key_label")}
+            {t("settings.account.use_api_key_label")}
           </span>
         </label>
         <p className="mt-1 text-[10px] italic text-gray-400">
-          {useApiKey
-            ? t("settings.vinf.use_api_key_on")
-            : t("settings.vinf.use_api_key_off")}
+          {prefs.useApiKey
+            ? t("settings.account.use_api_key_on")
+            : t("settings.account.use_api_key_off")}
         </p>
       </section>
+      <PrefsErrorLine error={error} />
+    </div>
+  );
+}
 
-      {/* Permission mode — passed to SDK query as `permissionMode`.
-          Mirrors `claude --permission-mode` startup flag. Default is
-          strictest (silent deny in non-TTY); users coming from
-          `--dangerously-skip-permissions` should pick bypassPermissions.
-          The full canUseTool browser-banner UX (= each tool prompts in
-          Loomscope) is a separate v∞.next backlog item. */}
+function PermissionsPanel() {
+  const { t } = useTranslation();
+  const { prefs, loading, saving, error, patch } = usePreferences();
+  if (loading) {
+    return (
+      <div className="text-xs text-gray-500">
+        {t("settings.hooks.loading")}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-6">
       <section>
         <h3 className="mb-1 text-xs font-semibold text-gray-700">
-          {t("settings.vinf.section_permission")}
+          {t("settings.permissions.section_title")}
         </h3>
         <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
-          {t("settings.vinf.permission_description")}
+          {t("settings.permissions.description")}
         </p>
         <select
-          data-testid="settings-vinf-permission-mode"
-          value={permissionMode}
+          data-testid="settings-permissions-mode"
+          value={prefs.permissionMode}
           onChange={(e) =>
             void patch({ permissionMode: e.target.value as PermissionMode })
           }
@@ -637,31 +683,52 @@ function VinfPanel() {
         >
           {PERMISSION_MODE_OPTIONS.map((m) => (
             <option key={m} value={m}>
-              {t(`settings.vinf.permission_mode_${m}`)}
+              {t(`settings.permissions.mode_${m}`)}
             </option>
           ))}
         </select>
         <p className="mt-1 text-[10px] italic text-gray-400">
-          {t(`settings.vinf.permission_mode_${permissionMode}_hint`)}
+          {t(`settings.permissions.mode_${prefs.permissionMode}_hint`)}
         </p>
       </section>
+      {/* Saved permission rules manager. Lists rules from
+          ~/.loomscope/permissions.json with × to remove. New rules
+          land here when the user clicks "Always allow" in the
+          InteractivePermissionBanner. */}
+      <PermissionRulesSection />
+      <PrefsErrorLine error={error} />
+    </div>
+  );
+}
 
+function SessionRuntimePanel() {
+  const { t } = useTranslation();
+  const { prefs, setPrefs, loading, saving, error, patch } = usePreferences();
+  if (loading) {
+    return (
+      <div className="text-xs text-gray-500">
+        {t("settings.hooks.loading")}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-6">
       {/* Dual-writer race mitigation. Position BEFORE idle-timeout
           because the two interact: when respawnPerSend=true, idle
           timeout becomes a post-turn cleanup bound rather than a
           per-session lifetime knob. The hint text reflects this. */}
       <section>
         <h3 className="mb-1 text-xs font-semibold text-gray-700">
-          {t("settings.vinf.section_respawn")}
+          {t("settings.runtime.section_respawn")}
         </h3>
         <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
-          {t("settings.vinf.respawn_description")}
+          {t("settings.runtime.respawn_description")}
         </p>
         <label className="flex cursor-pointer items-center gap-3">
           <input
             type="checkbox"
-            data-testid="settings-vinf-respawn-per-send"
-            checked={respawnPerSend}
+            data-testid="settings-runtime-respawn-per-send"
+            checked={prefs.respawnPerSend}
             onChange={(e) =>
               void patch({ respawnPerSend: e.target.checked })
             }
@@ -669,63 +736,51 @@ function VinfPanel() {
             className="h-4 w-4 cursor-pointer"
           />
           <span className="text-xs text-gray-700">
-            {t("settings.vinf.respawn_label")}
+            {t("settings.runtime.respawn_label")}
           </span>
         </label>
         <p className="mt-1 text-[10px] italic text-gray-400">
-          {respawnPerSend
-            ? t("settings.vinf.respawn_on_hint")
-            : t("settings.vinf.respawn_off_hint")}
+          {prefs.respawnPerSend
+            ? t("settings.runtime.respawn_on_hint")
+            : t("settings.runtime.respawn_off_hint")}
         </p>
       </section>
 
-      {/* Idle timeout */}
       <section>
         <h3 className="mb-1 text-xs font-semibold text-gray-700">
-          {t("settings.vinf.section_idle")}
+          {t("settings.runtime.section_idle")}
         </h3>
         <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
-          {t("settings.vinf.idle_description")}
+          {t("settings.runtime.idle_description")}
         </p>
         <div className="flex items-center gap-2">
           <input
             type="number"
-            data-testid="settings-vinf-idle-min"
+            data-testid="settings-runtime-idle-min"
             min={5}
             max={240}
-            value={idleTimeoutMin}
+            value={prefs.idleTimeoutMin}
             onChange={(e) =>
-              setIdleTimeoutMin(Number(e.target.value) || 30)
+              setPrefs((p) => ({
+                ...p,
+                idleTimeoutMin: Number(e.target.value) || 30,
+              }))
             }
-            onBlur={() => void patch({ idleTimeoutMin })}
+            onBlur={() => void patch({ idleTimeoutMin: prefs.idleTimeoutMin })}
             disabled={saving}
             className="w-20 rounded border border-gray-300 px-2 py-1 text-xs"
           />
           <span className="text-xs text-gray-600">
-            {t("settings.vinf.minutes")}
+            {t("settings.runtime.minutes")}
           </span>
         </div>
         <p className="mt-1 text-[10px] italic text-gray-400">
-          {respawnPerSend
-            ? t("settings.vinf.idle_range_when_respawn_on")
-            : t("settings.vinf.idle_range")}
+          {prefs.respawnPerSend
+            ? t("settings.runtime.idle_range_when_respawn_on")
+            : t("settings.runtime.idle_range")}
         </p>
       </section>
-
-      {/* Hook delivery paths moved to the Hooks tab (HookPathsSection)
-          — that's where users configure the rest of the hook
-          subsystem (event matchers + LOOMSCOPE_SECRET). v∞ tab is
-          for SDK-Query lifecycle settings, not hook routing. */}
-
-      {/* v∞.3 PR1: saved permission rules manager. Lists rules from
-          ~/.loomscope/permissions.json with × to remove. New rules
-          land here when the user clicks "Always allow" in the
-          InteractivePermissionBanner. */}
-      <PermissionRulesSection />
-
-      {error && (
-        <div className="text-[11px] italic text-rose-600">✗ {error}</div>
-      )}
+      <PrefsErrorLine error={error} />
     </div>
   );
 }
@@ -784,27 +839,27 @@ function PermissionRulesSection() {
   return (
     <section data-testid="settings-permission-rules">
       <h3 className="mb-1 text-xs font-semibold text-gray-700">
-        {t("settings.permission_rules.section_title")}
+        {t("permission_rules.section_title")}
       </h3>
       <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
-        {t("settings.permission_rules.section_description")}
+        {t("permission_rules.section_description")}
       </p>
       {loadErr && (
         <div className="mb-2 text-[11px] italic text-rose-600">
-          ✗ {t("settings.permission_rules.load_failed")}: {loadErr}
+          ✗ {t("permission_rules.load_failed")}: {loadErr}
         </div>
       )}
       {rules && rules.length === 0 && (
         <div className="text-[11px] italic text-gray-400">
-          {t("settings.permission_rules.empty")}
+          {t("permission_rules.empty")}
         </div>
       )}
       {rules && rules.length > 0 && (
         <table className="w-full text-[11px]">
           <thead>
             <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-              <th className="pb-1">{t("settings.permission_rules.header_tool")}</th>
-              <th className="pb-1">{t("settings.permission_rules.header_added_at")}</th>
+              <th className="pb-1">{t("permission_rules.header_tool")}</th>
+              <th className="pb-1">{t("permission_rules.header_added_at")}</th>
               <th className="pb-1 text-right" />
             </tr>
           </thead>
@@ -829,7 +884,7 @@ function PermissionRulesSection() {
                     onClick={() => void removeRule(r.id)}
                     className="rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200"
                   >
-                    {t("settings.permission_rules.remove")}
+                    {t("permission_rules.remove")}
                   </button>
                 </td>
               </tr>

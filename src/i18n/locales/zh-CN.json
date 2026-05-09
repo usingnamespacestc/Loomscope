@@ -103,7 +103,7 @@
     "deny": "拒绝"
   },
   "permission_rules": {
-    "section_title": "已保存的「始终允许」规则",
+    "section_title": "始终允许的工具",
     "section_description": "Loomscope 通过 SDK canUseTool 拦截 Claude 的工具权限请求；点击「始终允许」会把当前工具记到 ~/.loomscope/permissions.json，下次再不弹。可以在这里删除。",
     "empty": "暂无规则。第一次允许工具时点「始终允许」会保存到这里。",
     "header_tool": "工具",
@@ -249,23 +249,29 @@
     "open": "打开设置",
     "close": "关闭",
     "tab_hooks": "Hooks",
-    "tab_vinf": "v∞ 行为",
-    "vinf": {
-      "section_auth": "计费 / 认证",
-      "auth_description": "默认走 claude.ai 订阅的 OAuth 凭据。打开下面这个开关才会改用 ANTHROPIC_API_KEY 走按量计费。",
+    "tab_account": "账户",
+    "tab_permissions": "权限",
+    "tab_runtime": "会话运行",
+    "account": {
+      "section_title": "计费 / 认证",
+      "description": "默认走 claude.ai 订阅的 OAuth 凭据。打开下面这个开关才会改用 ANTHROPIC_API_KEY 走按量计费。",
       "use_api_key_label": "使用 API Key（按量计费）",
       "use_api_key_on": "已启用：spawn 时保留 ANTHROPIC_API_KEY，走 API 计费",
-      "use_api_key_off": "已禁用（默认）：spawn 时剥离 ANTHROPIC_API_KEY，走订阅",
-      "section_permission": "工具权限模式",
-      "permission_description": "对应 `claude --permission-mode` 启动 flag。Loomscope spawn 子进程时透传。default 模式下 SDK 非交互环境会默默拒绝所有需要权限的工具调用；想跟终端 `--dangerously-skip-permissions` 行为一致，选 bypassPermissions。完整 canUseTool 浏览器 banner（每个工具调用都弹给 Loomscope 让你点允许）是 v∞.next 的事。",
-      "permission_mode_default": "default — 每次问（SDK 模式静默拒）",
-      "permission_mode_default_hint": "最严：写工具都需 approve；非 TTY 环境（Loomscope）= 静默拒",
-      "permission_mode_acceptEdits": "acceptEdits — 自动允许文件编辑",
-      "permission_mode_acceptEdits_hint": "Edit/Write/MultiEdit 自动放行；Bash 等仍要权限",
-      "permission_mode_bypassPermissions": "bypassPermissions — 全部放行",
-      "permission_mode_bypassPermissions_hint": "等价于 --dangerously-skip-permissions，所有工具调用一律放行",
-      "permission_mode_plan": "plan — 计划模式（只读）",
-      "permission_mode_plan_hint": "plan 模式，工具被限制为只读",
+      "use_api_key_off": "已禁用（默认）：spawn 时剥离 ANTHROPIC_API_KEY，走订阅"
+    },
+    "permissions": {
+      "section_title": "工具权限模式",
+      "description": "对应 `claude --permission-mode` 启动 flag。Loomscope spawn 子进程时透传。default 模式下 SDK 非交互环境会默默拒绝所有需要权限的工具调用；想跟终端 `--dangerously-skip-permissions` 行为一致，选 bypassPermissions。完整 canUseTool 浏览器 banner（每个工具调用都弹给 Loomscope 让你点允许）是后续版本的事。",
+      "mode_default": "default — 每次问（SDK 模式静默拒）",
+      "mode_default_hint": "最严：写工具都需 approve；非 TTY 环境（Loomscope）= 静默拒",
+      "mode_acceptEdits": "acceptEdits — 自动允许文件编辑",
+      "mode_acceptEdits_hint": "Edit/Write/MultiEdit 自动放行；Bash 等仍要权限",
+      "mode_bypassPermissions": "bypassPermissions — 全部放行",
+      "mode_bypassPermissions_hint": "等价于 --dangerously-skip-permissions，所有工具调用一律放行",
+      "mode_plan": "plan — 计划模式（只读）",
+      "mode_plan_hint": "plan 模式，工具被限制为只读"
+    },
+    "runtime": {
       "section_respawn": "Dual-writer race 缓解策略",
       "respawn_description": "Claude Code 的 SDK 不锁 / 不 tail jsonl，所以 Loomscope spawn 出去的 CC 跟终端 CC 同写一个 session 时，两边各自基于陈旧的 chain 状态写入会产生重复 uuid + 多 parent 的链分叉伪迹。开启此项让每次 send 都重起 SDK Query，确保读到最新文件状态再写——race 窗口压到亚秒级。关闭后 Query 长寿（受下方 idle timeout 控制）但 send 前会做 staleness check（对比 jsonl 大小），发现外部写入会对当次 send 自动重启 Query。两种模式都收敛到「写前必读最新」，区别只在 spawn 频率。详见 docs/dual-writer-race-mitigation.md。",
       "respawn_label": "每次 send 重启 SDK Query（推荐）",

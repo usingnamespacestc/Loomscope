@@ -217,3 +217,128 @@ describe("SettingsModal", () => {
     });
   });
 });
+
+// v1.1 settings refactor — splits the old "v∞ behavior" tab into 4
+// concrete tabs. These tests pin the new structure so a regression
+// (renaming a tab id, dropping a section, breaking the prefs fetch
+// loop) is caught loud.
+describe("SettingsModal — 4-tab structure (v1.1)", () => {
+  beforeEach(() => {
+    vi.spyOn(global, "fetch").mockImplementation(async (url, init) => {
+      const u = String(url);
+      if (u.includes("/api/cc-hook-onboarding/status")) {
+        return new Response(JSON.stringify(mockStatus), { status: 200 });
+      }
+      if (u.includes("/api/preferences")) {
+        const method = (init as RequestInit | undefined)?.method ?? "GET";
+        const respond = (body: object) =>
+          new Response(JSON.stringify(body), { status: 200 });
+        const baseline = {
+          idleTimeoutMin: 30,
+          useApiKey: false,
+          permissionMode: "default",
+          respawnPerSend: true,
+        };
+        if (method === "GET") return respond(baseline);
+        if (method === "PATCH") {
+          const body = JSON.parse(
+            (init as RequestInit).body as string,
+          ) as Record<string, unknown>;
+          return respond({ ...baseline, ...body });
+        }
+      }
+      if (u.includes("/api/permission-rules")) {
+        return new Response(JSON.stringify({ rules: [] }), { status: 200 });
+      }
+      return new Response("[]", { status: 200 });
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders all 4 tab buttons (Hooks / Account / Permissions / Runtime)", () => {
+    render(<SettingsModal open={true} onClose={() => undefined} />);
+    expect(screen.getByTestId("settings-tab-hooks")).toBeTruthy();
+    expect(screen.getByTestId("settings-tab-account")).toBeTruthy();
+    expect(screen.getByTestId("settings-tab-permissions")).toBeTruthy();
+    expect(screen.getByTestId("settings-tab-runtime")).toBeTruthy();
+    // The old "vinf" tab id must not exist.
+    expect(screen.queryByTestId("settings-tab-vinf")).toBeNull();
+  });
+
+  it("Account tab shows the API key toggle", async () => {
+    render(<SettingsModal open={true} onClose={() => undefined} />);
+    fireEvent.click(screen.getByTestId("settings-tab-account"));
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-account-use-api-key")).toBeTruthy();
+    });
+  });
+
+  it("Permissions tab shows the permission mode dropdown + saved-rules section", async () => {
+    render(<SettingsModal open={true} onClose={() => undefined} />);
+    fireEvent.click(screen.getByTestId("settings-tab-permissions"));
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-permissions-mode")).toBeTruthy();
+    });
+    // Saved permission rules also lives here — header always renders.
+    await waitFor(() => {
+      expect(screen.getByText("始终允许的工具")).toBeTruthy();
+    });
+  });
+
+  it("Runtime tab shows the respawn toggle + idle minutes input", async () => {
+    render(<SettingsModal open={true} onClose={() => undefined} />);
+    fireEvent.click(screen.getByTestId("settings-tab-runtime"));
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("settings-runtime-respawn-per-send"),
+      ).toBeTruthy();
+      expect(screen.getByTestId("settings-runtime-idle-min")).toBeTruthy();
+    });
+  });
+
+  it("Account toggle PATCHes /api/preferences with useApiKey", async () => {
+    let lastPatchBody: Record<string, unknown> | null = null;
+    vi.restoreAllMocks();
+    vi.spyOn(global, "fetch").mockImplementation(async (url, init) => {
+      const u = String(url);
+      if (u.includes("/api/cc-hook-onboarding/status")) {
+        return new Response(JSON.stringify(mockStatus), { status: 200 });
+      }
+      if (u.includes("/api/preferences")) {
+        const method = (init as RequestInit | undefined)?.method ?? "GET";
+        const baseline = {
+          idleTimeoutMin: 30,
+          useApiKey: false,
+          permissionMode: "default",
+          respawnPerSend: true,
+        };
+        if (method === "GET") {
+          return new Response(JSON.stringify(baseline), { status: 200 });
+        }
+        if (method === "PATCH") {
+          const body = JSON.parse(
+            (init as RequestInit).body as string,
+          ) as Record<string, unknown>;
+          lastPatchBody = body;
+          return new Response(JSON.stringify({ ...baseline, ...body }), {
+            status: 200,
+          });
+        }
+      }
+      return new Response("[]", { status: 200 });
+    });
+
+    render(<SettingsModal open={true} onClose={() => undefined} />);
+    fireEvent.click(screen.getByTestId("settings-tab-account"));
+    const cb = (await screen.findByTestId(
+      "settings-account-use-api-key",
+    )) as HTMLInputElement;
+    fireEvent.click(cb);
+    await waitFor(() => {
+      expect(lastPatchBody).toEqual({ useApiKey: true });
+    });
+  });
+});
