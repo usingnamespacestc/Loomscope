@@ -20,11 +20,16 @@
 | **v0.8.1** | 12 issue polish batch + 浏览器实测 hand-tuning | DrillPanel chrome / Conversation 滚动+lazy load+复制+灰化 / hover-pan+auto-unfold / typography theme.extend / panel fullscreen / 文件改动语义拆分 / logical edge 视觉删除 / fold handle 条件渲染 + 之后 13 commits 实测打磨（resize lag perf / typography fallback / 复制按钮位置 / chip 颜色 / hover 视觉反馈 / 卡片 ✏️ chip）| ✅ shipped 2026-05-04 晚 commits `dc5f20a` → `6413420` + 2026-05-05 hand-tuning `f815626` → `696efda`（409/409；handoff `handoff-v0.8.1-polish-batch.md`）|
 | **v0.9** | file-tail mode | 监听 jsonl mtime 增量更新 canvas | 🚧 spike `3153381`（chokidar+SSE+refresh，端到端通；真增量 parser / sidecar / 新 session 发现 / live indicator 留 v0.9.1）|
 | **v0.10** | polish & 性能 | empty state / syntax highlight / 快捷键 / bundle split / LRU / lazy ChatFlow B1-B5 / v0.9.2 batch (a/b/c/d) / 收尾 (localStorage GC + WorkFlow viewport + follow-on-leaf) / perf 加强 (LazyMarkdownView + opacity gate + disk cache + M0+M1+M2 incremental parser) | ✅ shipped 2026-05-06 全天；563/563；244 MB session 实测 cold→warm 7s→4s（disk cache）；增量 parser 5/27/108 MB cold→incr 11×/5×/4× |
-| **v1.0** | ship | README + 截图 + GIF + npx packaging + bin entry + auto session picker | 🚧 README + single-process serve done (`310dc20`)；bin/publish/screenshots 待 |
-| **v∞.0** | live read-only | 文件监听 + settings.json hooks push，浏览器实时观察终端 CC + PermissionRequest banner | ✅ shipped 2026-05-06 晚 PR 1-4 (`a437d30` / `dd7b301` / `a7b0bb5` / `ca1ee0a`) + bug fixes (`246ae0c` schema / `7f74e34` CORS / `0105ee6` staleSince) |
-| **v∞.1** | 启动新 session | SDK `query()` 起 CC headless，writes ~/.claude/projects/<encoded-cwd>/<sid>.jsonl，Loomscope chokidar 自动渲染 | |
-| **v∞.2** | 续接 prompt（leaf） | Conversation tab 底部 composer input；SDK `query({resume, prompt})` leaf-continuation；前置：mtime advisory lock + 冲突检测 | |
-| **v∞.3** | 任意节点 fork（"120% of CC"） | SDK `resumeSessionAt: messageId` —— canvas 上点任意 ChatNode（含 assistant / 旁支）作为 fork 起点 | |
+| ~~v1.0~~ | ~~ship~~ | ❌ **canceled 2026-05-09** —— packaging + 截图不再阻塞；首次公开发布直接到 v2.0 |
+| **v∞.0**（历史命名）| live read-only | 文件监听 + settings.json hooks push，浏览器实时观察终端 CC + PermissionRequest banner | ✅ shipped 2026-05-06 晚 PR 1-4 (`a437d30` / `dd7b301` / `a7b0bb5` / `ca1ee0a`) + bug fixes (`246ae0c` schema / `7f74e34` CORS / `0105ee6` staleSince)；下文统一改用 v1.x 命名 |
+| **trash**（编号外）| soft-delete + 回收站 | TrashService + sidebar 上下文菜单 + ConfirmBanner + 只读 banner + Composer 锁定 | ✅ M1+M2+M3 shipped 2026-05-08 → 2026-05-09 commits `8e0c078` / `786579d` / `a07dc39` / `c8855f0` / `54c9b85`；M4 收口归入 v1.1 |
+| **v1.1** | trash 收口 + Settings 重构 + Viewer/Interactive toggle | M4 search exclusion + sidebar/ConfirmBanner 单测 + i18n / SettingsModal 4 tab（Hooks / 账户 / 权限 / 会话运行）+ permission_rules 改名 / 全局 viewer-vs-interactive 模式开关 + 现有写入口 gating | 🚧 |
+| **v1.2** | compact + summary 显示统一 | conversation 视图隐藏纯 compact 节点；canvas 上 compact 节点对齐普通 ChatNode（chips + drill 进 WorkFlow + 内部 llm_call 显示 token bar）；CC idle 时生成的 conversation summary 显示 | |
+| **v1.3** | composer 地基（≈ 旧 v∞.2）| mtime 冲突检测 + advisory lock；postTurn 透传 model/effort/fastMode → turns 路由 → sessionRegistry；setModel/setEffort/setFastMode + respawn 策略；Composer 尊重 Viewer/Interactive gate | |
+| **v1.4** | running status 条 | composer 上方"运行 12s..."CC terminal 风格状态条，订阅 SDK queue-state SSE | |
+| **v1.5** | slash command 子系统 | 输入 `/` 触发 picker（commands + 末尾 custom 项）+ /compact pinned 按钮；先 spike SDK streamInput 是否透传 slash | |
+| **v1.6** | 启动新 session（≈ 旧 v∞.1）| sidebar"+ 新建"按钮 → SDK `query({prompt, cwd})` 不带 resume → chokidar 自动捡起新 jsonl | |
+| **v2.0** | 任意节点 fork（≈ 旧 v∞.3）| SDK `resumeSessionAt: messageId` —— canvas 上点任意 ChatNode（含 assistant / 旁支）作为 fork 起点；首次公开发布也定在这一档 | |
 
 ## v0.1 — parser（详细）
 
@@ -557,87 +562,144 @@ CC settings.json HTTP hooks → SSE → 浏览器实时画面，含 PermissionRe
 - ~~B：parser 按 `message.id` 合并 llm_call~~ ✅ shipped 2026-05-06 夜 `94403e8` + `63b683b` —— 一次 API call = 一个逻辑 LlmCallNode；real-session 验证 832d4beb llmCount 16→8（toolCount 不变，chainCount 语义化）；disk cache schema bump 1→2
 - ~~多 tab corner cases triage~~ ✅ done 2026-05-06 晚（实测 + README 文档化）：1-3 tab work，4+ 撞 Chrome HTTP/1.1 EventSource 上限（每 tab 2 个 EventSource × 3 tab = 6 上限）。BroadcastChannel-based leader election 或 HTTP/2 是潜在修法，但工作量大、需求小，**接受现状 + README 警告**
 
-## v1.0 — ship
+## ~~v1.0~~ — ship（❌ canceled 2026-05-09）
 
-- README 完善：截图 + GIF 演示（用户驱动，需要真实 session 录制）
-- bin field + 真正 npm publish
-- esbuild bundle server 成 dist-server/（避免 runtime tsx）
-- 自动检测 ~/.claude/projects/ 下所有 session 列表（一个 session picker UI）
+原本规划的 packaging + 截图 + npm publish + bin entry 改到 **v2.0** 一并打。背景：
 
-## v∞ — live hook
+- v∞.0 已 ship（read-only 远程观察），trash 也已大致落地
+- 接下来 composer 写入路径（model 真生效、mtime 冲突检测、slash 子系统、新 session 入口、任意节点 fork）才是真正的"对外卖点"
+- 在那些都到位之前发包没意义——发出去用户拿到的还是个 read-only viewer
+- **v1.0 永久跳过**，从 v1.1 起线性递进，到 v2.0 第一次公开发布
 
-**v∞ 价值范围（修正历史）**：
+## v1.x — write-path 系列
+
+> 接管 v∞.x 旧命名（v∞.0 read-only 已 ship、v∞.1/v∞.2/v∞.3 重排到 v1.6/v1.3+/v2.0）。
+> 同时把 trash + settings + viewer mode 这些 read/write 都涉及的"基建"功能一并归入此系列。
+
+### v1.1 — trash 收口 + Settings 重构 + Viewer/Interactive toggle
+
+trash M1+M2+M3 已落（`8e0c078` / `786579d` / `a07dc39` / `c8855f0` / `54c9b85`），把残留 + 两条 settings 改造一锅端。
+
+**子任务**（task #166-#168）：
+1. **M4 trash 收口**（task #166）：
+   - search exclusion audit —— `/api/search` 与 filter mode 都要跳过 `~/.loomscope/trash`
+   - sidebar TrashSection 全测（右键菜单 / restore / purge / 计数 / 空状态 / expand toggle）
+   - ConfirmBanner 单测（Esc / Enter / danger 样式 / 错误内联渲染 / outside-click 不取消）
+   - i18n 收尾（去掉未引用的 trash key、zh/en parity）
+2. **Settings 4-tab 重构**（task #167）—— 甲案：
+   - 旧 tab："Hooks" + "v∞ 行为"（杂物间）
+   - 新 tab："Hooks" + "账户"（auth）+ "权限"（permission-mode + 已保存允许规则）+ "会话运行"（respawn + idle timeout）
+   - i18n 改名：drop `tab_vinf` 子树；permission_rules.section_title 改为"始终允许的工具"/"Always-allowed tools"
+3. **Viewer/Interactive toggle**（task #168）：
+   - 新增全局 `interactiveMode` flag（默认 true）；持久化到 `~/.loomscope/preferences.json`
+   - Settings UI：toggle 放"会话运行"tab 顶部
+   - `useInteractiveMode()` hook 给所有写入口；viewer 模式下应**隐藏**而非 disable（避免诱导）
+   - 现有写入口 gating：trash 菜单 / PermissionBanner allow-deny / Composer（即使 v1.1 时 Composer 还半残也要 gate）
+   - 后续 v1.3 / v1.5 / v1.6 / v2.0 每加新写入口必须调 hook
+
+**验收**：(a) 4 tab 渲染正确，所有 5 个原 section 各归其位；(b) viewer 模式下右键 trash / 永删按钮 / banner 决策按钮全部消失；(c) search 不再命中 trash；(d) 测试覆盖率新增 ≥ 30 个 case。
+
+### v1.2 — compact + summary 显示统一
+
+compact 节点跟 idle-time CC 自动 summary 都是"模型上下文 plumbing 而非真对话内容"，要在 conversation 视图淡化、在 canvas / 实际上下文视图中保留并完整呈现。
+
+**前置 spike**（task #170）：跑通 parser 对 `type:"summary"` 记录 + isCompactSummary 节点的现状，输出 markdown 短记。
+
+**子任务**（task #171-#173）：
+1. **隐藏 conversation 视图中的纯 compact 节点**（#171）—— ConversationView render filter，effective context tab 保留显示
+2. **Canvas 上 compact 节点 first-class**（#172）—— chips（model/token/status）+ drill 进 compact 自身的 WorkFlow（compact 是个 LLM 内部调用）+ 内部 llm_call 触发 token bar
+3. **Idle conversation summary 显示**（#173）—— 推荐落点：Conversation tab 顶部 pinned strip；多 summary 取最新
+
+**验收**：含 compact 的 jsonl conversation 视图 readable like 真对话；canvas compact 节点跟普通 ChatNode 视觉规格一致；idle summary 在 Conversation tab 显示。
+
+### v1.3 — composer 地基（接管旧 v∞.2）
+
+composer 已经半落地（input box / postTurn / model picker UI 都在），但 model/effort/fastMode 没真接到 SDK，且没有 dual-writer 防护。这版补完。
+
+**子任务**（task #174-#177）：
+1. **mtime 冲突检测**（#174）—— 旧 v∞.2 必备前置，详见 `docs/dual-writer-race-mitigation.md` 与 memory `project_loomscope_dual_writer_race.md`：
+   - 接管前读 mtime；最近 5s 变化 → 拒绝 + 提示"似有 CC 在写"
+   - advisory `<sid>.jsonl.lock` + 超时清理
+   - 接管期间持续监测；外部 writer 介入 → abort SDK Query + 标 conflicted
+2. **plumb composer settings**（#175）—— `postTurn` payload 加 model/effort/fastMode；turns 路由收；sessionRegistry 读
+3. **sessionRegistry setters + respawn 策略**（#176）—— 仿 setPermissionMode 加 setModel/setEffort/setFastMode；KEY DECISION：SDK options 在 spawn snapshot，模型切换是否 respawn？验完写到 i18n 描述里
+4. **Composer 尊重 Viewer/Interactive gate**（#177）—— v1.1-c 做基建时已经 gate 了 partial composer，这步是 v1.3 完整 composer 落地后回归验证
+
+**验收**：浏览器选模型 → 下一条 turn 真用了新模型；外部 CC 写同 jsonl → Loomscope 立刻收 banner；viewer 模式下 composer 无可见写入口。
+
+### v1.4 — running status 条
+
+composer 上方加 CC terminal 风格的运行状态条：spinner + "运行 12s..."（实时 tick），订阅已有 SDK queue-state SSE。无新接口、纯前端。
+
+**任务**：#178。**验收**：发送后立即出现，timer 每秒 tick，结果到达即消失，layout 不偏移。
+
+### v1.5 — slash command 子系统
+
+**前置 spike**（task #179）—— 测 SDK streamInput 直接发"/compact"是否被 CC binary 解释为 slash 命令，还是当 plain text user message。memory `reference_cc_source_and_queue.md` 提示 CC source 在 `~/claude-code-source-code/`，可去那里读 slash 解释器。
+
+**子任务**（task #180-#181）：
+1. **slash picker UI**（#180）—— textarea 检测前导`/` → popover 列出可用 commands（按 spike 输出）+ 末尾 "custom" 项可填任意文本；键盘可导航；Enter 选；Esc 关；尊重 Viewer/Interactive gate
+2. **/compact pinned 按钮**（#181）—— 跟附件按钮并列；点击 → confirm dialog（"将摘要并截断上下文，继续？"）→ 走 spike 验过的路径
+
+**验收**：picker 触发流畅；/compact 按钮真触发 compact（jsonl 出现 isCompactSummary 节点）；viewer 模式下两个入口都消失。
+
+### v1.6 — 启动新 session（接管旧 v∞.1）
+
+sidebar 加"+ 新建 session"按钮：模态框选 cwd（autocomplete from existing workspaces）+ 初始 prompt → 后端 SDK `query({prompt, cwd})` 启动；chokidar 自动捡到新 jsonl 后侧栏新增条目并 auto-focus。
+
+**任务**：#182。**前置**：v1.3 sessionRegistry setter（#176）必须先到位，新 session 才能拿到正确的 model/permission-mode 等配置。
+
+**验收**：点 + 新建 → 填入 prompt → submit → 新 session 在 sidebar 出现 ≤ 1s 并打开，第一发 turn 已运行；viewer 模式下 + 按钮消失。
+
+### v2.0 — 任意节点 fork（接管旧 v∞.3，首次公开发布档）
+
+Loomscope 让用户**点 canvas 上任意 ChatNode**（含 assistant、旁支 sibling）作为 fork 起点，composer 提交新 turn 直接 fork。**这是 CC 的 terminal UI 受限做不到、Loomscope 利用 canvas 才能实现的核心价值**——也作为首次公开发布档（v1.0 跳过的 packaging + 截图 + npm publish + bin entry + auto session picker 都顺势在这一档打）。
+
+#### 历史背景（write-path 路线修正）
 
 - 第一次修正：原以为 v∞ 核心是"看见 sub-agent 内部 trace"——实测发现 sidecar 已存，v0 就能看
 - 第二次修正（2026-05-02）：CCR `/remote-control` 是 Anthropic 私有协议、第三方接入需逆向工程——**不走 CCR 路线**
-- **第三次修正（2026-05-05 SDK 验证）**：(a) SDK 包名是 `@anthropic-ai/claude-agent-sdk`（不是 `@anthropic-ai/claude-code`，后者是 CLI）；(b) **中段 fork 由 SDK `resumeSessionAt: messageId` 直接支持**，不需要 Loomscope 自己 truncate JSONL —— v∞.3 的工程量大幅缩减
+- 第三次修正（2026-05-05 SDK 验证）：(a) SDK 包名是 `@anthropic-ai/claude-agent-sdk`（不是 `@anthropic-ai/claude-code`，后者是 CLI）；(b) 中段 fork 由 SDK `resumeSessionAt: messageId` 直接支持，不需要 Loomscope 自己 truncate JSONL —— v2.0 工程量大幅缩减
 
-剩下的合法机制（详见 `design-architecture.md` "v∞ 交互机制"章节）：
+#### 已落实的合法机制
 
 | 路径 | 用例 |
 |---|---|
-| 文件监听（v0.9 已有） | 持续观察主 jsonl + sidecar 目录的 mtime 变化（chokidar + SSE） |
-| **CC settings.json hooks** | ⭐ 用户配 shell hook → CC 实时 curl 推事件（PreToolUse / SubagentStart / PostCompact / TaskCompleted 等 17+ 个）到 Loomscope SSE 通道 |
-| Claude Agent SDK (`@anthropic-ai/claude-agent-sdk` 的 `query()`) | Loomscope 进程内 spawn CC headless：`resume:sessionId` 续接 / `forkSession:true` leaf 分叉 / `resumeSessionAt:messageId` 中段 fork |
+| 文件监听（v0.9 已 ship）| chokidar + SSE 持续观察主 jsonl + sidecar 目录 mtime |
+| CC settings.json hooks（pre-v1.x ≈ 旧 v∞.0 已 ship）| 用户配 shell hook → CC 实时 curl 推事件（PreToolUse / SubagentStart / PostCompact / TaskCompleted 等 17+ 个）到 Loomscope SSE 通道 |
+| Claude Agent SDK `query()`（v1.3+ 接入）| Loomscope 进程内 spawn CC headless：`resume:sessionId` 续接 / `forkSession:true` leaf 分叉 / `resumeSessionAt:messageId` 中段 fork |
 
-> ⚠ **SDK 不提供文件锁**：两个 CC 进程同时写同一 jsonl = last-writer-wins 损坏。Loomscope 必须自己做冲突检测（mtime 在最近 N 秒内变化 → 警告 + 拒绝 SDK 接管）。这块**必须排在 v∞.2 之前**——leaf 续接是最容易撞用户终端 CC 的场景。
+> ⚠ **SDK 不提供文件锁**：两个 CC 进程同写一 jsonl = last-writer-wins 损坏。冲突检测（mtime + advisory lock）在 **v1.3 task #174** 落地，是 leaf 续接 + 任意节点 fork 共同前置。详见 `docs/dual-writer-race-mitigation.md` 与 memory `project_loomscope_dual_writer_race.md`。
 
-> 📌 **SDK callbacks vs settings.json hooks 是两套独立系统**，但共享 JSON schema。SDK callback 是 in-process typed function，只在 Loomscope spawn 的 CC 里有效；settings.json hooks 是 shell-out，对**所有**用户机上的 CC 进程生效（包括用户终端的）。v∞.0 用后者（用户在终端跑 CC，Loomscope 通过用户配的 hook 收事件）；v∞.1+ 用前者（Loomscope 主导）。
-
-⇒ **CCR 砍掉后**，v∞ 仍然可行，但拆成 3 档：
-
-### v∞.0 read-only 远程观察（最先做）
-
-- 用户终端跑着 CC，浏览器实时画面
-- 实现：文件监听 mtime 轮询 + settings.json hooks push（onboarding 引导用户配置）
-- 唯一不可见的事件：cron / RemoteTrigger 远端执行（无 CCR 不可达）
-- 适用于"网页 remote control 客户端"愿景的 read-only 部分
-
-### v∞.1 启动新 session（中等优先级）
-
-- 从 Loomscope 左面板 "新建 session" 按钮 → SDK `query({ prompt, cwd })` 启动新会话
-- SDK 写入 `~/.claude/projects/<encoded-cwd>/<新 sid>.jsonl`，Loomscope 通过 v0.9 的 chokidar 监听自动渲染
-- 不走 subprocess CLI 路线（CC CLI 是 TUI，spawn 后会抢终端控制；SDK 是 headless 干净路径）
-
-### v∞.2 接管已有 session 续接 prompt（leaf）
-
-- **前置：冲突检测**（必须先做，见上方 ⚠ 注释）
-  - 读目标 jsonl 的 mtime，若最近 5s 内变化过 → 拒绝接管 + 提示用户"似有 CC 在写，请关闭终端 CC"
-  - 写一个 advisory `<sid>.jsonl.lock` 文件，超时清理（防 Loomscope 自己 crash 残留）
-  - 接管期间持续监控 mtime；若被外部 writer 介入 → 立刻中止 SDK query + 标 session 为 conflicted
-- **Composer 入口位置**：v0.8 落地的 Conversation tab 底部加 input box（pinned bottom + 多行 + Cmd/Ctrl+Enter）
-- 提交逻辑：发 prompt 续接已存 session（**仅 leaf-continuation**——任意起点 fork 是 v∞.3）
-- 实现：`query({ resume: sessionId, prompt })` 直接续接同一 jsonl
-
-### v∞.3 任意节点 fork（"120% of CC"）
-
-Loomscope 让用户**点 canvas 上任意 ChatNode**（包括 assistant 节点、旁支 sibling 节点）作为 fork 起点，composer 提交新 turn 直接 fork。**这是 CC 的 terminal UI 受限做不到、Loomscope 利用 canvas 才能实现的核心价值之一**。
+> 📌 **SDK callbacks vs settings.json hooks 是两套独立系统**，但共享 JSON schema。SDK callback 是 in-process typed function，只在 Loomscope spawn 的 CC 里有效；settings.json hooks 是 shell-out，对**所有**用户机上的 CC 进程生效（含用户终端的）。pre-v1.x 用后者；v1.3+ Loomscope-主导路径用前者。
 
 #### 跟 CC 自身的对比
 
-| 能力 | CC `/branch` | CC restore + resubmit | Loomscope v∞.3 |
+| 能力 | CC `/branch` | CC restore + resubmit | Loomscope v2.0 |
 |---|---|---|---|
 | fork 起点 | 仅当前 leaf | 仅当前路径上的 user message | 任意 ChatNode（含 assistant、旁支） |
 | 旁支可达 | ❌ | ❌ | ✅ |
 | 是否要 truncate 当前活跃会话 | 否（拷贝到新文件） | 是（活跃链截断） | 否（写当前 jsonl in-session sibling） |
 | 文件层 CC 兼容 | ✅ | ✅ | ✅（in-session sibling 跟 CC 自己 restore-then-resubmit 产物字节兼容） |
 
-#### 实现方向（SDK 直接支持后大幅简化）
+#### 实现方向
 
-- **默认行为：调 SDK `query({ resume: sessionId, resumeSessionAt: messageId, prompt })`**
+- **默认调 SDK `query({ resume, resumeSessionAt: messageId, prompt })`**
   - SDK 自己处理 in-session sibling 的 jsonl 写入；Loomscope 只需把 canvas 上点的 ChatNode id 翻译成 SDK 认的 messageId（= 该 ChatNode 末 assistant 的 uuid）
   - 写到当前 jsonl 还是新 jsonl 由 `forkSession` 决定：
-    - `forkSession:false`（默认）→ 当前 jsonl 内 sibling，CC 重开按正常 sibling 渲染
+    - `forkSession:false`（默认）→ 当前 jsonl 内 sibling
     - `forkSession:true` → 新 sessionId / 新 jsonl，等价 CC `/branch`
-- **粒度边界**：v∞.3 只做 **ChatNode 边界 fork**（跟 Agentloom 对齐）。sub-ChatNode 粒度（同一 turn 内某 tool_call 之后 fork）作为 backlog
-- **Composer 复用 v∞.2 的输入框**：v∞.2 已经在 Conversation tab 底部装好 input box；v∞.3 的差异是**解除 leaf-only 限制**——focused 节点可以是任意 ChatNode（含 assistant、旁支 sibling），composer 自动用 focused 节点的末 assistant uuid 作为 `resumeSessionAt`
-- **UI 入口**：直接复用 Conversation tab —— 用户点 canvas 上任意节点 → focused 切到那里 → Conversation tab 内容更新到那条 path → 底部 input box 的 parent 自动指向 focused 节点。无需额外按钮，"continue from here"语义由 focused selection 隐式表达
-- **导出为独立 session**：input box 旁的 toggle —— 勾上 = `forkSession:true`（CC `/branch` 等价但任意起点）
+- **粒度边界**：v2.0 只做 **ChatNode 边界 fork**（跟 Agentloom 对齐）。sub-ChatNode 粒度（同一 turn 内某 tool_call 之后 fork）作为 backlog
+- **Composer 复用 v1.3 的输入框**：v1.3 已经把模型 / effort / fastMode 接通；v2.0 的差异是**解除 leaf-only 限制**——focused 可以是任意 ChatNode，composer 自动用 focused 节点的末 assistant uuid 作为 `resumeSessionAt`
+- **UI 入口**：复用 Conversation tab —— 用户点 canvas 上任意节点 → focused 切到那里 → Conversation tab 内容更新到那条 path → 底部 input box 的 parent 自动指向 focused 节点
+- **导出为独立 session**：input box 旁的 toggle —— 勾上 = `forkSession:true`
+- **首次公开发布**：bin field + esbuild bundle server / dist-server / 自动 session picker UI / npx packaging / README 截图 + GIF
 
 #### 依赖
 
-- v0.8 fork 浏览（前置）—— ConversationView / branchMemory / fork badge / merged ChatFlow / 2-tab DrillPanel / Conversation tab 必须先有
-- v∞.2 composer + SDK 接入（前置）—— `@anthropic-ai/claude-agent-sdk` 集成、冲突检测、Conversation tab 底部 input box
+- v0.8 fork 浏览 ✅
+- v1.3 composer 地基 + mtime 冲突检测（task #174-#177）
+- v1.6 新 session 入口（task #182）—— 验证 SDK spawn 路径稳
 
 ### 不再讨论的选项
 
