@@ -200,6 +200,7 @@ const CANVAS_FOCUS_BIAS_Y_PX = 16;
 function panToNodeCenter(
   rf: ReturnType<typeof useReactFlow>,
   node: { position: { x: number; y: number }; measured?: { width?: number; height?: number } },
+  opts: { duration?: number } = {},
 ): void {
   const w = node.measured?.width ?? NODE_WIDTH;
   const h = node.measured?.height ?? NODE_HEIGHT;
@@ -209,7 +210,11 @@ function panToNodeCenter(
     node.position.y + h / 2 + CANVAS_FOCUS_BIAS_Y_PX / vp.zoom,
     {
       zoom: vp.zoom,
-      duration: 200,
+      // Default 200ms for click-focus animation; first-paint passes 0
+      // because the canvas is opacity-gated until firstPaintReady and
+      // an animation would play out behind the gate, then unblur into
+      // motion — looks like a flicker.
+      duration: opts.duration ?? 200,
     },
   );
 }
@@ -550,11 +555,19 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     if (!latestNodeMeasured) return;
     if (!latestNodeId) return;
     if (focusedSessionRef.current === chatFlow.id) return;
-    // Two-step focus: fitView computes the zoom (constrained 0.5–1.0
-    // with padding 0.4), then setCenter re-anchors at the same zoom
-    // but with CANVAS_FOCUS_BIAS_Y_PX applied — matching the click-
-    // focus path (panToNodeCenter) so a refresh-then-click sequence
-    // doesn't produce visible vertical drift.
+    focusedSessionRef.current = chatFlow.id;
+    // Two-step focus to share Y-bias math with the click-focus path
+    // (panToNodeCenter):
+    //   1. fitView picks the zoom (constrained 0.5–1.0 with padding
+    //      0.4 — keeps the latest card readable but not zoomed all
+    //      the way in).
+    //   2. After fitView's viewport state commits (rAF), overlay
+    //      panToNodeCenter so CANVAS_FOCUS_BIAS_Y_PX gets applied
+    //      — without the rAF the two state writes race in the same
+    //      frame and fitView's center-without-bias could win,
+    //      leaving first-paint at geometric center while click-focus
+    //      runs ~16px above. (Symptom: refresh, click latest card →
+    //      canvas hops upward.)
     rf.fitView({
       nodes: [{ id: latestNodeId }],
       padding: 0.4,
@@ -562,19 +575,11 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
       minZoom: 0.5,
       duration: 0,
     });
-    const node = rf.getNode(latestNodeId);
-    if (node) {
-      const vp = rf.getViewport();
-      const w = node.measured?.width ?? NODE_WIDTH;
-      const h = node.measured?.height ?? NODE_HEIGHT;
-      rf.setCenter(
-        node.position.x + w / 2,
-        node.position.y + h / 2 + CANVAS_FOCUS_BIAS_Y_PX / vp.zoom,
-        { zoom: vp.zoom, duration: 0 },
-      );
-    }
-    focusedSessionRef.current = chatFlow.id;
-    setFirstPaintReady(true);
+    requestAnimationFrame(() => {
+      const node = rf.getNode(latestNodeId);
+      if (node) panToNodeCenter(rf, node, { duration: 0 });
+      setFirstPaintReady(true);
+    });
   }, [chatFlow.id, latestNodeId, latestNodeMeasured, rf]);
 
   // v0.8.1 #5: register a pan-to-chat-node handler that ConversationView
