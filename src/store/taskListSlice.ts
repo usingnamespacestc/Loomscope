@@ -112,12 +112,16 @@ export const createTaskListSlice: StateCreator<
         const pending = refreshResolvers.get(sessionId) ?? [];
         refreshResolvers.delete(sessionId);
 
-        // If a fetch is still inflight from a previous batch (very
-        // rare — would mean prior fetch took >REFRESH_DEBOUNCE_MS),
-        // abort it. The new fetch carries fresher state anyway.
-        const prior = get().taskFetchControllers.get(sessionId);
-        prior?.abort();
-
+        // DON'T abort a prior inflight fetch — even though the new
+        // batch is fresher, calling .abort() surfaces as
+        // "(canceled)" / "failed to load response data" in devtools.
+        // The controller-mismatch guard below (`controllers.get !==
+        // ctrl`) is enough to last-write-wins discard the stale
+        // result silently. Cost: prior fetch completes uselessly
+        // (one redundant 200 in network panel), but only when fetch
+        // was slow enough to still be inflight after the debounce
+        // window — and that's the only case where abort would have
+        // fired anyway. clearTasks is the explicit-cancel path.
         const ctrl = new AbortController();
         set((s) => {
           const next = new Map(s.taskFetchControllers);

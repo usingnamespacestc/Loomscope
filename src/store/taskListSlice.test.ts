@@ -67,4 +67,50 @@ describe("taskListSlice — refresh debounce / coalescing", () => {
     await p; // should resolve, not hang
     expect(calls).toBe(0);
   });
+
+  it("does not abort an inflight fetch when a new debounce batch starts", async () => {
+    // Reproducing the "failed to load response data" symptom: when
+    // a fetch is slow enough to still be inflight after the next
+    // debounce window expires, we previously called .abort() on it
+    // — surfacing as "(canceled)" in devtools. Last-write-wins via
+    // controller mismatch is enough; abort is removed.
+    const signals: AbortSignal[] = [];
+    let resolveFirst: ((r: Response) => void) | null = null;
+
+    fetchSpy.mockReset();
+    fetchSpy.mockImplementationOnce((_url: unknown, opts: unknown) => {
+      signals.push((opts as RequestInit).signal as AbortSignal);
+      return new Promise<Response>((res) => {
+        resolveFirst = res;
+      });
+    });
+    fetchSpy.mockImplementationOnce(async (_url: unknown, opts: unknown) => {
+      signals.push((opts as RequestInit).signal as AbortSignal);
+      return new Response(JSON.stringify({ tasks: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const p1 = useStore.getState().refreshTasks(SID);
+    await vi.advanceTimersByTimeAsync(120);
+    expect(signals.length).toBe(1);
+    expect(signals[0].aborted).toBe(false);
+
+    // Trigger second batch while first is still inflight.
+    const p2 = useStore.getState().refreshTasks(SID);
+    await vi.advanceTimersByTimeAsync(120);
+    expect(signals.length).toBe(2);
+    // CRITICAL: fetch1's signal must NOT have been aborted.
+    expect(signals[0].aborted).toBe(false);
+
+    // Cleanup so the test doesn't hang on the dangling promise.
+    resolveFirst!(
+      new Response(JSON.stringify({ tasks: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await Promise.all([p1, p2]);
+  });
 });
