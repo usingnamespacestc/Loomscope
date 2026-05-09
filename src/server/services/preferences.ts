@@ -149,8 +149,26 @@ const PERMISSION_MODE_VALUES: LoomscopePermissionMode[] = [
 const MIN_IDLE = 5;
 const MAX_IDLE = 240;
 
+// Path override for tests. The previous test pattern wrote directly
+// to `~/.loomscope/preferences.json` with a backup/restore dance —
+// safe IF afterAll always ran, but vitest kill / SIGKILL / cross-
+// file race left the user's real prefs file stuck on intermediate
+// values (e.g. literal "{bad json}"), which loadPreferences then
+// fell back from to DEFAULTS, manifesting as "Settings reverted to
+// default after refresh". Now tests redirect via this setter so the
+// user's home dir is never touched.
+let pathOverride: string | null = null;
+
 function preferencesPath(): string {
-  return path.join(os.homedir(), ".loomscope", "preferences.json");
+  return (
+    pathOverride ?? path.join(os.homedir(), ".loomscope", "preferences.json")
+  );
+}
+
+/** Test helper — redirect the read/write target to a temp path. Pass
+ *  null to restore the default (homedir) lookup. */
+export function _setPreferencesPathForTests(p: string | null): void {
+  pathOverride = p;
 }
 
 function clamp(n: number, lo: number, hi: number): number {

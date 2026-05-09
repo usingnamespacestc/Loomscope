@@ -4,42 +4,36 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   defaultPreferences,
   loadPreferences,
   savePreferences,
   _resetPreferencesForTests,
+  _setPreferencesPathForTests,
 } from "@/server/services/preferences";
 
-// Tests share the user's real `~/.loomscope/preferences.json` path
-// (the helper uses os.homedir()) so we save+restore the original
-// state to avoid clobbering it on dev machines. Friendly to running
-// the suite while a real Loomscope server is configured.
-const REAL_PATH = path.join(os.homedir(), ".loomscope", "preferences.json");
-let originalContent: string | null = null;
-let savedExists = false;
+// IMPORTANT: do NOT touch the user's real ~/.loomscope/preferences.json.
+// Earlier versions of this test wrote there + relied on afterAll to
+// restore — when vitest got killed mid-run (SIGKILL / panic / cross-
+// file race), the restore never fired and the user's real file was
+// left as "{bad json}" or other intermediate state. loadPreferences
+// then fell back to DEFAULTS (permissionMode = "default"), which
+// looked like "Settings revert on refresh" to the user.
+// Each test now uses an isolated tmpdir + the path-override setter.
+
+let tmpDir: string;
 
 beforeEach(async () => {
-  try {
-    originalContent = await fs.readFile(REAL_PATH, "utf8");
-    savedExists = true;
-  } catch {
-    originalContent = null;
-    savedExists = false;
-  }
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "loomscope-prefs-"));
+  _setPreferencesPathForTests(path.join(tmpDir, "preferences.json"));
   await _resetPreferencesForTests();
 });
 
-afterAll(async () => {
-  // Restore.
-  if (savedExists && originalContent !== null) {
-    await fs.mkdir(path.dirname(REAL_PATH), { recursive: true });
-    await fs.writeFile(REAL_PATH, originalContent);
-  } else {
-    await _resetPreferencesForTests();
-  }
+afterEach(async () => {
+  _setPreferencesPathForTests(null);
+  await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
 describe("preferences", () => {
@@ -63,8 +57,7 @@ describe("preferences", () => {
   });
 
   it("falls back to defaults on malformed file", async () => {
-    await fs.mkdir(path.dirname(REAL_PATH), { recursive: true });
-    await fs.writeFile(REAL_PATH, "{bad json}");
+    await fs.writeFile(path.join(tmpDir, "preferences.json"), "{bad json}");
     const p = await loadPreferences();
     expect(p).toEqual(defaultPreferences());
   });
@@ -73,15 +66,33 @@ describe("preferences", () => {
     // Documents current behavior: unknown fields are dropped on save
     // because `normalize` only keeps known keys. If we ever add
     // forward-compat preserve, update this test.
-    await fs.mkdir(path.dirname(REAL_PATH), { recursive: true });
     await fs.writeFile(
-      REAL_PATH,
+      path.join(tmpDir, "preferences.json"),
       JSON.stringify({ idleTimeoutMin: 60, futureKey: "foo" }),
     );
     await savePreferences({ idleTimeoutMin: 90 });
-    const reloaded = await fs.readFile(REAL_PATH, "utf8");
+    const reloaded = await fs.readFile(
+      path.join(tmpDir, "preferences.json"),
+      "utf8",
+    );
     const parsed = JSON.parse(reloaded);
     expect(parsed.idleTimeoutMin).toBe(90);
     expect(parsed.futureKey).toBeUndefined();
+  });
+
+  it("permissionMode survives across save/load round-trip (regression for user-reported revert)", async () => {
+    // The recurring bug: user sets permissionMode → refresh → it's
+    // back to default. Root cause was the test trampling the real
+    // file; this test stays here to catch any future regression in
+    // the load/save plumbing for permissionMode specifically.
+    await savePreferences({ permissionMode: "bypassPermissions" });
+    expect((await loadPreferences()).permissionMode).toBe(
+      "bypassPermissions",
+    );
+    // Saving an UNRELATED field must not lose permissionMode.
+    await savePreferences({ idleTimeoutMin: 60 });
+    expect((await loadPreferences()).permissionMode).toBe(
+      "bypassPermissions",
+    );
   });
 });
