@@ -527,6 +527,12 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     const n = s.nodeLookup.get(latestNodeId);
     return n?.measured.width !== undefined && n?.measured.height !== undefined;
   });
+  // Subscribe to RF's pixel-dimension store so the first-paint effect
+  // reruns once ResizeObserver populates real width/height (initially
+  // 0,0 before mount). Without this we'd compute fit zoom against
+  // bogus dimensions and freeze.
+  const rfPixelW = useReactFlowStore((s: ReactFlowState) => s.width);
+  const rfPixelH = useReactFlowStore((s: ReactFlowState) => s.height);
   // Focus on the latest ChatNode when the user opens a different session.
   // Re-running on every chatFlow change is intentional — for v0.2 a
   // chatFlow change == "user picked a different session". When v0.7
@@ -554,33 +560,43 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
   useEffect(() => {
     if (!latestNodeMeasured) return;
     if (!latestNodeId) return;
+    if (rfPixelW === 0 || rfPixelH === 0) return;
     if (focusedSessionRef.current === chatFlow.id) return;
+    const node = rf.getNode(latestNodeId);
+    if (!node) return;
     focusedSessionRef.current = chatFlow.id;
-    // Two-step focus to share Y-bias math with the click-focus path
-    // (panToNodeCenter):
-    //   1. fitView picks the zoom (constrained 0.5–1.0 with padding
-    //      0.4 — keeps the latest card readable but not zoomed all
-    //      the way in).
-    //   2. After fitView's viewport state commits (rAF), overlay
-    //      panToNodeCenter so CANVAS_FOCUS_BIAS_Y_PX gets applied
-    //      — without the rAF the two state writes race in the same
-    //      frame and fitView's center-without-bias could win,
-    //      leaving first-paint at geometric center while click-focus
-    //      runs ~16px above. (Symptom: refresh, click latest card →
-    //      canvas hops upward.)
-    rf.fitView({
-      nodes: [{ id: latestNodeId }],
-      padding: 0.4,
-      maxZoom: 1.0,
-      minZoom: 0.5,
-      duration: 0,
-    });
-    requestAnimationFrame(() => {
-      const node = rf.getNode(latestNodeId);
-      if (node) panToNodeCenter(rf, node, { duration: 0 });
-      setFirstPaintReady(true);
-    });
-  }, [chatFlow.id, latestNodeId, latestNodeMeasured, rf]);
+    // Single setCenter — NO fitView.
+    //
+    // Why drop fitView: even with `duration: 0`, xyflow v12's fitView
+    // commits its viewport via an internal scheduler (not synchronous
+    // store write). Our follow-up `panToNodeCenter` (in rAF) lands
+    // BEFORE fitView's commit, then fitView clobbers it back to
+    // geometric center — symptom users saw was first-paint at
+    // geometric center / click-focus 16px above (canvas hops upward
+    // on the first card click after refresh).
+    //
+    // Replacement: mirror xyflow's `getViewportForBounds` math
+    // (zoom = min(W/(w*(1+pad)), H/(h*(1+pad))) clamped to range),
+    // then one `setCenter` with the same bias formula
+    // panToNodeCenter uses. Single store write, no race.
+    //
+    // 中: fitView({duration:0}) 在 xyflow v12 仍然异步提交，会盖掉
+    // 我们随后的 panToNodeCenter，导致首屏停在几何中心、点击焦点偏上
+    // 16px → 刷新后点最新卡片画布上跳。改成自己算 zoom + 一次
+    // setCenter，无竞态。
+    const w = node.measured?.width ?? NODE_WIDTH;
+    const h = node.measured?.height ?? NODE_HEIGHT;
+    const padding = 0.4;
+    const zoomX = rfPixelW / (w * (1 + padding));
+    const zoomY = rfPixelH / (h * (1 + padding));
+    const zoom = Math.max(0.5, Math.min(1.0, Math.min(zoomX, zoomY)));
+    rf.setCenter(
+      node.position.x + w / 2,
+      node.position.y + h / 2 + CANVAS_FOCUS_BIAS_Y_PX / zoom,
+      { zoom, duration: 0 },
+    );
+    setFirstPaintReady(true);
+  }, [chatFlow.id, latestNodeId, latestNodeMeasured, rfPixelW, rfPixelH, rf]);
 
   // v0.8.1 #5: register a pan-to-chat-node handler that ConversationView
   // hover triggers can call. The handler:
