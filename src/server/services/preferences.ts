@@ -128,6 +128,20 @@ export interface LoomscopePreferences {
    * keeps Query-lifetime features.
    */
   respawnPerSend: boolean;
+  /**
+   * Viewer-only vs interactive mode. When `false` (viewer-only),
+   * Loomscope hides every write affordance — composer (send / attach
+   * / settings popover), trash menu actions (restore / purge /
+   * empty), permission banner allow/deny buttons. Useful when:
+   * (a) a remote instance is shared with someone who should observe
+   * but not steer, (b) a public demo / screencast, (c) the user
+   * wants a "no-touch" reading mode while the terminal CC drives.
+   *
+   * Default: `true` (interactive). Read via the
+   * `useInteractiveMode()` hook on the frontend; new write entry
+   * points must check it before rendering.
+   */
+  interactiveMode: boolean;
 }
 
 const DEFAULTS: LoomscopePreferences = {
@@ -137,6 +151,7 @@ const DEFAULTS: LoomscopePreferences = {
   respawnPerSend: true,
   enableHookHttpPath: true,
   enableHookSdkPath: true,
+  interactiveMode: true,
 };
 
 const PERMISSION_MODE_VALUES: LoomscopePermissionMode[] = [
@@ -205,6 +220,11 @@ function normalize(raw: unknown): LoomscopePreferences {
     typeof enableHookSdkPathRaw === "boolean"
       ? enableHookSdkPathRaw
       : DEFAULTS.enableHookSdkPath;
+  const interactiveModeRaw = r["interactiveMode"];
+  const interactiveMode =
+    typeof interactiveModeRaw === "boolean"
+      ? interactiveModeRaw
+      : DEFAULTS.interactiveMode;
   return {
     idleTimeoutMin: idle,
     useApiKey,
@@ -212,6 +232,7 @@ function normalize(raw: unknown): LoomscopePreferences {
     respawnPerSend,
     enableHookHttpPath,
     enableHookSdkPath,
+    interactiveMode,
   };
 }
 

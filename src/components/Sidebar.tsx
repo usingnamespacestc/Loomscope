@@ -74,6 +74,11 @@ export function Sidebar() {
   const purgeSession = useStore((s) => s.purgeSession);
   const emptyTrash = useStore((s) => s.emptyTrash);
   const toggleTrashExpanded = useStore((s) => s.toggleTrashExpanded);
+  // v1.1: viewer-only mode hides trash write actions (move-to-trash
+  // context menu item, restore / purge / empty buttons inside
+  // TrashSection). Trash browsing itself stays available since
+  // trash is read-only browseable in M3.
+  const interactiveMode = useStore((s) => s.interactiveMode);
 
   // Right-click context menu state. {sessionId, cwd} identifies the
   // target row; {x, y} are pixel coords from the contextmenu event.
@@ -493,6 +498,7 @@ export function Sidebar() {
             loading={trashLoading}
             expanded={trashExpanded}
             activeId={activeId}
+            interactiveMode={interactiveMode}
             onToggle={toggleTrashExpanded}
             onOpen={(sid) => setActive(sid)}
             onRestore={async (sid) => {
@@ -567,22 +573,31 @@ export function Sidebar() {
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
           items={[
-            {
-              key: "trash",
-              label: t("sidebar.context_menu_trash"),
-              description: t("sidebar.context_menu_trash_desc"),
-              accent: "danger",
-              onClick: () => {
-                void (async () => {
-                  const r = await trashSession(contextMenu.sessionId, contextMenu.cwd);
-                  if (!r.ok) {
-                    window.alert(
-                      t("sidebar.trash_action_failed", { error: r.error }),
-                    );
-                  }
-                })();
-              },
-            },
+            // Trash item only appears in interactive mode. Viewer-only
+            // gets the read-only "copy id" option only.
+            ...(interactiveMode
+              ? [
+                  {
+                    key: "trash",
+                    label: t("sidebar.context_menu_trash"),
+                    description: t("sidebar.context_menu_trash_desc"),
+                    accent: "danger" as const,
+                    onClick: () => {
+                      void (async () => {
+                        const r = await trashSession(
+                          contextMenu.sessionId,
+                          contextMenu.cwd,
+                        );
+                        if (!r.ok) {
+                          window.alert(
+                            t("sidebar.trash_action_failed", { error: r.error }),
+                          );
+                        }
+                      })();
+                    },
+                  },
+                ]
+              : []),
             {
               key: "copy-id",
               label: t("sidebar.context_menu_copy_id"),
@@ -607,6 +622,7 @@ function TrashSection({
   loading,
   expanded,
   activeId,
+  interactiveMode,
   onToggle,
   onOpen,
   onRestore,
@@ -621,6 +637,10 @@ function TrashSection({
    *  the same blue-border active styling as live rows when matched —
    *  the canvas will render the deleted session read-only. */
   activeId: string | null;
+  /** v1.1: when false (viewer-only), the per-row 还原 / ✕ buttons +
+   *  the section's "清空" button hide. Trash browsing itself stays
+   *  available so observers can still see what's been deleted. */
+  interactiveMode: boolean;
   onToggle: () => void;
   /** Click on a trashed row body. Sets the active session so the
    *  canvas renders it (with the read-only banner painted by
@@ -657,7 +677,7 @@ function TrashSection({
             {sessions.length}
           </span>
         </button>
-        {expanded && sessions.length > 0 && (
+        {expanded && sessions.length > 0 && interactiveMode && (
           <button
             className="mr-2 px-1.5 py-0.5 rounded text-[10px] text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition-colors"
             onClick={() => void onEmpty()}
@@ -729,34 +749,36 @@ function TrashSection({
                     <span className="font-mono">
                       {s.sessionId.slice(0, 8)}
                     </span>
-                    <span className="flex items-center gap-1">
-                      {/* Inline action buttons stop propagation so
-                          clicking 还原 / ✕ doesn't also fire onOpen. */}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void onRestore(s.sessionId);
-                        }}
-                        className="px-1 py-0.5 rounded hover:bg-blue-100 hover:text-blue-700 transition-colors"
-                        title={t("sidebar.trash_restore_title")}
-                        data-testid={`sidebar-trash-restore-${s.sessionId}`}
-                      >
-                        ↩ {t("sidebar.trash_restore")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onPurge(s.sessionId, s.title);
-                        }}
-                        className="px-1 py-0.5 rounded hover:bg-rose-100 hover:text-rose-700 transition-colors"
-                        title={t("sidebar.trash_purge_title")}
-                        data-testid={`sidebar-trash-purge-${s.sessionId}`}
-                      >
-                        ✕
-                      </button>
-                    </span>
+                    {interactiveMode && (
+                      <span className="flex items-center gap-1">
+                        {/* Inline action buttons stop propagation so
+                            clicking 还原 / ✕ doesn't also fire onOpen. */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void onRestore(s.sessionId);
+                          }}
+                          className="px-1 py-0.5 rounded hover:bg-blue-100 hover:text-blue-700 transition-colors"
+                          title={t("sidebar.trash_restore_title")}
+                          data-testid={`sidebar-trash-restore-${s.sessionId}`}
+                        >
+                          ↩ {t("sidebar.trash_restore")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onPurge(s.sessionId, s.title);
+                          }}
+                          className="px-1 py-0.5 rounded hover:bg-rose-100 hover:text-rose-700 transition-colors"
+                          title={t("sidebar.trash_purge_title")}
+                          data-testid={`sidebar-trash-purge-${s.sessionId}`}
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    )}
                   </div>
                 </div>
               </li>

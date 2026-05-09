@@ -299,6 +299,51 @@ describe("SettingsModal — 4-tab structure (v1.1)", () => {
     });
   });
 
+  it("Runtime tab shows Viewer/Interactive mode toggle and PATCHes interactiveMode", async () => {
+    let lastPatchBody: Record<string, unknown> | null = null;
+    vi.restoreAllMocks();
+    vi.spyOn(global, "fetch").mockImplementation(async (url, init) => {
+      const u = String(url);
+      if (u.includes("/api/cc-hook-onboarding/status")) {
+        return new Response(JSON.stringify(mockStatus), { status: 200 });
+      }
+      if (u.includes("/api/preferences")) {
+        const method = (init as RequestInit | undefined)?.method ?? "GET";
+        const baseline = {
+          idleTimeoutMin: 30,
+          useApiKey: false,
+          permissionMode: "default",
+          respawnPerSend: true,
+          interactiveMode: true,
+        };
+        if (method === "GET") {
+          return new Response(JSON.stringify(baseline), { status: 200 });
+        }
+        if (method === "PATCH") {
+          const body = JSON.parse(
+            (init as RequestInit).body as string,
+          ) as Record<string, unknown>;
+          lastPatchBody = body;
+          return new Response(JSON.stringify({ ...baseline, ...body }), {
+            status: 200,
+          });
+        }
+      }
+      return new Response("[]", { status: 200 });
+    });
+
+    render(<SettingsModal open={true} onClose={() => undefined} />);
+    fireEvent.click(screen.getByTestId("settings-tab-runtime"));
+    const cb = (await screen.findByTestId(
+      "settings-runtime-interactive-mode",
+    )) as HTMLInputElement;
+    expect(cb.checked).toBe(true);
+    fireEvent.click(cb);
+    await waitFor(() => {
+      expect(lastPatchBody).toEqual({ interactiveMode: false });
+    });
+  });
+
   it("Account toggle PATCHes /api/preferences with useApiKey", async () => {
     let lastPatchBody: Record<string, unknown> | null = null;
     vi.restoreAllMocks();

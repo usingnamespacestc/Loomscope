@@ -16,6 +16,7 @@ const MIN_DRILL_PANEL_WIDTH = 240;
 export const createUISlice: StateCreator<LoomscopeStore, [], [], UISlice> = (set) => ({
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   sidebarCollapsed: false,
+  interactiveMode: true,
   drillPanelWidth: DEFAULT_DRILL_PANEL_WIDTH,
   drillPanelCollapsed: false,
   // v0.8.1 #7: full-canvas mode. When true, the panel covers the
@@ -102,4 +103,32 @@ export const createUISlice: StateCreator<LoomscopeStore, [], [], UISlice> = (set
     set((s) => ({ hiddenWorkspaces: s.hiddenWorkspaces.filter((x) => x !== cwd) })),
 
   setFocusedWorkspace: (cwd) => set({ focusedWorkspace: cwd }),
+
+  setInteractiveMode: (next) => set({ interactiveMode: next }),
+
+  saveInteractiveMode: async (next) => {
+    // Optimistic flip — if the PATCH fails we roll back. Keeps the
+    // toggle responsive on slow networks while still surfacing
+    // errors. The server is authoritative; on success its echoed
+    // value lands here.
+    set({ interactiveMode: next });
+    try {
+      const res = await fetch("/api/preferences", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interactiveMode: next }),
+        credentials: "same-origin",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const merged = (await res.json()) as { interactiveMode?: boolean };
+      if (typeof merged.interactiveMode === "boolean") {
+        set({ interactiveMode: merged.interactiveMode });
+      }
+      return true;
+    } catch {
+      // Roll back on failure.
+      set({ interactiveMode: !next });
+      return false;
+    }
+  },
 });

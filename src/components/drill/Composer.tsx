@@ -234,6 +234,9 @@ export function Composer({
   const isTrashed = useStore((s) =>
     s.trashedSessions.some((t) => t.sessionId === sessionId),
   );
+  // v1.1: viewer-only mode globally hides composer write affordances.
+  // Highest priority blocker — wins over trashed / off-chain / non-leaf.
+  const interactiveMode = useStore((s) => s.interactiveMode);
 
   // Composer enable rule (PR 1 of fork-UX rework):
   //   - No selection OR selection is the active session's chronological
@@ -249,11 +252,14 @@ export function Composer({
   // user intent only.
   const composerBlock = useMemo<
     | null
+    | { reason: "viewer" }
     | { reason: "trashed" }
     | { reason: "off-chain"; sourceSid: string | undefined }
     | { reason: "non-leaf" }
   >(() => {
-    // Trash check first — supersedes off-chain / non-leaf hints since
+    // Viewer mode supersedes everything — global gate.
+    if (!interactiveMode) return { reason: "viewer" };
+    // Trash check next — supersedes off-chain / non-leaf hints since
     // the entire session is read-only regardless of selection.
     if (isTrashed) return { reason: "trashed" };
     if (!chatFlow || !selectedNodeId) return null;
@@ -271,7 +277,7 @@ export function Composer({
       return { reason: "off-chain", sourceSid: cs[0] };
     }
     return { reason: "non-leaf" };
-  }, [isTrashed, chatFlow, selectedNodeId, sessionId]);
+  }, [interactiveMode, isTrashed, chatFlow, selectedNodeId, sessionId]);
 
   // Attachments alone (no text) can be a valid prompt — the model can
   // still respond to "describe this image" implicitly. claude.ai
@@ -535,13 +541,15 @@ export function Composer({
                 : "text-gray-800",
             ].join(" ")}
             placeholder={
-              composerBlock?.reason === "trashed"
-                ? t("composer.placeholder_trashed")
-                : composerBlock?.reason === "off-chain"
-                  ? t("composer.placeholder_offchain")
-                  : composerBlock?.reason === "non-leaf"
-                    ? t("composer.placeholder_non_leaf")
-                    : (placeholder ?? t("composer.placeholder_input"))
+              composerBlock?.reason === "viewer"
+                ? t("composer.placeholder_viewer")
+                : composerBlock?.reason === "trashed"
+                  ? t("composer.placeholder_trashed")
+                  : composerBlock?.reason === "off-chain"
+                    ? t("composer.placeholder_offchain")
+                    : composerBlock?.reason === "non-leaf"
+                      ? t("composer.placeholder_non_leaf")
+                      : (placeholder ?? t("composer.placeholder_input"))
             }
             value={text}
             disabled={!!composerBlock}
@@ -683,13 +691,15 @@ export function Composer({
             data-reason={composerBlock.reason}
             className="mt-1 px-2 text-center text-[10px] text-amber-700"
           >
-            {composerBlock.reason === "trashed"
-              ? t("composer.blocked_trashed")
-              : composerBlock.reason === "off-chain"
-                ? t("composer.blocked_offchain", {
-                    sid: composerBlock.sourceSid?.slice(0, 8) ?? "?",
-                  })
-                : t("composer.blocked_non_leaf")}
+            {composerBlock.reason === "viewer"
+              ? t("composer.blocked_viewer")
+              : composerBlock.reason === "trashed"
+                ? t("composer.blocked_trashed")
+                : composerBlock.reason === "off-chain"
+                  ? t("composer.blocked_offchain", {
+                      sid: composerBlock.sourceSid?.slice(0, 8) ?? "?",
+                    })
+                  : t("composer.blocked_non_leaf")}
           </div>
         )}
         {/* Race-mitigation respawn notice (see

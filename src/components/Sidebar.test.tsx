@@ -387,4 +387,40 @@ describe("Sidebar — TrashSection", () => {
     fireEvent.keyDown(row, { key: "Enter" });
     expect(useStore.getState().activeSessionId).toBe(sid);
   });
+
+  // v1.1 viewer-only gating — write affordances must hide when
+  // interactiveMode is false.
+  describe("viewer-only mode (interactiveMode=false)", () => {
+    beforeEach(() => {
+      useStore.setState({ interactiveMode: false });
+    });
+
+    it("hides per-row restore + purge buttons", () => {
+      const sid = "33334444-5555-4000-8000-000000000001";
+      useStore.setState({
+        trashedSessions: [makeTrashed({ sessionId: sid })],
+        trashExpanded: true,
+      });
+      render(<Sidebar />);
+      expect(
+        screen.queryByTestId(`sidebar-trash-restore-${sid}`),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId(`sidebar-trash-purge-${sid}`),
+      ).toBeNull();
+      // Row body still renders so observers can browse.
+      expect(screen.getByTestId(`sidebar-trash-open-${sid}`)).toBeTruthy();
+    });
+
+    it("hides the empty-trash button", () => {
+      useStore.setState({
+        trashedSessions: [
+          makeTrashed({ sessionId: "44445555-6666-4000-8000-000000000001" }),
+        ],
+        trashExpanded: true,
+      });
+      render(<Sidebar />);
+      expect(screen.queryByTestId("sidebar-trash-empty")).toBeNull();
+    });
+  });
 });

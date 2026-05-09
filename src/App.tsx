@@ -51,6 +51,31 @@ export default function App() {
     }
   }, [activeId, session]);
 
+  // v1.1: load server-side preferences once on mount so global
+  // settings (currently just `interactiveMode`) are available before
+  // any write affordance renders. Other preference fields
+  // (idleTimeoutMin / useApiKey / etc) are still fetched lazily by
+  // SettingsModal; they don't gate UI elsewhere so a startup load
+  // would be wasted.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/preferences", {
+          credentials: "same-origin",
+        });
+        if (!res.ok) return;
+        const p = (await res.json()) as { interactiveMode?: boolean };
+        if (typeof p.interactiveMode === "boolean") {
+          useStore.getState().setInteractiveMode(p.interactiveMode);
+        }
+      } catch {
+        // Fall back to default (interactiveMode=true). Better to
+        // show controls than to lock the user out due to a
+        // transient network blip on app load.
+      }
+    })();
+  }, []);
+
   // CC TaskList: load on session activation, drop on switch-away.
   // The SSE handler below pushes refreshes via `kind: "tasks"`.
   useEffect(() => {

@@ -38,6 +38,9 @@ export function InteractivePermissionBanner({
   const prompts = useStore(
     (s) => s.sessions.get(sessionId)?.pendingCanUseToolPrompts ?? EMPTY,
   );
+  // v1.1: viewer-only mode hides the action buttons but leaves the
+  // banner visible so the observer still sees the pending prompt.
+  const interactiveMode = useStore((s) => s.interactiveMode);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -113,36 +116,51 @@ export function InteractivePermissionBanner({
             </div>
           )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              data-testid="permission-banner-allow"
-              disabled={busy}
-              onClick={() => void send("allow", false)}
-              className="rounded border border-blue-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-wait disabled:opacity-60"
-            >
-              {t("permission_banner.allow")}
-            </button>
-            <button
-              type="button"
-              data-testid="permission-banner-allow-always"
-              disabled={busy}
-              onClick={() => void send("allow", true)}
-              className="rounded border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-wait disabled:opacity-60"
-            >
-              {t("permission_banner.allow_always")}
-            </button>
-            <button
-              type="button"
-              data-testid="permission-banner-deny"
-              disabled={busy}
-              onClick={() => void send("deny", false)}
-              className="rounded border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-wait disabled:opacity-60"
-            >
-              {t("permission_banner.deny")}
-            </button>
-            {error && (
-              <span className="ml-auto text-[10px] italic text-rose-600">
-                ✗ {error}
+            {interactiveMode ? (
+              <>
+                <button
+                  type="button"
+                  data-testid="permission-banner-allow"
+                  disabled={busy}
+                  onClick={() => void send("allow", false)}
+                  className="rounded border border-blue-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {t("permission_banner.allow")}
+                </button>
+                <button
+                  type="button"
+                  data-testid="permission-banner-allow-always"
+                  disabled={busy}
+                  onClick={() => void send("allow", true)}
+                  className="rounded border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {t("permission_banner.allow_always")}
+                </button>
+                <button
+                  type="button"
+                  data-testid="permission-banner-deny"
+                  disabled={busy}
+                  onClick={() => void send("deny", false)}
+                  className="rounded border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {t("permission_banner.deny")}
+                </button>
+                {error && (
+                  <span className="ml-auto text-[10px] italic text-rose-600">
+                    ✗ {error}
+                  </span>
+                )}
+              </>
+            ) : (
+              // v1.1 viewer-only mode: hide allow/deny buttons. The
+              // banner still renders so the observer knows a tool is
+              // pending; resolution must come via terminal CC or
+              // another writer.
+              <span
+                data-testid="permission-banner-viewer"
+                className="text-[11px] italic text-blue-700"
+              >
+                {t("permission_banner.viewer_mode")}
               </span>
             )}
           </div>

@@ -100,7 +100,8 @@
     "queue_count": "{{count}} more pending request(s)",
     "allow": "Allow once",
     "allow_always": "Allow always",
-    "deny": "Deny"
+    "deny": "Deny",
+    "viewer_mode": "Viewer-only mode — decisions can't be made here; resolve in terminal CC or another writer."
   },
   "permission_rules": {
     "section_title": "Always-allowed tools",
@@ -143,6 +144,8 @@
     "blocked_offchain": "Selected node lives on session {{sid}} — right-click → \"jump to source session\".",
     "blocked_trashed": "This session is deleted — restore to enable input.",
     "placeholder_trashed": "(deleted — read-only)",
+    "blocked_viewer": "Viewer-only mode — enable Interactive in Settings → Session runtime to send messages.",
+    "placeholder_viewer": "(viewer-only mode — input disabled)",
     "placeholder_offchain": "(sibling branch — read-only)",
     "placeholder_non_leaf": "(non-leaf node — read-only)",
     "respawning_per_send": "Spawning a fresh SDK Query (race protection)",
@@ -272,6 +275,12 @@
       "mode_plan_hint": "Plan mode; tools restricted to read-only."
     },
     "runtime": {
+      "section_mode": "Viewer / Interactive mode",
+      "mode_description": "Interactive (default) gives the full Loomscope experience: composer sends turns, trash can delete & restore, PermissionBanner can allow/deny tool calls. Switching to Viewer-only hides every write affordance (send / trash actions / empty / allow / deny) so Loomscope becomes a read-only browser. Useful for: shared remote view where someone observes but shouldn't steer; public demos; screencasts.",
+      "mode_label": "Interactive mode (can send messages, manage trash, approve tools)",
+      "mode_on_hint": "Enabled: all write entry points visible.",
+      "mode_off_hint": "Disabled (viewer-only): composer / trash actions / permission allow-deny are hidden.",
+      "mode_save_failed": "Save failed; check network and retry.",
       "section_respawn": "Dual-writer race mitigation",
       "respawn_description": "Claude Code's SDK doesn't lock or tail the underlying jsonl, so when a Loomscope-spawned CC and a terminal CC both append to the same session id, each writes records based on a stale view of the chain — producing duplicate uuids + multi-parent fork artifacts. Enabling this option respawns the SDK Query before every send, so each spawn re-reads the jsonl from disk; race window narrows to sub-second. With it disabled the Query persists (subject to the idle timeout below) and the server only respawns when a pre-send staleness check detects a foreign-writer append. Both modes converge on \"always read fresh before write\"; the difference is just spawn frequency. See docs/dual-writer-race-mitigation.md for the full rationale.",
       "respawn_label": "Respawn SDK Query per send (recommended)",

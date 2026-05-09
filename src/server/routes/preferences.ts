@@ -25,6 +25,7 @@ const patchSchema = z.object({
   respawnPerSend: z.boolean().optional(),
   enableHookHttpPath: z.boolean().optional(),
   enableHookSdkPath: z.boolean().optional(),
+  interactiveMode: z.boolean().optional(),
 });
 
 export interface PreferencesRouterOptions {

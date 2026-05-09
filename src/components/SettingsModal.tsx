@@ -10,6 +10,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useStore } from "@/store/index";
+
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
@@ -704,6 +706,11 @@ function PermissionsPanel() {
 function SessionRuntimePanel() {
   const { t } = useTranslation();
   const { prefs, setPrefs, loading, saving, error, patch } = usePreferences();
+  const interactiveMode = useStore((s) => s.interactiveMode);
+  const saveInteractiveMode = useStore((s) => s.saveInteractiveMode);
+  const [interactiveSaveErr, setInteractiveSaveErr] = useState<string | null>(
+    null,
+  );
   if (loading) {
     return (
       <div className="text-xs text-gray-500">
@@ -713,6 +720,47 @@ function SessionRuntimePanel() {
   }
   return (
     <div className="flex flex-col gap-6">
+      {/* v1.1 Viewer / Interactive mode — top of Runtime tab so the
+          most behavior-altering switch is the most discoverable. */}
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.runtime.section_mode")}
+        </h3>
+        <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
+          {t("settings.runtime.mode_description")}
+        </p>
+        <label className="flex cursor-pointer items-center gap-3">
+          <input
+            type="checkbox"
+            data-testid="settings-runtime-interactive-mode"
+            checked={interactiveMode}
+            onChange={async (e) => {
+              setInteractiveSaveErr(null);
+              const ok = await saveInteractiveMode(e.target.checked);
+              if (!ok) {
+                setInteractiveSaveErr(
+                  t("settings.runtime.mode_save_failed"),
+                );
+              }
+            }}
+            className="h-4 w-4 cursor-pointer"
+          />
+          <span className="text-xs text-gray-700">
+            {t("settings.runtime.mode_label")}
+          </span>
+        </label>
+        <p className="mt-1 text-[10px] italic text-gray-400">
+          {interactiveMode
+            ? t("settings.runtime.mode_on_hint")
+            : t("settings.runtime.mode_off_hint")}
+        </p>
+        {interactiveSaveErr && (
+          <p className="mt-1 text-[10px] italic text-rose-600">
+            ✗ {interactiveSaveErr}
+          </p>
+        )}
+      </section>
+
       {/* Dual-writer race mitigation. Position BEFORE idle-timeout
           because the two interact: when respawnPerSend=true, idle
           timeout becomes a post-turn cleanup bound rather than a

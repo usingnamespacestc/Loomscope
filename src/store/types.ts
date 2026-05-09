@@ -42,6 +42,13 @@ export interface UISlice {
   pinnedWorkspaces: string[];
   hiddenWorkspaces: string[];
   focusedWorkspace: string | null;
+  // v1.1: viewer-only vs interactive mode. When `false`, every write
+  // affordance is hidden (composer / trash menu / permission banner
+  // buttons). Sourced from server-side preferences; loaded once on
+  // App mount + sync'd back via setInteractiveMode → /api/preferences.
+  // Default `true` matches the "loaded fresh, no preferences yet"
+  // case so first-time users still see all the UI.
+  interactiveMode: boolean;
 
   setSidebarWidth: (w: number) => void;
   toggleSidebar: () => void;
@@ -55,6 +62,12 @@ export interface UISlice {
   hideWorkspace: (cwd: string) => void;
   unhideWorkspace: (cwd: string) => void;
   setFocusedWorkspace: (cwd: string | null) => void;
+  /** Set the in-memory mode without server sync. Used by App startup
+   *  preferences-load to seed the store. */
+  setInteractiveMode: (next: boolean) => void;
+  /** Set + persist via PATCH /api/preferences. Resolves to true on
+   *  success, false on network error (caller can show inline error). */
+  saveInteractiveMode: (next: boolean) => Promise<boolean>;
 }
 
 // ─── Workspace slice ────────────────────────────────────────────────────────
