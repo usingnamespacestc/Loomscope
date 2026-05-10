@@ -309,6 +309,13 @@ export function Composer({
           base64: a.base64,
         })),
         priority,
+        // v1.3 R2: Composer settings (model / effort / fastMode) are
+        // localStorage-persisted on the client; passed per-turn so the
+        // server can sync them onto SessionRegistry before dispatch.
+        // No server-side persistence — composer is source of truth.
+        model: settings.model,
+        effort: settings.effort,
+        fastMode: settings.fastMode,
       });
       if (!("ok" in r) || r.ok !== true) {
         // Restore typed content + record error for inline display.

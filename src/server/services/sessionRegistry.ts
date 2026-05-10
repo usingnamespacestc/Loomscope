@@ -283,6 +283,20 @@ export interface SessionRegistryOptions {
     | "acceptEdits"
     | "bypassPermissions"
     | "plan";
+  /** v1.3: model id passed to SDK `query({ model })`. When undefined,
+   *  SDK uses the CLI default. Live-updated via `setModel` from the
+   *  turns route on every send (Composer's settings popover is the
+   *  source of truth; sent per-turn, applied to opts, picked up on
+   *  the next respawn). Examples: "claude-opus-4-7",
+   *  "claude-sonnet-4-6", "claude-haiku-4-5-20251001". */
+  model?: string;
+  /** v1.3: reasoning-effort level. SDK accepts low/medium/high/xhigh/
+   *  max. Maps to Composer's settings.effort which mirrors the same
+   *  enum. Live-updated via `setEffort`. */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  /** v1.3: fast-mode toggle. SDK enables a faster-but-cheaper
+   *  inference path when true. Live-updated via `setFastMode`. */
+  fastMode?: boolean;
   /** Dual-writer race mitigation. See `LoomscopePreferences.
    *  respawnPerSend` + `docs/dual-writer-race-mitigation.md` for
    *  rationale. Briefly:
@@ -589,6 +603,27 @@ export class SessionRegistry {
     this.opts.permissionMode = mode;
   }
 
+  /** v1.3: live-update the model passed to SDK query(). Same NEXT-
+   *  spawn caveat as setUseApiKey — opts snapshot at spawn time,
+   *  so the change takes effect on the next respawn. With
+   *  respawnPerSend=true (production default) this is "the very
+   *  next send"; with =false the existing Query keeps the old
+   *  model until staleness check or idle-close triggers respawn.
+   *  Pass undefined to clear the override (= SDK default model). */
+  setModel(model: string | undefined): void {
+    this.opts.model = model;
+  }
+
+  /** v1.3: live-update reasoning-effort. Same NEXT-spawn caveat. */
+  setEffort(effort: SessionRegistryOptions["effort"]): void {
+    this.opts.effort = effort;
+  }
+
+  /** v1.3: live-update fast-mode. Same NEXT-spawn caveat. */
+  setFastMode(fastMode: boolean): void {
+    this.opts.fastMode = fastMode;
+  }
+
   /** Live-update the dual-writer race mitigation strategy. Takes
    *  effect on the next dispatch — in-flight turns finish under the
    *  prior policy. PATCH /api/preferences calls this. */
@@ -787,6 +822,18 @@ export class SessionRegistry {
         resume: sessionId,
         env: childEnv,
         permissionMode: this.opts.permissionMode,
+        // v1.3 R2: forward Composer settings popover knobs. Each
+        // is opt-in (only included when set) so unset ones fall
+        // back to SDK default — matches "what would the CLI do
+        // with no flag?" baseline. SetModel/setEffort/setFastMode
+        // mutate this.opts in real time; respawnPerSend=true picks
+        // them up on the very next spawn (= the dispatch the
+        // turns-route is currently driving).
+        ...(this.opts.model !== undefined && { model: this.opts.model }),
+        ...(this.opts.effort !== undefined && { effort: this.opts.effort }),
+        ...(this.opts.fastMode !== undefined && {
+          fastMode: this.opts.fastMode,
+        }),
         // ──────────────────────────────────────────────────────────
         // CRITICAL for hooks: SDK's `query()` defaults
         // `settingSources` to `[]` (empty), which means NO

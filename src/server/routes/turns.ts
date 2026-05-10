@@ -55,6 +55,14 @@ const turnSchema = z.object({
       title: z.string().optional(),
     })
     .optional(),
+  // v1.3 R2: per-turn Composer settings overrides. Sent on every
+  // turn so the server applies them to SessionRegistry's options
+  // before dispatch — respawnPerSend (default true) then picks up
+  // the new opts at the next spawn. Composer's localStorage is the
+  // source of truth; we don't persist these server-side.
+  model: z.string().optional(),
+  effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+  fastMode: z.boolean().optional(),
 });
 
 export interface TurnsRouterOptions {
@@ -135,6 +143,16 @@ export function turnsRouter(opts: TurnsRouterOptions) {
           const msg = err instanceof Error ? err.message : String(err);
           return c.json({ error: `fork failed: ${msg}` }, 500);
         }
+      }
+      // v1.3 R2: sync per-turn Composer settings onto the registry
+      // before dispatch. respawnPerSend=true (production default)
+      // then picks up the new opts at the very next spawn — i.e. the
+      // turn we're about to enqueue. When undefined we leave existing
+      // opts unchanged (don't clear someone else's setting).
+      if (body.model !== undefined) opts.registry.setModel(body.model);
+      if (body.effort !== undefined) opts.registry.setEffort(body.effort);
+      if (body.fastMode !== undefined) {
+        opts.registry.setFastMode(body.fastMode);
       }
       const itemId = await opts.registry.enqueueTurn(id, body.cwd, {
         text: body.text,

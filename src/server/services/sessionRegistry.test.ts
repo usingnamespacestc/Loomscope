@@ -605,6 +605,136 @@ describe("SessionRegistry", () => {
     expect(spawned).toHaveLength(2);
     expect(spawned[0].closeCalls).toBe(1);
   });
+
+  // v1.3 R2: Composer settings (model / effort / fastMode) flow per-
+  // turn from postTurn → turns route → SessionRegistry setters →
+  // spawn opts. This block pins the registry-side surface.
+  describe("v1.3 model / effort / fastMode setters", () => {
+    it("setModel updates opts.model; spawn forwards it to SDK options", async () => {
+      let capturedOpts: Record<string, unknown> | null = null;
+      const { factory } = makeFactory((_fake, params) => {
+        capturedOpts = params.options as Record<string, unknown>;
+      });
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+      });
+      reg.setModel("claude-haiku-4-5-20251001");
+      await reg.enqueueTurn(SID, CWD, {
+        text: "hi",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      expect(capturedOpts?.model).toBe("claude-haiku-4-5-20251001");
+    });
+
+    it("setEffort updates opts.effort; spawn forwards it", async () => {
+      let capturedOpts: Record<string, unknown> | null = null;
+      const { factory } = makeFactory((_fake, params) => {
+        capturedOpts = params.options as Record<string, unknown>;
+      });
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+      });
+      reg.setEffort("high");
+      await reg.enqueueTurn(SID, CWD, {
+        text: "hi",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      expect(capturedOpts?.effort).toBe("high");
+    });
+
+    it("setFastMode updates opts.fastMode; spawn forwards it", async () => {
+      let capturedOpts: Record<string, unknown> | null = null;
+      const { factory } = makeFactory((_fake, params) => {
+        capturedOpts = params.options as Record<string, unknown>;
+      });
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+      });
+      reg.setFastMode(true);
+      await reg.enqueueTurn(SID, CWD, {
+        text: "hi",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      expect(capturedOpts?.fastMode).toBe(true);
+    });
+
+    it("unset model/effort/fastMode are omitted from spawn options (SDK default)", async () => {
+      let capturedOpts: Record<string, unknown> | null = null;
+      const { factory } = makeFactory((_fake, params) => {
+        capturedOpts = params.options as Record<string, unknown>;
+      });
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+      });
+      // No setters called — opts.model/effort/fastMode all undefined.
+      await reg.enqueueTurn(SID, CWD, {
+        text: "hi",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      // Conditional spread: keys absent rather than `undefined`. Use
+      // `'in'` to distinguish.
+      expect(capturedOpts && "model" in capturedOpts).toBe(false);
+      expect(capturedOpts && "effort" in capturedOpts).toBe(false);
+      expect(capturedOpts && "fastMode" in capturedOpts).toBe(false);
+    });
+
+    it("setModel mid-session takes effect on the very next respawn (respawnPerSend=true)", async () => {
+      const captured: Array<Record<string, unknown>> = [];
+      const { factory, spawned } = makeFactory((_fake, params) => {
+        captured.push(params.options as Record<string, unknown>);
+      });
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+        respawnPerSend: true,
+      });
+      reg.setModel("claude-opus-4-7");
+      await reg.enqueueTurn(SID, CWD, {
+        text: "first",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      spawned[0].emitInit(SID);
+      spawned[0].emitResult();
+      await flush();
+
+      // User toggles model in composer — turns route calls setModel.
+      reg.setModel("claude-haiku-4-5-20251001");
+      await reg.enqueueTurn(SID, CWD, {
+        text: "second",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      // Two spawns total; second carries the new model.
+      expect(captured.length).toBe(2);
+      expect(captured[0].model).toBe("claude-opus-4-7");
+      expect(captured[1].model).toBe("claude-haiku-4-5-20251001");
+    });
+  });
 });
 
 // Yields once to let pending microtasks (in the async pump driver

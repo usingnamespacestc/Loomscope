@@ -18,6 +18,14 @@ interface TurnPayload {
   // should compare it to the URL sid and switch active when they
   // differ (= a fork did happen).
   forkFrom?: { upToMessageId: string; title?: string };
+  // v1.3 R2: Composer settings popover knobs. Sent on every turn so
+  // the server can call SessionRegistry.setModel/setEffort/setFastMode
+  // before dispatch — respawnPerSend (default true) then picks up the
+  // updated opts on the very next spawn. Composer's localStorage is
+  // the source of truth; we don't persist these server-side.
+  model?: string;
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  fastMode?: boolean;
 }
 
 export interface TurnResult {
