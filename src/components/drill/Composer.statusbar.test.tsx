@@ -148,11 +148,14 @@ describe("ComposerStatusBar", () => {
     // SDK queue state stays idle (terminal CC path).
     setInflight("idle", null);
     // But hook-driven currentTurn is open (UserPromptSubmit fired).
+    // lastTurnUserSubmittedAt is the sticky anchor that survives
+    // mid-turn Stop fires; the elapsed clock reads from there.
     const sessions = new Map();
     sessions.set(SID, {
       ...blankSessionStateLite(),
       currentTurn: { startedAt: start },
       lastTurnHookAt: start,
+      lastTurnUserSubmittedAt: start,
     });
     useStore.setState({ sessions });
     renderComposer();
@@ -209,6 +212,73 @@ describe("ComposerStatusBar", () => {
     renderComposer();
     expect(screen.queryByTestId("composer-status-bar")).toBeNull();
   });
+
+  // v1.5 fix: CC fires Stop after every assistant message — including
+  // mid-turn ones in tool-use loops. So `currentTurn` flickers off
+  // between tool runs while CC is genuinely still working. Without
+  // an OR with `hasInFlightWork` data-shape signal, the status bar
+  // disappeared ~20s into a 1min tool-using turn (real bug observed
+  // 2026-05-10). This test pins the fix.
+  it("stays visible during tool-use gap (Stop fired but data shape says still in flight)", () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    vi.setSystemTime(start);
+    setInflight("idle", null);
+    // Simulate state right after a mid-turn Stop fired:
+    //   - currentTurn cleared (Stop handler)
+    //   - lastTurnUserSubmittedAt still set (sticky anchor)
+    //   - chatFlow's latest ChatNode summary says hasInFlightWork
+    //   - sessionLive is true (recent invalidate from CC writing)
+    const sessions = new Map();
+    const cf = makeChatFlowWithLlmUsage({
+      input_tokens: 1_000,
+      output_tokens: 200,
+    });
+    // Inject hasInFlightWork on the latest ChatNode's summary.
+    cf.chatNodes[0].workflow.summary = {
+      llmCount: 1,
+      toolCount: 1,
+      chainCount: 1,
+      contextTokens: 1_200,
+      maxContextTokens: 200_000,
+      lastModel: "claude-sonnet-4-6",
+      hasInFlightWork: true,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    sessions.set(SID, {
+      ...blankSessionStateLite(),
+      chatFlow: cf,
+      currentTurn: null, // Stop fired mid-turn
+      lastTurnHookAt: start,
+      lastTurnUserSubmittedAt: start, // sticky anchor SURVIVES
+      lastInvalidateAt: start, // sessionLive (5s decay window)
+    });
+    useStore.setState({ sessions });
+    renderComposer();
+    // Advance 25s of "wall time" while keeping sessionLive fresh —
+    // mimic chokidar firing every 2s as CC writes records during a
+    // tool-use turn. Without these bumps, useSessionLiveness would
+    // decay false after 5s and isRunning would flip back off.
+    act(() => {
+      for (let i = 1; i <= 25; i++) {
+        vi.advanceTimersByTime(1_000);
+        if (i % 2 === 0) {
+          const now = Date.now();
+          const cur = useStore.getState().sessions.get(SID);
+          if (cur) {
+            const upd = new Map(useStore.getState().sessions);
+            upd.set(SID, { ...cur, lastInvalidateAt: now });
+            useStore.setState({ sessions: upd });
+          }
+        }
+      }
+    });
+    const bar = screen.getByTestId("composer-status-bar");
+    expect(bar.getAttribute("data-running")).toBe("true");
+    // Elapsed clock anchored to UserPromptSubmit, not the cleared
+    // currentTurn — counts straight through the mid-turn Stop.
+    expect(bar.textContent).toContain("25s");
+  });
 });
 
 // Minimal SessionState shape — only the keys the status bar reads.
@@ -228,6 +298,7 @@ function blankSessionStateLite() {
     lastInvalidateAt: 0,
     currentTurn: null,
     lastTurnHookAt: 0,
+    lastTurnUserSubmittedAt: 0,
     lastNotification: null,
     sdkError: null,
   };

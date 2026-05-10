@@ -257,6 +257,14 @@ export interface SessionState {
   // 中: 最近一次 UserPromptSubmit/Stop 到达的时间。判定用户有没有
   // 接这俩 hook：30 分钟内有过 = 信任 currentTurn；没过 = 回落老逻辑。
   lastTurnHookAt: number;
+  // v1.5: epoch-ms of the most recent UserPromptSubmit ONLY (NOT
+  // touched by Stop). CC fires Stop after every assistant message,
+  // including mid-turn ones in tool-use loops, so currentTurn flickers
+  // off/on across a multi-step turn. This sticky anchor survives
+  // those mid-turn Stops so the composer status bar's elapsed clock
+  // counts from "user hit Enter" not "last assistant message". Reset
+  // on the next UserPromptSubmit. 0 = never set.
+  lastTurnUserSubmittedAt: number;
   // EN: most recent Notification hook fire — `notificationType`
   // includes `idle_prompt` (CC waiting for user input >60s),
   // `auth_success`, and a few MCP/swarm-specific kinds. Wired

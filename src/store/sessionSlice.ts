@@ -30,6 +30,7 @@ function blankSessionState(): SessionState {
     pendingCanUseToolPrompts: [],
     currentTurn: null,
     lastTurnHookAt: 0,
+    lastTurnUserSubmittedAt: 0,
     lastNotification: null,
     isLoading: false,
     error: null,
@@ -614,10 +615,17 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     // events also bump `lastTurnHookAt` so the liveness hook can tell
     // these hooks are actively wired vs. unconfigured.
     if (event === "UserPromptSubmit") {
+      const ts = Date.now();
       next = {
         ...next,
-        currentTurn: { startedAt: Date.now() },
-        lastTurnHookAt: Date.now(),
+        currentTurn: { startedAt: ts },
+        lastTurnHookAt: ts,
+        // v1.5: sticky turn-start anchor for composer status bar
+        // elapsed clock. NOT cleared by Stop (which CC fires per
+        // assistant message, including mid-turn ones); only
+        // overwritten by the next UserPromptSubmit when the user
+        // sends a new turn.
+        lastTurnUserSubmittedAt: ts,
       };
     } else if (event === "Stop") {
       next = { ...next, currentTurn: null, lastTurnHookAt: Date.now() };

@@ -47,7 +47,10 @@ import { ConfirmBanner } from "@/components/ConfirmBanner";
 import { findLatestLeafId } from "@/components/drill/pathUtils";
 import { useStore } from "@/store/index";
 import { getInflight } from "@/store/sdkChannelSlice";
-import { useSessionTurnRunning } from "@/store/livenessHooks";
+import {
+  useSessionLiveness,
+  useSessionTurnRunning,
+} from "@/store/livenessHooks";
 
 const MIN_HEIGHT = 96;
 const MAX_HEIGHT = 480;
@@ -1121,19 +1124,38 @@ function ComposerStatusBar({ sessionId }: { sessionId: string }) {
   const sdkRunning = inflight.state === "running" && sdkStartedAt !== null;
 
   const hookTurn = useSessionTurnRunning(sessionId);
-  const currentTurnStartedAt = useStore(
-    (s) => s.sessions.get(sessionId)?.currentTurn?.startedAt ?? null,
+  const lastTurnUserSubmittedAt = useStore(
+    (s) => s.sessions.get(sessionId)?.lastTurnUserSubmittedAt ?? 0,
   );
   const hookRunning = hookTurn.trust && hookTurn.running;
 
-  const isRunning = sdkRunning || hookRunning;
-  // Prefer SDK timestamp (earlier + server-side); fall back to
-  // currentTurn (hook) for terminal CC.
-  const startedAt = sdkRunning
-    ? sdkStartedAt
-    : hookRunning
-      ? currentTurnStartedAt
-      : null;
+  // v1.5 fix: data-shape signal — `summary.hasInFlightWork` is true
+  // when CC is mid-turn from the jsonl's POV (last llm_call missing
+  // stopReason / pending tool_call/delegate / empty workflow on a
+  // freshly-arrived prompt). Bridges the "tool execution gap" where
+  // CC fires Stop after each assistant message — including mid-turn
+  // ones in tool-use loops — leaving currentTurn null while CC is
+  // still working. Without this OR clause the status bar disappeared
+  // ~20s into a 1min tool-using turn.
+  const hasInFlight = useStore((s) => {
+    const cf = s.sessions.get(sessionId)?.chatFlow;
+    if (!cf || cf.chatNodes.length === 0) return false;
+    const latest = cf.chatNodes[cf.chatNodes.length - 1];
+    return latest.workflow.summary?.hasInFlightWork === true;
+  });
+  // Cap hasInFlight with sessionLive (5s decay since last fs.watch
+  // invalidate) so an abandoned-mid-stream session doesn't show
+  // running indefinitely. Active CC writes records continuously,
+  // so sessionLive stays true through real turns.
+  const sessionLive = useSessionLiveness(sessionId);
+
+  const isRunning = sdkRunning || hookRunning || (hasInFlight && sessionLive);
+  // Anchor the elapsed clock to the user-submit moment so it survives
+  // mid-turn Stop fires. Priority: SDK timestamp (server-side, earliest)
+  // → sticky lastTurnUserSubmittedAt (set on UserPromptSubmit, never
+  // cleared mid-turn) → null (= no clock to show).
+  const stickyStart = lastTurnUserSubmittedAt > 0 ? lastTurnUserSubmittedAt : null;
+  const startedAt = sdkStartedAt ?? stickyStart;
 
   // Latest ChatNode's last llm_call usage. Drives the ↑↓ counters
   // both during run (eventual-live) and after run (sticky display).
