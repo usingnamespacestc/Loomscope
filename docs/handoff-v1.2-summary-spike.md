@@ -125,7 +125,7 @@ Recommended UI: pinned strip above the user bubble in Conversation
 view, only when `chatNode.meta.awaySummary?.content` is non-empty.
 Uses the existing parser-attached data; no schema change.
 
-i18n string idea: `conversation.away_summary_label` / 离线期间摘要
+i18n string idea: `conversation.away_summary_label` / 续接小结
 + `conversation.away_summary_prefix` / "While away:".
 
 ## Files to touch (preview)

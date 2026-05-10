@@ -50,7 +50,7 @@ describe("AwaySummaryNodeCard", () => {
     );
     expect(screen.getByTestId("away-summary-host-1")).toBeTruthy();
     expect(screen.getByTestId("away-summary-badge-host-1").textContent).toContain(
-      "💤 离线期间",
+      "💤 续接小结",
     );
     // Truncated to 140 chars by default — body should NOT contain the
     // full 200-char string.

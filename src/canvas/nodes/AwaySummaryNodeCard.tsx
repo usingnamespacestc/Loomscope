@@ -87,7 +87,7 @@ export function AwaySummaryNodeCard({ data }: NodeProps<AwaySummaryRFNode>) {
           className="inline-flex items-center gap-0.5 rounded bg-amber-200/80 px-1 py-0.5 text-[10px] font-semibold text-amber-900"
           data-testid={`away-summary-badge-${data.hostChatNodeId}`}
         >
-          💤 离线期间
+          💤 续接小结
         </span>
         {ageHint && (
           <span className="text-[10px] text-amber-700/80 font-mono">
