@@ -95,6 +95,20 @@
       "jump_to_source_hint": "This node lives on a sibling-fork jsonl"
     }
   },
+  "session_usage": {
+    "chip_tooltip": "Cumulative token usage for this session. Click for per-turn breakdown + a button to run /cost for the actual dollar figure.",
+    "modal_title": "Session usage",
+    "close": "Close",
+    "totals_section": "Totals",
+    "input_label": "input",
+    "output_label": "output",
+    "breakdown_section": "Per-ChatNode breakdown",
+    "breakdown_hint": "{{count}} ChatNode(s) with LLM calls (compact / slash-only ChatNodes excluded)",
+    "col_model": "Model",
+    "col_duration": "Duration",
+    "cost_section": "Actual $",
+    "cost_explanation": "Loomscope doesn't maintain a model pricing table — we can't convert tokens to dollars locally. Click below to send /cost to the active session; CC computes the actual cost and posts it in the conversation."
+  },
   "permission_banner": {
     "fallback_headline": "Claude Code requests permission to use {{tool}}",
     "queue_count": "{{count}} more pending request(s)",

@@ -95,6 +95,20 @@
       "jump_to_source_hint": "此节点位于 sibling fork 的 jsonl 中"
     }
   },
+  "session_usage": {
+    "chip_tooltip": "本 session 累计 token 使用量。点击查看分轮明细 + 运行 /cost 查实际花费",
+    "modal_title": "Session 使用统计",
+    "close": "关闭",
+    "totals_section": "总计",
+    "input_label": "输入",
+    "output_label": "输出",
+    "breakdown_section": "分 ChatNode 明细",
+    "breakdown_hint": "{{count}} 条有 LLM 调用的 ChatNode（compact / slash 命令不计入）",
+    "col_model": "模型",
+    "col_duration": "耗时",
+    "cost_section": "$ 实际花费",
+    "cost_explanation": "Loomscope 不维护模型定价表，无法本地折算 $。点击下面按钮把 /cost 发到当前 session，CC 会在 conversation 里给出实际花费。"
+  },
   "permission_banner": {
     "fallback_headline": "Claude Code 请求执行 {{tool}}",
     "queue_count": "还有 {{count}} 条待批的请求",

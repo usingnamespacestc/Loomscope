@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 
 import { copyToClipboardWithFallback } from "@/lib/clipboard";
 import { HookStatusChip } from "@/components/HookStatusChip";
+import { SessionUsageChip } from "@/components/SessionUsageChip";
 import { RunningSessionsChip } from "@/components/RunningSessionsChip";
 import { SettingsModal } from "@/components/SettingsModal";
 import { currentLanguage, setLanguage } from "@/i18n";
@@ -68,6 +69,7 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-2 flex-shrink-0">
+        <SessionUsageChip />
         <HookStatusChip />
         <LiveIndicator
           sessionState={activeId ? liveStatus.session : "idle"}
