@@ -22,6 +22,7 @@ import { useTranslation } from "react-i18next";
 
 import { ContextMenu, type ContextMenuItem } from "@/canvas/ContextMenu";
 import { ConfirmBanner } from "@/components/ConfirmBanner";
+import { NewSessionModal } from "@/components/NewSessionModal";
 import { useStore } from "@/store/index";
 import { useJumpToHit, type JumpHit } from "@/components/sidebar/useJumpToHit";
 import type { TrashedSession } from "@/api/trash";
@@ -83,6 +84,7 @@ export function Sidebar() {
   // Right-click context menu state. {sessionId, cwd} identifies the
   // target row; {x, y} are pixel coords from the contextmenu event.
   // Single-instance — only one menu open at a time.
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -254,6 +256,18 @@ export function Sidebar() {
           {t("sidebar.section_title")}
         </span>
         <div className="flex items-center gap-1">
+          {/* v1.6 #182: launch new session. Hidden in viewer mode
+              (composer / write actions all gated together). */}
+          {interactiveMode && (
+            <button
+              data-testid="sidebar-new-session"
+              className="flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-blue-100 hover:text-blue-700 transition-colors"
+              title={t("sidebar.new_session_title")}
+              onClick={() => setNewSessionOpen(true)}
+            >
+              ＋
+            </button>
+          )}
           <button
             className="flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700 transition-colors"
             title={t("sidebar.refresh_workspaces")}
@@ -520,6 +534,13 @@ export function Sidebar() {
           </>
         )}
       </div>
+      {/* v1.6 #182: launch new session modal. Mounted alongside
+          ConfirmBanner so both modals coexist cleanly when the
+          new-session flow needs the mkdir confirm dialog. */}
+      <NewSessionModal
+        open={newSessionOpen}
+        onClose={() => setNewSessionOpen(false)}
+      />
       <ConfirmBanner
         open={!!confirmAction}
         title={

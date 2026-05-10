@@ -283,6 +283,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
 ) => ({
   sessions: new Map<string, SessionState>(),
   activeSessionId: null,
+  draftSession: null,
 
   loadSession: async (id) => {
     const next = new Map(get().sessions);
@@ -674,11 +675,46 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         set({ sessions: updated });
       }
     }
-    if (id && !get().sessions.has(id)) {
+    if (id && !get().sessions.has(id) && !id.startsWith("draft-")) {
       // Auto-load if we haven't fetched it yet. Fire-and-forget.
+      // Skip the "draft-" prefix — those have no on-disk session yet.
       void get().loadSession(id);
     }
     set({ activeSessionId: id });
+  },
+
+  // v1.6: start a client-side draft new session. id is `draft-<uuid>`
+  // so any code path reading activeSessionId can distinguish it from
+  // a real CC sid by the prefix.
+  startDraftSession: (cwd) => {
+    const draftId = `draft-${crypto.randomUUID()}`;
+    set({
+      draftSession: { id: draftId, cwd },
+      activeSessionId: draftId,
+    });
+  },
+
+  // Replace the draft with the real spawned session id. Composer
+  // calls this after POST /api/sessions/new returns success.
+  commitDraftSession: (realSid) => {
+    set({
+      draftSession: null,
+      activeSessionId: realSid,
+    });
+  },
+
+  // Drop the draft. If activeSessionId was pointing at the draft,
+  // also clear it (sidebar will show empty state).
+  clearDraftSession: () => {
+    const draft = get().draftSession;
+    if (!draft) return;
+    const next: Partial<typeof get extends () => infer S ? S : never> = {
+      draftSession: null,
+    };
+    if (get().activeSessionId === draft.id) {
+      (next as { activeSessionId: string | null }).activeSessionId = null;
+    }
+    set(next);
   },
 
   removeSession: (id) => {

@@ -301,6 +301,31 @@ export interface SessionState {
 export interface SessionSlice {
   sessions: Map<string, SessionState>;
   activeSessionId: string | null;
+  // v1.6: pending "draft" new-session slot. Set when the user clicks
+  // "+ 新建" in sidebar with an empty prompt — they've chosen a cwd
+  // but haven't sent a first message yet, so SDK hasn't spawned + no
+  // CC sid exists. Composer detects activeSessionId === draftSession.id
+  // (which is `draft-<random>`) and routes the first send through
+  // POST /api/sessions/new instead of /turns; the returned real sid
+  // replaces the draft via commitDraftSession.
+  //
+  // Why a synthetic-id row instead of a separate "draft" slot beside
+  // activeSessionId: keeps activeSessionId's nullability semantics
+  // simple — it's still always either a real CC sid OR null. The
+  // draft id can flow through any code path that takes a sessionId
+  // with no special-casing, except the few that explicitly check the
+  // `draft-` prefix (Composer send-routing, Sidebar render,
+  // ChatFlowCanvas placeholder).
+  draftSession: { id: string; cwd: string } | null;
+  startDraftSession: (cwd: string) => void;
+  /** Replace the draft with the real CC-spawned session. Called by
+   *  Composer after POST /api/sessions/new succeeds. Cleans up the
+   *  draft entry and points activeSessionId at the real sid so the
+   *  rest of the app sees a normal active session. */
+  commitDraftSession: (realSid: string) => void;
+  /** Drop the draft without spawning. Called from sidebar's draft
+   *  context menu / when user explicitly cancels. */
+  clearDraftSession: () => void;
   loadSession: (id: string) => Promise<void>;
   // v0.9 file-tail: re-fetch the lite ChatFlow for `id` triggered by
   // an SSE `invalidate` event (underlying jsonl appended). Reconciles
