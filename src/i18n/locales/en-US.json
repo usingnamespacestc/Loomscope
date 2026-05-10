@@ -147,6 +147,8 @@
     "blocked_viewer": "Viewer-only mode — enable Interactive in Settings → Session runtime to send messages.",
     "placeholder_viewer": "(viewer-only mode — input disabled)",
     "status_running": "Running · {{elapsed}}",
+    "status_tokens_in_tooltip": "Input tokens (fresh + cache_creation; cache_read replay excluded)",
+    "status_tokens_out_tooltip": "Output tokens (CC generated)",
     "slash_compact_tooltip": "Run /compact — summarize and truncate context, keeping a summary",
     "slash_confirm_title": "Run {{command}}?",
     "slash_compact_confirm_message": "/compact clears the conversation history and keeps only a summary as context. The session continues from there; nothing outside the on-disk jsonl is affected.",

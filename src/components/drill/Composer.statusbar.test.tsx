@@ -136,4 +136,140 @@ describe("ComposerStatusBar", () => {
     });
     expect(screen.queryByTestId("composer-status-bar")).toBeNull();
   });
+
+  // v1.5 R3 dual-source: status bar must also light up for terminal
+  // CC sessions (no sdk-queue-state) via UserPromptSubmit/Stop hook
+  // timing. Without this fallback the bar was invisible when CC was
+  // driven from terminal.
+  it("falls back to hook-based timing when SDK queue state is idle (terminal CC)", () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    vi.setSystemTime(start);
+    // SDK queue state stays idle (terminal CC path).
+    setInflight("idle", null);
+    // But hook-driven currentTurn is open (UserPromptSubmit fired).
+    const sessions = new Map();
+    sessions.set(SID, {
+      ...blankSessionStateLite(),
+      currentTurn: { startedAt: start },
+      lastTurnHookAt: start,
+    });
+    useStore.setState({ sessions });
+    renderComposer();
+    act(() => {
+      vi.advanceTimersByTimeAsync(7_000);
+      vi.advanceTimersByTime(7_000);
+    });
+    const bar = screen.getByTestId("composer-status-bar");
+    expect(bar.getAttribute("data-running")).toBe("true");
+    expect(bar.textContent).toContain("7s");
+  });
+
+  // v1.5 R3 token display: ↑↓ counters from latest llm_call usage.
+  // Sticky after the turn ends so the user keeps seeing how much was
+  // used.
+  it("renders ↑↓ token counts from latest ChatNode's last llm_call usage", () => {
+    setInflight("idle", null);
+    const sessions = new Map();
+    const cf = makeChatFlowWithLlmUsage({
+      input_tokens: 1_200,
+      cache_creation_input_tokens: 200,
+      output_tokens: 350,
+    });
+    sessions.set(SID, { ...blankSessionStateLite(), chatFlow: cf });
+    useStore.setState({ sessions });
+    renderComposer();
+    const tokens = screen.getByTestId("composer-status-tokens");
+    // input = 1200 + 200 = 1400 → "1.4k"
+    expect(tokens.textContent).toContain("↑ 1.4k");
+    // output = 350 → "350"
+    expect(tokens.textContent).toContain("↓ 350");
+  });
+
+  it("token counts persist visible after running ends", () => {
+    setInflight("idle", null);
+    const sessions = new Map();
+    const cf = makeChatFlowWithLlmUsage({
+      input_tokens: 5_000,
+      output_tokens: 1_000,
+    });
+    sessions.set(SID, { ...blankSessionStateLite(), chatFlow: cf });
+    useStore.setState({ sessions });
+    renderComposer();
+    // Running indicator absent (idle), but the bar still shows for
+    // the token display.
+    const bar = screen.getByTestId("composer-status-bar");
+    expect(bar.getAttribute("data-running")).toBe("false");
+    expect(screen.getByTestId("composer-status-tokens")).toBeTruthy();
+  });
+
+  it("hides bar entirely when not running and no token data", () => {
+    setInflight("idle", null);
+    // No chatFlow, no usage.
+    renderComposer();
+    expect(screen.queryByTestId("composer-status-bar")).toBeNull();
+  });
 });
+
+// Minimal SessionState shape — only the keys the status bar reads.
+function blankSessionStateLite() {
+  return {
+    chatFlow: null,
+    isLoading: false,
+    error: null,
+    workflowCache: new Map(),
+    selectedNodeId: null,
+    drillStack: [],
+    workflowSelectedNodeId: null,
+    workflowViewports: new Map(),
+    foldedCompactIds: new Set<string>(),
+    pendingPermission: null,
+    pendingCanUseToolPrompts: [],
+    lastInvalidateAt: 0,
+    currentTurn: null,
+    lastTurnHookAt: 0,
+    lastNotification: null,
+    sdkError: null,
+  };
+}
+
+// Build a tiny ChatFlow with one ChatNode containing one llm_call
+// WorkNode whose usage carries the supplied token counts.
+function makeChatFlowWithLlmUsage(usage: Record<string, number>) {
+  return {
+    id: SID,
+    mainJsonlPath: "/tmp/x.jsonl",
+    sidecarDir: "/tmp/x",
+    chatNodes: [
+      {
+        kind: "chat" as const,
+        id: "cn-1",
+        parentChatNodeId: null,
+        rootUserUuid: "u-1",
+        userMessage: { uuid: "u-1", content: "hi", attachments: [] },
+        workflow: {
+          nodes: [
+            {
+              kind: "llm_call" as const,
+              id: "llm-1",
+              parentUuid: "u-1",
+              chainIndex: 0,
+              model: "claude-sonnet-4-6",
+              usage,
+              stopReason: "end_turn",
+              tokens: 0,
+            },
+          ],
+          edges: [],
+        },
+        trigger: "user" as const,
+        isCompactSummary: false,
+        meta: {},
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ] as any,
+    orphans: [],
+    flowEvents: [],
+    trigger: "user" as const,
+  };
+}

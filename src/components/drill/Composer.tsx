@@ -47,6 +47,7 @@ import { ConfirmBanner } from "@/components/ConfirmBanner";
 import { findLatestLeafId } from "@/components/drill/pathUtils";
 import { useStore } from "@/store/index";
 import { getInflight } from "@/store/sdkChannelSlice";
+import { useSessionTurnRunning } from "@/store/livenessHooks";
 
 const MIN_HEIGHT = 96;
 const MAX_HEIGHT = 480;
@@ -1086,59 +1087,119 @@ function loadSettings(): ComposerSettings {
 
 // v1.4 R4 — ComposerStatusBar
 // ----------------------------
-// CC-terminal-style spinner + elapsed-time strip pinned above the
-// composer body. Visible only while `inflight.state === "running"`.
+// CC-terminal-style status strip pinned above the composer body.
+// Surfaces THREE signals: running indicator + elapsed time + ↑↓ token
+// counts. Token counts persist after the turn ends so the user can
+// review the last turn's usage without opening DrillPanel
+// (mirrors CC terminal's "Brewing... (1.2k input, 234 output)" line).
 //
-// Why a server-side timestamp (currentRun.startedAt from sdk-queue-state
-// SSE) instead of the UserPromptSubmit hook timing the existing
-// ChatNodeCard pulse animation uses:
-//   - currentRun.startedAt fires the moment SessionRegistry.maybeDispatch
-//     hands the prompt to the SDK pump — server timestamp, no network
-//     hop, no curl POST → cc-hook → bus → SSE round-trip.
-//   - currentTurn.startedAt (the existing card pulse source) fires when
-//     the UserPromptSubmit *hook* arrives in the browser. Hook delivery
-//     latency is ~100-300ms (worse on terminal CC HTTP path), so the
-//     pulse start visibly trails the actual turn.
-// Result: this strip's start clock is the most accurate "running"
-// signal Loomscope can derive. Card pulse alignment is a separate
-// follow-up (would require redirecting the pulse hook source).
+// Two running-state sources, OR'd together so this works for BOTH
+// SDK-driven (Loomscope composer-spawned) AND terminal CC sessions:
 //
-// End: when `state === "idle"` flips back, strip hides instantly.
+//   1. SDK queue state: `inflight.state === "running"` + `inflight.
+//      currentRun.startedAt`. Server-side timestamp at the moment
+//      SessionRegistry.maybeDispatch hands the prompt to the SDK
+//      pump. Most accurate; only fires for Loomscope-spawned turns.
+//
+//   2. Hook-based turn (terminal CC fallback): `useSessionTurnRunning`
+//      reads `currentTurn` set by UserPromptSubmit hook + cleared by
+//      Stop hook. Slightly later (hook delivery ~100-300ms) but the
+//      only signal we have when CC is driven from terminal — without
+//      this, the status bar never appeared for terminal sessions.
+//
+// Token source: the latest ChatNode's last `llm_call` WorkNode usage.
+// Updates as fast as `refreshSession` runs (chokidar invalidate →
+// /api/sessions/:id parse → store), so it's *eventually live*; not
+// frame-by-frame the way CC terminal can do during streaming. A
+// future improvement would parse `sdk-message` partial frames for
+// real-time partial usage (out of v1.4 scope; documented in
+// `project_loomscope_timing_followups.md`).
 function ComposerStatusBar({ sessionId }: { sessionId: string }) {
   const { t } = useTranslation();
   const inflight = useStore((s) => getInflight(s, sessionId));
-  const startedAt = inflight.currentRun?.startedAt ?? null;
-  const isRunning = inflight.state === "running" && startedAt !== null;
+  const sdkStartedAt = inflight.currentRun?.startedAt ?? null;
+  const sdkRunning = inflight.state === "running" && sdkStartedAt !== null;
 
-  // Tick state forces a re-render every second so the elapsed
-  // counter ticks live without external store updates. We don't
-  // store `now` — Date.now() is read at render. The state value
-  // itself is a meaningless counter; we just need React to flush.
+  const hookTurn = useSessionTurnRunning(sessionId);
+  const currentTurnStartedAt = useStore(
+    (s) => s.sessions.get(sessionId)?.currentTurn?.startedAt ?? null,
+  );
+  const hookRunning = hookTurn.trust && hookTurn.running;
+
+  const isRunning = sdkRunning || hookRunning;
+  // Prefer SDK timestamp (earlier + server-side); fall back to
+  // currentTurn (hook) for terminal CC.
+  const startedAt = sdkRunning
+    ? sdkStartedAt
+    : hookRunning
+      ? currentTurnStartedAt
+      : null;
+
+  // Latest ChatNode's last llm_call usage. Drives the ↑↓ counters
+  // both during run (eventual-live) and after run (sticky display).
+  // Split into two scalar selectors so Zustand's default Object.is
+  // equality check doesn't see a new object identity every render
+  // (would otherwise infinite-loop via Maximum update depth).
+  const inputTokens = useStore((s) =>
+    pickLatestLlmUsage(s.sessions.get(sessionId)?.chatFlow, "input"),
+  );
+  const outputTokens = useStore((s) =>
+    pickLatestLlmUsage(s.sessions.get(sessionId)?.chatFlow, "output"),
+  );
+  const hasTokens = inputTokens > 0 || outputTokens > 0;
+
+  // Tick re-renders every second so the elapsed counter ticks while
+  // running. Stops when not running (no tick → no wasted work).
   const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!isRunning) return;
     const id = window.setInterval(() => setTick((t) => t + 1), 1_000);
     return () => window.clearInterval(id);
   }, [isRunning]);
-  // Mark `tick` as read so eslint-no-unused-vars stays quiet — we
-  // use it implicitly via the re-render.
   void tick;
 
-  if (!isRunning || startedAt == null) return null;
-  const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  // Hide the bar entirely when there's nothing to show — no in-flight
+  // turn AND no usage data yet (fresh session before first reply).
+  if (!isRunning && !hasTokens) return null;
+
+  const elapsedSec =
+    isRunning && startedAt != null
+      ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+      : null;
+
   return (
     <div
       data-testid="composer-status-bar"
-      data-elapsed-sec={elapsedSec}
+      data-running={isRunning ? "true" : "false"}
+      data-elapsed-sec={elapsedSec ?? undefined}
       className="flex items-center gap-2 border-t border-blue-100 bg-blue-50/60 px-3 py-1 text-[11px] text-blue-800"
     >
-      <span
-        aria-hidden="true"
-        className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500"
-      />
-      <span>
-        {t("composer.status_running", { elapsed: formatElapsed(elapsedSec) })}
-      </span>
+      {isRunning && (
+        <span
+          aria-hidden="true"
+          className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500"
+        />
+      )}
+      {elapsedSec != null && (
+        <span>
+          {t("composer.status_running", {
+            elapsed: formatElapsed(elapsedSec),
+          })}
+        </span>
+      )}
+      {hasTokens && (
+        <span
+          className="ml-auto inline-flex items-center gap-1.5 font-mono text-blue-700"
+          data-testid="composer-status-tokens"
+        >
+          <span title={t("composer.status_tokens_in_tooltip")}>
+            ↑ {formatTokens(inputTokens)}
+          </span>
+          <span title={t("composer.status_tokens_out_tooltip")}>
+            ↓ {formatTokens(outputTokens)}
+          </span>
+        </span>
+      )}
     </div>
   );
 }
@@ -1156,4 +1217,46 @@ function formatElapsed(totalSec: number): string {
   const m = Math.floor((totalSec % 3_600) / 60);
   const s = totalSec % 60;
   return `${h}h ${m}m ${s}s`;
+}
+
+// Compact token formatter: 1234 → "1.2k", 234567 → "234k", 1500000 →
+// "1.5M". Matches the canvas TokenBar formatting for visual coherence.
+function formatTokens(n: number): string {
+  if (n < 1_000) return String(n);
+  if (n < 10_000) return `${(n / 1_000).toFixed(1)}k`;
+  if (n < 1_000_000) return `${Math.round(n / 1_000)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+// Extract input or output token count from the LATEST llm_call inside
+// the LATEST ChatNode of the given chatFlow. Returns a primitive so
+// Zustand selectors stay referentially stable across renders.
+//
+// "input" sums fresh + cache_creation (excludes cache_read replay —
+// matches deriveContextTokens semantics in layoutDag).
+//
+// Returns 0 when chatFlow / chatNodes / llm_calls / usage are missing.
+function pickLatestLlmUsage(
+  chatFlow: import("@/data/types").ChatFlow | null | undefined,
+  kind: "input" | "output",
+): number {
+  if (!chatFlow || chatFlow.chatNodes.length === 0) return 0;
+  const latest = chatFlow.chatNodes[chatFlow.chatNodes.length - 1];
+  const llms = latest.workflow.nodes.filter(
+    (n): n is Extract<typeof n, { kind: "llm_call" }> =>
+      n.kind === "llm_call",
+  );
+  if (llms.length === 0) return 0;
+  const u = llms[llms.length - 1].usage as
+    | Record<string, unknown>
+    | undefined;
+  if (!u) return 0;
+  const num = (k: string) => {
+    const v = u[k];
+    return typeof v === "number" ? v : 0;
+  };
+  if (kind === "input") {
+    return num("input_tokens") + num("cache_creation_input_tokens");
+  }
+  return num("output_tokens");
 }

@@ -147,6 +147,8 @@
     "blocked_viewer": "Viewer-only 模式 — 在「设置 → 会话运行」打开 Interactive 才能发消息",
     "placeholder_viewer": "（Viewer-only 模式 — 不可输入）",
     "status_running": "运行中 · {{elapsed}}",
+    "status_tokens_in_tooltip": "输入 token（input + cache_creation；不含 cache_read 重放）",
+    "status_tokens_out_tooltip": "输出 token（CC 生成）",
     "slash_compact_tooltip": "运行 /compact —— 压缩对话上下文，保留 summary",
     "slash_confirm_title": "运行 {{command}}?",
     "slash_compact_confirm_message": "执行 /compact 会清空对话历史并仅保留一份 summary 作为上下文。后续可在此 session 续接，不会影响磁盘 jsonl 之外的内容。",
