@@ -146,6 +146,7 @@
     "placeholder_trashed": "（已删除 — 只读）",
     "blocked_viewer": "Viewer-only 模式 — 在「设置 → 会话运行」打开 Interactive 才能发消息",
     "placeholder_viewer": "（Viewer-only 模式 — 不可输入）",
+    "status_running": "运行中 · {{elapsed}}",
     "placeholder_offchain": "（旁支节点 — 只读）",
     "placeholder_non_leaf": "（非末端节点 — 只读）",
     "respawning_per_send": "起新 SDK 进程读最新文件（race 保护）",

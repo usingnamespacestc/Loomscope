@@ -482,6 +482,15 @@ export function Composer({
         <div className="h-0.5 w-8 rounded-full bg-gray-300 group-hover:bg-blue-400" />
       </div>
 
+      {/* v1.4 R4: running status bar — CC-terminal-style spinner +
+          elapsed time. Shown only while the SDK queue state is
+          `running`; the start clock is `currentRun.startedAt` from
+          sessionRegistry's broadcast (server-side timestamp at the
+          moment dispatch began), which is more accurate than the
+          UserPromptSubmit hook timing the card pulse animation
+          uses (hook delivery adds ~100-300ms). */}
+      <ComposerStatusBar sessionId={sessionId} />
+
       <div className="flex min-h-0 flex-1 flex-col px-3 pt-2 pb-1">
         <div
           className={`relative flex min-h-0 flex-1 flex-col rounded-2xl border bg-white px-3 py-2 shadow-sm transition-all focus-within:shadow ${
@@ -991,4 +1000,78 @@ function loadSettings(): ComposerSettings {
   } catch {
     return DEFAULT_SETTINGS;
   }
+}
+
+// v1.4 R4 — ComposerStatusBar
+// ----------------------------
+// CC-terminal-style spinner + elapsed-time strip pinned above the
+// composer body. Visible only while `inflight.state === "running"`.
+//
+// Why a server-side timestamp (currentRun.startedAt from sdk-queue-state
+// SSE) instead of the UserPromptSubmit hook timing the existing
+// ChatNodeCard pulse animation uses:
+//   - currentRun.startedAt fires the moment SessionRegistry.maybeDispatch
+//     hands the prompt to the SDK pump — server timestamp, no network
+//     hop, no curl POST → cc-hook → bus → SSE round-trip.
+//   - currentTurn.startedAt (the existing card pulse source) fires when
+//     the UserPromptSubmit *hook* arrives in the browser. Hook delivery
+//     latency is ~100-300ms (worse on terminal CC HTTP path), so the
+//     pulse start visibly trails the actual turn.
+// Result: this strip's start clock is the most accurate "running"
+// signal Loomscope can derive. Card pulse alignment is a separate
+// follow-up (would require redirecting the pulse hook source).
+//
+// End: when `state === "idle"` flips back, strip hides instantly.
+function ComposerStatusBar({ sessionId }: { sessionId: string }) {
+  const { t } = useTranslation();
+  const inflight = useStore((s) => getInflight(s, sessionId));
+  const startedAt = inflight.currentRun?.startedAt ?? null;
+  const isRunning = inflight.state === "running" && startedAt !== null;
+
+  // Tick state forces a re-render every second so the elapsed
+  // counter ticks live without external store updates. We don't
+  // store `now` — Date.now() is read at render. The state value
+  // itself is a meaningless counter; we just need React to flush.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = window.setInterval(() => setTick((t) => t + 1), 1_000);
+    return () => window.clearInterval(id);
+  }, [isRunning]);
+  // Mark `tick` as read so eslint-no-unused-vars stays quiet — we
+  // use it implicitly via the re-render.
+  void tick;
+
+  if (!isRunning || startedAt == null) return null;
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  return (
+    <div
+      data-testid="composer-status-bar"
+      data-elapsed-sec={elapsedSec}
+      className="flex items-center gap-2 border-t border-blue-100 bg-blue-50/60 px-3 py-1 text-[11px] text-blue-800"
+    >
+      <span
+        aria-hidden="true"
+        className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500"
+      />
+      <span>
+        {t("composer.status_running", { elapsed: formatElapsed(elapsedSec) })}
+      </span>
+    </div>
+  );
+}
+
+// Format elapsed seconds in the CC-terminal style: "12s" / "1m 23s"
+// / "2h 5m 30s". No leading zeros — keeps the strip compact.
+function formatElapsed(totalSec: number): string {
+  if (totalSec < 60) return `${totalSec}s`;
+  if (totalSec < 3_600) {
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m}m ${s}s`;
+  }
+  const h = Math.floor(totalSec / 3_600);
+  const m = Math.floor((totalSec % 3_600) / 60);
+  const s = totalSec % 60;
+  return `${h}h ${m}m ${s}s`;
 }

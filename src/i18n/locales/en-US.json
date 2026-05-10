@@ -146,6 +146,7 @@
     "placeholder_trashed": "(deleted — read-only)",
     "blocked_viewer": "Viewer-only mode — enable Interactive in Settings → Session runtime to send messages.",
     "placeholder_viewer": "(viewer-only mode — input disabled)",
+    "status_running": "Running · {{elapsed}}",
     "placeholder_offchain": "(sibling branch — read-only)",
     "placeholder_non_leaf": "(non-leaf node — read-only)",
     "respawning_per_send": "Spawning a fresh SDK Query (race protection)",
