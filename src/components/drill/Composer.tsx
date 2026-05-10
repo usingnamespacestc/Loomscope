@@ -43,6 +43,7 @@ import type { PointerEvent as RPointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import { postInterrupt, postTurn } from "@/api/turns";
+import { ConfirmBanner } from "@/components/ConfirmBanner";
 import { findLatestLeafId } from "@/components/drill/pathUtils";
 import { useStore } from "@/store/index";
 import { getInflight } from "@/store/sdkChannelSlice";
@@ -331,6 +332,38 @@ export function Composer({
     [canSend, text, attachments, sessionId, cwd, setSdkError],
   );
 
+  // v1.5 R3: slash command confirm + send. Spike (handoff-v1.5-slash-
+  // spike.md) confirmed SDK transit accepts text starting with `/`
+  // and routes through processSlashCommand identically to terminal
+  // CC. /compact specifically opts in via supportsNonInteractive:true.
+  // We send the bare command string with no model/effort/fastMode
+  // overrides — slash commands are CC-side actions that run BEFORE
+  // any LLM sampling, so the per-turn settings don't apply.
+  const [slashConfirm, setSlashConfirm] = useState<{
+    command: string;
+  } | null>(null);
+  const sendSlashCommand = useCallback(
+    async (command: string) => {
+      if (composerBlock || isRunning) return;
+      setSdkError(sessionId, null);
+      const r = await postTurn(sessionId, {
+        text: command,
+        cwd,
+        priority: "next",
+      });
+      if (!("ok" in r) || r.ok !== true) {
+        setSdkError(
+          sessionId,
+          "error" in r ? r.error : "send failed",
+        );
+      }
+    },
+    [composerBlock, isRunning, sessionId, cwd, setSdkError],
+  );
+  const onCompactClick = useCallback(() => {
+    setSlashConfirm({ command: "/compact" });
+  }, []);
+
   const onSendDefault = useCallback(() => {
     void sendWithPriority("next");
   }, [sendWithPriority]);
@@ -597,6 +630,24 @@ export function Composer({
             >
               <PlusIcon />
             </button>
+            {/* v1.5 R3 #181: pinned /compact button. Most-used slash
+                command gets a dedicated affordance so users don't
+                have to type. Hidden in viewer mode (composerBlock
+                "viewer") so the gate stays consistent with R8.
+                Future v1.5 #180 picker will list more commands when
+                user types `/`; this button stays pinned regardless. */}
+            {!composerBlock && (
+              <button
+                type="button"
+                data-testid="composer-slash-compact"
+                title={t("composer.slash_compact_tooltip")}
+                disabled={isRunning}
+                onClick={onCompactClick}
+                className="flex h-7 w-7 items-center justify-center rounded-full text-gray-500 hover:bg-teal-100 hover:text-teal-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent"
+              >
+                <span className="text-[12px]">⊞</span>
+              </button>
+            )}
 
             {/* Right: settings chip + send arrow. The chip is a
                 popover trigger (model + effort + fast mode all in
@@ -744,6 +795,37 @@ export function Composer({
             bubble UI now renders inline in ConversationView's path
             tail (showPendingQueue prop). */}
       </div>
+      {/* v1.5 R3 #181: slash command confirm dialog. Reuses the
+          ConfirmBanner used by Sidebar trash actions. neutral (not
+          danger=true) since /compact isn't destructive — it's a
+          context refresh that keeps a summary. */}
+      <ConfirmBanner
+        open={slashConfirm !== null}
+        title={
+          slashConfirm
+            ? t("composer.slash_confirm_title", { command: slashConfirm.command })
+            : ""
+        }
+        message={
+          slashConfirm?.command === "/compact"
+            ? t("composer.slash_compact_confirm_message")
+            : t("composer.slash_generic_confirm_message")
+        }
+        confirmLabel={
+          slashConfirm
+            ? t("composer.slash_confirm_button", { command: slashConfirm.command })
+            : ""
+        }
+        cancelLabel={t("composer.slash_confirm_cancel")}
+        danger={false}
+        onCancel={() => setSlashConfirm(null)}
+        onConfirm={() => {
+          if (!slashConfirm) return;
+          const cmd = slashConfirm.command;
+          setSlashConfirm(null);
+          void sendSlashCommand(cmd);
+        }}
+      />
     </div>
   );
 }
