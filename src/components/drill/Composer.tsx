@@ -58,6 +58,41 @@ const DEFAULT_HEIGHT = 140;
 const HEIGHT_KEY = "loomscope:composer:height";
 const SETTINGS_KEY = "loomscope:composer:settings";
 
+// v1.5 R3 #180: built-in slash commands the SDK transit-confirms
+// pass through (`supportsNonInteractive: true` per CC source —
+// see docs/handoff-v1.5-slash-spike.md). Order: action commands
+// first (most likely needed), then info commands. `/heapdump`
+// last because it's dev-only.
+//
+// `takesArgs`: for commands that accept optional positional args,
+// selecting from picker fills `/<name> ` into the textarea so the
+// user can keep typing args before sending. False = no-arg form,
+// can auto-send on selection.
+//
+// `sideEffect`: shows a small ⚠ chip in the picker row — not
+// destructive per se, but the user should know "this writes
+// something" rather than "this just shows info".
+//
+// `needsConfirm`: opens ConfirmBanner before sending (mirrors
+// the dedicated /compact button's confirm flow).
+interface SlashCommandSpec {
+  name: string;
+  takesArgs: boolean;
+  sideEffect: boolean;
+  needsConfirm: boolean;
+}
+const SLASH_COMMANDS: SlashCommandSpec[] = [
+  { name: "compact", takesArgs: true, sideEffect: false, needsConfirm: true },
+  { name: "context", takesArgs: false, sideEffect: false, needsConfirm: false },
+  { name: "cost", takesArgs: false, sideEffect: false, needsConfirm: false },
+  { name: "files", takesArgs: false, sideEffect: false, needsConfirm: false },
+  { name: "version", takesArgs: false, sideEffect: false, needsConfirm: false },
+  { name: "advisor", takesArgs: false, sideEffect: false, needsConfirm: false },
+  { name: "release-notes", takesArgs: false, sideEffect: false, needsConfirm: false },
+  { name: "extra-usage", takesArgs: false, sideEffect: false, needsConfirm: false },
+  { name: "heapdump", takesArgs: false, sideEffect: true, needsConfirm: true },
+];
+
 // Model list mirrors what Claude Code's `--model` flag accepts. Order
 // = canonical "newest first" so Opus 4.7 (latest) is the default
 // pick. v∞.1 may turn this into a server-fed list driven by the
@@ -368,6 +403,78 @@ export function Composer({
     setSlashConfirm({ command: "/compact" });
   }, []);
 
+  // v1.5 R3 #180: slash command picker. Opens when textarea content
+  // starts with `/`. The textarea content after the `/` doubles as
+  // a filter — typing "/co" narrows to /compact /context /cost.
+  // Selecting an item either:
+  //   - sends immediately (info commands, no args, no confirm)
+  //   - opens ConfirmBanner (destructive: /compact, /heapdump)
+  //   - fills textarea with `/<name> ` for the user to add args
+  //     (when `takesArgs: true`)
+  // Custom last item closes the picker without sending — user keeps
+  // typing freeform `/...` text and submits via Enter normally.
+  const [slashPickerOpen, setSlashPickerOpen] = useState(false);
+  const [slashPickerHighlight, setSlashPickerHighlight] = useState(0);
+  // Auto-open the picker when textarea starts with `/` AND has no
+  // space yet. Once a space appears (e.g. user picked /compact and
+  // is typing args, or typed any custom slash with args), close —
+  // command list is no longer relevant. Viewer gate / trashed /
+  // non-leaf also closes it.
+  useEffect(() => {
+    if (composerBlock) {
+      setSlashPickerOpen(false);
+      return;
+    }
+    const looksLikeSlash = text.startsWith("/") && !text.includes(" ");
+    setSlashPickerOpen(looksLikeSlash);
+  }, [text, composerBlock]);
+  // Reset highlight when filter changes — if current highlight points
+  // past the end of the now-filtered list, clamp to 0.
+  const slashFilter = useMemo(() => {
+    if (!text.startsWith("/")) return "";
+    const tail = text.slice(1);
+    // Take only the first word (up to first space) — args after a
+    // space don't filter the command list.
+    const sp = tail.indexOf(" ");
+    return sp >= 0 ? tail.slice(0, sp).toLowerCase() : tail.toLowerCase();
+  }, [text]);
+  const filteredSlashCommands = useMemo(() => {
+    if (!slashFilter) return SLASH_COMMANDS;
+    return SLASH_COMMANDS.filter((c) =>
+      c.name.toLowerCase().startsWith(slashFilter),
+    );
+  }, [slashFilter]);
+  useEffect(() => {
+    setSlashPickerHighlight(0);
+  }, [slashFilter]);
+
+  const onSlashPickerSelect = useCallback(
+    (cmd: SlashCommandSpec | "custom") => {
+      if (cmd === "custom") {
+        // Just close picker; user keeps typing.
+        setSlashPickerOpen(false);
+        return;
+      }
+      if (cmd.takesArgs) {
+        // Pre-fill `/<name> ` so user can type args before sending.
+        setText(`/${cmd.name} `);
+        setSlashPickerOpen(false);
+        return;
+      }
+      if (cmd.needsConfirm) {
+        setText("");
+        setSlashPickerOpen(false);
+        setSlashConfirm({ command: `/${cmd.name}` });
+        return;
+      }
+      // Direct send for no-arg, no-confirm info commands.
+      setText("");
+      setSlashPickerOpen(false);
+      void sendSlashCommand(`/${cmd.name}`);
+    },
+    [sendSlashCommand],
+  );
+
   const onSendDefault = useCallback(() => {
     void sendWithPriority("next");
   }, [sendWithPriority]);
@@ -475,6 +582,49 @@ export function Composer({
   }, []);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // v1.5 R3 #180: when slash picker is open, intercept navigation
+    // keys + Enter for selection BEFORE the normal Enter-sends path.
+    // Esc closes picker without sending. Filter-by-typing happens
+    // naturally — the textarea text drives `slashFilter`.
+    if (slashPickerOpen) {
+      // The picker has N matched command rows + 1 custom row at the
+      // end. N may be 0 when the filter doesn't match any built-in
+      // (e.g. user typed `/zzz`); custom row stays available.
+      const total = filteredSlashCommands.length + 1;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashPickerHighlight((h) => (h + 1) % total);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashPickerHighlight((h) => (h - 1 + total) % total);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashPickerOpen(false);
+        return;
+      }
+      if (
+        e.key === "Enter" &&
+        !e.shiftKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        e.keyCode !== 229 &&
+        !e.nativeEvent.isComposing
+      ) {
+        e.preventDefault();
+        const idx = slashPickerHighlight;
+        if (idx === filteredSlashCommands.length) {
+          onSlashPickerSelect("custom");
+        } else {
+          onSlashPickerSelect(filteredSlashCommands[idx]);
+        }
+        return;
+      }
+    }
     // Plain Enter submits; Shift+Enter inserts a newline. Matches
     // claude.ai / Slack / Discord chat conventions. IME composition
     // is in progress when keyCode === 229 — don't send mid-composition
@@ -547,6 +697,23 @@ export function Composer({
             >
               {t("composer.drop_hint")}
             </div>
+          )}
+
+          {/* v1.5 R3 #180: slash command picker. Anchored above the
+              composer card via absolute bottom-full so it pops up
+              when user types `/`. Click outside / Esc / making
+              textarea no longer start with `/` (or adding a space)
+              closes it. Renders even when no built-ins match the
+              current filter — the custom row is always available
+              so user can submit arbitrary `/...` text. */}
+          {slashPickerOpen && (
+            <SlashCommandPicker
+              commands={filteredSlashCommands}
+              highlight={slashPickerHighlight}
+              onHighlight={setSlashPickerHighlight}
+              onSelect={onSlashPickerSelect}
+              t={t}
+            />
           )}
 
           {attachments.length > 0 && (
@@ -1239,6 +1406,101 @@ function formatElapsed(totalSec: number): string {
   const m = Math.floor((totalSec % 3_600) / 60);
   const s = totalSec % 60;
   return `${h}h ${m}m ${s}s`;
+}
+
+// v1.5 R3 #180: slash command picker popover. Mounts as an absolute
+// child of the composer card (bottom-full anchor → pops up above
+// the textarea). Keyboard nav handled by the parent via the existing
+// textarea onKeyDown — picker just renders rows + click-to-select.
+//
+// Layout: command name (mono, left) + description (right gray).
+// Side-effect commands (/heapdump) get a ⚠ chip. Last row is
+// "custom" which closes the picker without sending so user can
+// finish typing freeform `/...` text.
+function SlashCommandPicker({
+  commands,
+  highlight,
+  onHighlight,
+  onSelect,
+  t,
+}: {
+  commands: SlashCommandSpec[];
+  highlight: number;
+  onHighlight: (i: number) => void;
+  onSelect: (cmd: SlashCommandSpec | "custom") => void;
+  t: (k: string, opts?: Record<string, unknown>) => string;
+}) {
+  // Custom row sits at index = commands.length.
+  const customIdx = commands.length;
+  return (
+    <div
+      data-testid="composer-slash-picker"
+      className="absolute bottom-full left-0 right-0 mb-2 max-h-72 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+    >
+      {commands.map((c, i) => {
+        const isHi = i === highlight;
+        return (
+          <button
+            key={c.name}
+            type="button"
+            onMouseEnter={() => onHighlight(i)}
+            onMouseDown={(e) => {
+              // mousedown not click — keep textarea focused (click
+              // would fire blur/refocus dance).
+              e.preventDefault();
+              onSelect(c);
+            }}
+            data-testid={`composer-slash-picker-${c.name}`}
+            data-highlighted={isHi ? "true" : "false"}
+            className={[
+              "flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors",
+              isHi ? "bg-violet-50" : "hover:bg-gray-50",
+            ].join(" ")}
+          >
+            <span className="font-mono text-[12px] font-medium text-violet-700">
+              /{c.name}
+            </span>
+            {c.sideEffect && (
+              <span
+                className="inline-flex items-center rounded bg-amber-100 px-1 py-0.5 text-[9px] font-medium text-amber-700"
+                title={t("composer.slash_picker_side_effect_hint")}
+              >
+                ⚠
+              </span>
+            )}
+            <span className="ml-auto truncate text-[10.5px] text-gray-500">
+              {t(`composer.slash_desc_${c.name}`)}
+            </span>
+          </button>
+        );
+      })}
+      {/* Custom row — last position, distinct background so it reads as
+          "everything else" rather than "another command". */}
+      <button
+        type="button"
+        onMouseEnter={() => onHighlight(customIdx)}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onSelect("custom");
+        }}
+        data-testid="composer-slash-picker-custom"
+        data-highlighted={customIdx === highlight ? "true" : "false"}
+        className={[
+          "flex w-full items-center gap-2 border-t border-gray-100 px-3 py-1.5 text-left transition-colors",
+          customIdx === highlight
+            ? "bg-violet-50"
+            : "hover:bg-gray-50",
+        ].join(" ")}
+      >
+        <span className="font-mono text-[12px] font-medium text-gray-600">
+          /…
+        </span>
+        <span className="ml-auto truncate text-[10.5px] text-gray-500">
+          {t("composer.slash_picker_custom_desc")}
+        </span>
+      </button>
+    </div>
+  );
 }
 
 // Compact token formatter: 1234 → "1.2k", 234567 → "234k", 1500000 →
