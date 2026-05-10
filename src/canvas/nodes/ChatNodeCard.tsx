@@ -62,65 +62,86 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
   // here". PR 2 will add right-click "jump to source session".
   const offChain = useIsOffActiveChain(cn.contributingSessions);
 
-  // Slash-command ChatNodes get their own dedicated card body — no
-  // 用户/助手 sections, no 进入工作流, no token bar, no stats. They're
-  // not LLM turns; they're CC-side actions.
-  if (slash) {
-    return (
-      <SlashCommandCard
-        cn={cn}
-        slash={slash}
-        selected={selected}
-        hasIncoming={data.hasIncomingEdge}
-        hasOutgoing={data.hasOutgoingEdge}
-      />
-    );
+  // v1.2 R6 unification: previously slash + compact each had a
+  // dedicated downgrade card (SlashCommandCard / inner CompactCard)
+  // that LACKED chips / TokenBar / DrillButton. Now: one render path
+  // with a "kind" dispatch that swaps the top event-chrome bar +
+  // body content, while sharing the bottom chrome (DrillButton,
+  // TokenBar, chips, NodeIdLine, handles). Adding a future event
+  // node (scheduled-task / hook) is just a new kind branch +
+  // palette entry, no whole-card duplication.
+  const kind: "slash" | "compact" | "normal" = slash
+    ? "slash"
+    : compact
+      ? "compact"
+      : "normal";
+  const compactPal =
+    kind === "compact" ? compactPalette(cn.compactMetadata?.trigger) : null;
+
+  // Per-kind chrome (bg / accent strip / border / dashed). Slash
+  // gets violet, compact uses the existing tri-trigger palette
+  // (auto teal / manual purple / failed rose) plus dashed border,
+  // normal keeps the root/leaf/scheduled state machine.
+  let bgClass: string;
+  let accentClass: string;
+  let borderClass: string;
+  let dashed = false;
+  if (kind === "slash") {
+    bgClass = "bg-violet-50";
+    accentClass = "border-l-[3px] border-l-violet-500";
+    borderClass = selected
+      ? "border-violet-500 ring-2 ring-violet-200"
+      : "border-violet-300 hover:border-violet-400";
+  } else if (kind === "compact" && compactPal) {
+    bgClass = compactPal.bg;
+    accentClass = compactPal.accent;
+    borderClass = selected
+      ? `${compactPal.selectedBorder} ring-2 ${compactPal.ring}`
+      : compactPal.border;
+    dashed = true;
+  } else {
+    bgClass = triggerSchedule
+      ? "bg-amber-50"
+      : isRoot
+        ? "bg-blue-50/60"
+        : isLeaf
+          ? "bg-green-50"
+          : "bg-white";
+    accentClass = triggerSchedule
+      ? "border-l-[3px] border-l-amber-500"
+      : isRoot
+        ? "border-l-[3px] border-l-blue-400"
+        : isLeaf
+          ? "border-l-[3px] border-l-green-400"
+          : "";
+    borderClass = selected
+      ? "border-blue-500 ring-2 ring-blue-200"
+      : triggerSchedule
+        ? "border-amber-300"
+        : isLeaf
+          ? "border-green-300"
+          : "border-gray-300 hover:border-gray-400";
   }
 
-  // v0.7 M2: compact ChatNodes get a dedicated fold-marker chrome
-  // (dashed border + tri-color by trigger + drill affordance for the
-  // pre-compact original sequence). Compact ChatNodes are visually
-  // anchor points in long sessions — keeping them indistinguishable
-  // from regular turns made the 139 compact points in a 256MB session
-  // invisible.
-  if (compact) {
-    return (
-      <CompactCard
-        cn={cn}
-        selected={selected}
-        hasIncoming={data.hasIncomingEdge}
-        hasOutgoing={data.hasOutgoingEdge}
-        userPreview={data.userPreview}
-      />
-    );
-  }
+  // DrillButton: always for normal; for slash/compact only if the
+  // inner WorkFlow has at least one llm_call (compact's summary
+  // generation is itself an LLM call → drill works; slash usually
+  // has no llm_call so this is conditionally hidden).
+  const innerLlmCount =
+    cn.workflow.summary?.llmCount ??
+    cn.workflow.nodes.filter((n) => n.kind === "llm_call").length;
+  const showDrill = kind === "normal" || innerLlmCount > 0;
 
-  // Background tint by primary state.
-  const bgClass = triggerSchedule
-    ? "bg-amber-50"
-    : isRoot
-      ? "bg-blue-50/60"
-      : isLeaf
-        ? "bg-green-50"
-        : "bg-white";
-
-  // 3px left accent strip — Agentloom signature.
-  const accentClass = triggerSchedule
-    ? "border-l-[3px] border-l-amber-500"
-    : isRoot
-      ? "border-l-[3px] border-l-blue-400"
-      : isLeaf
-        ? "border-l-[3px] border-l-green-400"
-        : "";
-
-  // Border color around the rest of the card.
-  const borderClass = selected
-    ? "border-blue-500 ring-2 ring-blue-200"
-    : triggerSchedule
-      ? "border-amber-300"
-      : isLeaf
-        ? "border-green-300"
-        : "border-gray-300 hover:border-gray-400";
+  // TokenBar source: compact shows pre-compact context size (more
+  // informative than the post-compact contextTokens which is near 0);
+  // normal uses contextTokens; slash typically has no token-bearing
+  // workload so we suppress.
+  const tokenBarTokens =
+    kind === "compact"
+      ? (cn.compactMetadata?.preTokens ?? 0)
+      : kind === "normal"
+        ? data.contextTokens
+        : 0;
 
   return (
     <div
@@ -130,16 +151,15 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
         bgClass,
         accentClass,
         borderClass,
+        dashed ? "border-dashed" : "",
         // EN: pulsing emerald glow while this is the running latest
         // ChatNode + session is live. CSS keyframe in index.css.
-        // 中: 运行中且是最新节点时的脉动绿光，keyframe 在 index.css。
         running ? "loomscope-running-pulse" : "",
-        // Sibling-fork ChatNodes render at reduced contrast — saturation
-        // dropped + slight transparency. Selection ring still pierces
-        // through (selected:ring is inside the card) so picking an
-        // off-chain node for "jump to source session" stays visible.
+        // Sibling-fork ChatNodes render at reduced contrast.
         offChain ? "opacity-60 saturate-50" : "",
-      ].join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
       style={
         conversationHovered
           ? {
@@ -150,12 +170,11 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
       }
       data-testid={`chat-node-${cn.id}`}
       data-running={running ? "true" : "false"}
+      data-kind={kind}
+      data-compact-trigger={
+        kind === "compact" && compactPal ? compactPal.kind : undefined
+      }
     >
-      {/* v∞.2 fork: previously a hover-revealed ⑂ button lived here.
-          Removed 2026-05-08 in favor of auto-fork-on-send: composing
-          a turn while focused on a non-leaf ChatNode now implicitly
-          forks from that node (server-side). No explicit button
-          needed — selection IS the fork point. */}
       {/* Handles — invisible 0×0 when no edge connects (viewer mode). */}
       <Handle
         type="target"
@@ -168,80 +187,142 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
         }
       />
 
-      {/* State chip — only for functional events (compact / scheduled).
-          chat / root / leaf are visually inferable from the colored left
-          accent strip + position; no need to repeat as text. */}
-      {(compact || triggerSchedule) && (
-        <div className="flex items-center mb-1.5">
-          {compact ? (
-            <span className="inline-flex items-center gap-0.5 rounded bg-teal-200/80 px-1 py-0.5 text-[10px] font-semibold text-teal-900">
-              ⊞ compact
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-0.5 rounded bg-amber-200/80 px-1 py-0.5 text-[10px] font-semibold text-amber-900">
-              ⏰ scheduled
+      {/* Top event-chrome bar — kind-specific badge + extra info.
+          Shared visual language: a small chip on the left, optional
+          extra tokens (preTokens for compact, args for slash, etc.)
+          adjacent. Future event kinds (scheduled-task, hook) plug
+          into this same row. */}
+      {kind === "slash" && slash && (
+        <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+          <span className="inline-flex items-center gap-0.5 rounded bg-violet-200/80 px-1 py-0.5 text-[10px] font-semibold text-violet-900">
+            ⚡ {slash.name}
+            {slash.args ? ` ${slash.args}` : ""}
+          </span>
+        </div>
+      )}
+      {kind === "compact" && compactPal && (
+        <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+          <span
+            className={`inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold ${compactPal.chip}`}
+          >
+            ⊞ compact ({compactPal.label})
+          </span>
+          {typeof cn.compactMetadata?.preTokens === "number" &&
+            cn.compactMetadata.preTokens > 0 && (
+              <span
+                className="font-mono text-[10px] text-gray-500"
+                title={`pre-compact context: ${cn.compactMetadata.preTokens.toLocaleString()} tokens`}
+              >
+                · {formatTokensCompact(cn.compactMetadata.preTokens)}
+              </span>
+            )}
+          {compactPal.fallbackBadge && (
+            <span
+              className="inline-flex items-center rounded bg-gray-200/80 px-1 py-0.5 text-[9px] text-gray-700"
+              title="compactMetadata.trigger 字段缺失 — 视觉 fallback 到 auto 色"
+              data-testid="compact-trigger-unknown"
+            >
+              trigger unknown
             </span>
           )}
+        </div>
+      )}
+      {kind === "normal" && triggerSchedule && (
+        <div className="flex items-center mb-1.5">
+          <span className="inline-flex items-center gap-0.5 rounded bg-amber-200/80 px-1 py-0.5 text-[10px] font-semibold text-amber-900">
+            ⏰ scheduled
+          </span>
         </div>
       )}
 
       {/* v0.11: hybrid ChatNode (real prompt + inline compact mid-turn,
           ~96% of all compacts in real CC sessions) gets an explicit
-          fold-toggle banner at the top. Previously the inline-compact
-          marker was a tiny ⊞ chip in the bottom stats row, and
-          fold/unfold relied on the upstream chatFold synthetic node;
-          users couldn't fold/unfold from the hybrid card itself.
-          Now the banner doubles as the fold toggle: click to flip the
-          pre-compact range fold state for THIS hybrid host. */}
-      {data.hasInnerCompact && !compact && (
+          fold-toggle banner. Only on the normal kind — pure compacts
+          have their own fold-toggle button below. */}
+      {kind === "normal" && data.hasInnerCompact && (
         <InnerCompactFoldBanner
           chatNodeId={cn.id}
           preTokens={data.innerCompactPreTokens}
         />
       )}
 
-      {/* User message — label gray-500 to match Agentloom convention.
-          Strings hardcoded zh-CN for v0.2; will move to i18n bundle when
-          react-i18next phase lands (key: chatflow.user / chatflow.assistant).
-          Future en-US: "User" / "Assistant". */}
-      <div className="mb-1.5">
-        <div className="text-[10px] text-gray-500 mb-0.5">{t("chat_node.user")}</div>
-        <div className="text-[11px] text-gray-900 break-words line-clamp-2">
-          {data.userPreview || <span className="italic text-gray-300">{t("placeholders.empty")}</span>}
+      {/* Kind-specific body. Normal: user + assistant pair (Agentloom
+          convention). Slash: stdout block. Compact: italic summary
+          text. Future event kinds add their own body branch. */}
+      {kind === "normal" && (
+        <>
+          <div className="mb-1.5">
+            <div className="text-[10px] text-gray-500 mb-0.5">
+              {t("chat_node.user")}
+            </div>
+            <div className="text-[11px] text-gray-900 break-words line-clamp-2">
+              {data.userPreview || (
+                <span className="italic text-gray-300">
+                  {t("placeholders.empty")}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="mb-1.5">
+            <div className="text-[10px] text-gray-500 mb-0.5">
+              {t("chat_node.assistant")}
+            </div>
+            <div className="text-[11px] text-gray-900 break-words line-clamp-2">
+              {data.assistantPreview || (
+                <span className="italic text-gray-300">(无回复)</span>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+      {kind === "slash" && slash && slash.stdout && (
+        <div className="mb-1.5">
+          <div className="text-[10px] text-gray-500 mb-0.5">输出</div>
+          <pre className="text-[11px] text-gray-900 break-words whitespace-pre-wrap font-mono line-clamp-4 m-0">
+            {slash.stdout}
+          </pre>
         </div>
-      </div>
-
-      {/* Assistant reply */}
-      <div className="mb-1.5">
-        <div className="text-[10px] text-gray-500 mb-0.5">{t("chat_node.assistant")}</div>
-        <div className="text-[11px] text-gray-900 break-words line-clamp-2">
-          {data.assistantPreview || <span className="italic text-gray-300">(无回复)</span>}
+      )}
+      {kind === "compact" && (
+        <div className="mb-1.5">
+          <div className="text-[10px] text-gray-500 mb-0.5">summary</div>
+          <div className="text-[11px] text-gray-900 break-words line-clamp-3 italic">
+            {data.userPreview || (
+              <span className="not-italic text-gray-300">
+                {t("placeholders.empty")}
+              </span>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Enter-WorkFlow drill button — always visible (Agentloom convention).
-          Compact ChatNodes don't have inner WorkFlow (already summarized),
-          so the button is hidden for them. We also hide for ChatNodes
-          with empty WorkFlow (slash-command paths handled separately
-          above; this catches edge cases like compact-summary-only). */}
-      {/* v0.9.1: drill button visible on every non-compact ChatNode,
-          even when llmCount + toolCount === 0. Why: a "running" /
-          just-created ChatNode (user prompt arrived, assistant
-          hasn't produced any WorkNodes yet) had its drill button
-          hidden, so users couldn't watch the WorkFlow populate
-          live. The empty WorkFlow state is fine — WorkFlowCanvas
-          shows a placeholder and SSE invalidate adds nodes as
-          they appear.
-          // EN: Always show the drill-in button (except for compact
-          // ChatNodes which have their own fold/unfold UX). Empty
-          // WorkFlows are valid — live-tail will populate them.
-          // 中: 非 compact ChatNode 一律显示进入按钮（即使节点尚未
-          // 产生任何 WorkNode），让用户能 drill 进去看实时填充。 */}
-      {!compact && <DrillButton chatNodeId={cn.id} />}
+      {/* Enter-WorkFlow drill button. Visible always for normal;
+          conditional for slash/compact based on innerLlmCount.
+          Compact's drill takes the user into the LLM call that
+          produced the summary; slash typically has no inner
+          workflow so the button hides. */}
+      {showDrill && <DrillButton chatNodeId={cn.id} />}
 
-      {/* Token bar */}
-      {data.contextTokens > 0 && (
-        <TokenBar tokens={data.contextTokens} maxTokens={data.maxContextTokens} />
+      {/* Compact-specific pre-compact range fold toggle. Only on
+          pure compact ChatNodes; replaces the previous CompactCard
+          which housed it before unification. */}
+      {kind === "compact" && compactPal && (
+        <CompactFoldToggleButton
+          chatNodeId={cn.id}
+          accent={compactPal.kind}
+          hasPreCompactRange={Boolean(
+            cn.compactMetadata?.logicalParentChatNodeId,
+          )}
+        />
+      )}
+
+      {/* Token bar — sized off contextTokens for normal and preTokens
+          for compact. Slash skips (no token workload). */}
+      {tokenBarTokens > 0 && (
+        <TokenBar
+          tokens={tokenBarTokens}
+          maxTokens={data.maxContextTokens}
+        />
       )}
 
       {/* Stats row — wraps to a second line when 7+ chips appear so a
@@ -249,7 +330,13 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
           file-touch + commit + pending + fork = up to 9) doesn't spill
           past the card's right edge. Tight gap-y so the second row sits
           flush under the first instead of looking like a separate
-          section. */}
+          section.
+
+          Skipped on slash kind: slash invocations are local CC actions
+          with no LLM/tool workload so the chips would all show 0 — the
+          event-chrome bar already conveys "this is a slash command",
+          chips would just be noise. */}
+      {kind !== "slash" && (
       <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] text-gray-500 border-t border-gray-200/60 pt-1">
         <span
           className="inline-flex items-center gap-0.5"
@@ -326,6 +413,7 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
           </span>
         )}
       </div>
+      )}
 
       {/* Full UUID centered at bottom — Agentloom convention. CSS truncate
           if doesn't fit. Click to copy (Agentloom NodeIdLine pattern). */}
@@ -346,12 +434,16 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
   );
 }
 
-// Compact ChatNode card — dashed-border fold-marker chrome with
-// tri-color tinting by `compactMetadata.trigger`. design-visual-
-// language.md treats compact as a visual anchor point in long
-// sessions: dashed border = "this is a fold", tri-color = "how was
-// the fold made". v0.6 redo + earlier shipped only ⊞ chip + teal
-// accent; v0.7 M2 brings the full规范 online.
+// (Deleted v1.2 R6 unification: the dedicated inner CompactCard and
+// SlashCommandCard helpers folded into ChatNodeCard's main render
+// path with kind dispatch, sharing chips / TokenBar / DrillButton /
+// NodeIdLine. compactPalette below stays — main render reuses it.)
+//
+// Historical context for compactPalette: v0.7 M2 introduced the
+// dashed border + tri-trigger palette as the visual anchor for
+// long sessions (139 compacts in a 256MB session). That visual
+// language is preserved post-v1.2; only the surrounding chrome
+// got unified.
 //
 // Trigger palette (per design choice 2A):
 //   auto      → teal (96% of real-data compacts)
@@ -361,130 +453,8 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
 //   unknown   → teal fallback + small "trigger unknown" badge
 //                     (实测作者本机 0 examples; cross-user 132/281
 //                     boundary missing the field, mostly old CC)
-function CompactCard({
-  cn,
-  selected,
-  hasIncoming,
-  hasOutgoing,
-  userPreview,
-}: {
-  cn: import("@/data/types").ChatNode;
-  selected: boolean;
-  hasIncoming: boolean;
-  hasOutgoing: boolean;
-  userPreview: string;
-}) {
-  const { t } = useTranslation();
-  const trigger = cn.compactMetadata?.trigger;
-  const preTokens = cn.compactMetadata?.preTokens;
-  const palette = compactPalette(trigger);
-  const offChain = useIsOffActiveChain(cn.contributingSessions);
-  const containerClass = [
-    "group/card relative w-52 rounded-lg border border-dashed shadow-sm p-2.5 text-xs",
-    "transition-colors leading-snug",
-    palette.bg,
-    palette.accent,
-    selected ? `${palette.selectedBorder} ring-2 ${palette.ring}` : palette.border,
-    offChain ? "opacity-60 saturate-50" : "",
-  ].join(" ");
-  return (
-    <div
-      className={containerClass}
-      data-testid={`chat-node-${cn.id}`}
-      data-compact-trigger={palette.kind}
-    >
-      <Handle
-        type="target"
-        position={Position.Left}
-        isConnectable={false}
-        style={
-          hasIncoming
-            ? { background: "#94a3b8", width: 5, height: 5, border: "none" }
-            : { background: "transparent", width: 0, height: 0, border: "none" }
-        }
-      />
-
-      {/* Trigger chip + preTokens + (optional) "trigger unknown" badge.
-          Single-line dense info row by design choice 2A. */}
-      <div className="flex items-center gap-1 mb-1.5 flex-wrap">
-        <span
-          className={`inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold ${palette.chip}`}
-        >
-          ⊞ compact ({palette.label})
-        </span>
-        {typeof preTokens === "number" && preTokens > 0 && (
-          <span
-            className="font-mono text-[10px] text-gray-500"
-            title={`pre-compact context: ${preTokens.toLocaleString()} tokens`}
-          >
-            · {formatTokensCompact(preTokens)}
-          </span>
-        )}
-        {palette.fallbackBadge && (
-          <span
-            className="inline-flex items-center rounded bg-gray-200/80 px-1 py-0.5 text-[9px] text-gray-700"
-            title="compactMetadata.trigger 字段缺失 — 视觉 fallback 到 auto 色"
-            data-testid="compact-trigger-unknown"
-          >
-            trigger unknown
-          </span>
-        )}
-      </div>
-
-      {/* Summary preview — same line-clamp size as a normal turn so the
-          card height stays comparable. The full summary text lives in
-          DrillPanel CompactDetail. */}
-      <div className="mb-1.5">
-        <div className="text-[10px] text-gray-500 mb-0.5">summary</div>
-        <div className="text-[11px] text-gray-900 break-words line-clamp-3 italic">
-          {userPreview || <span className="not-italic text-gray-300">{t("placeholders.empty")}</span>}
-        </div>
-      </div>
-
-      {/* Two action buttons:
-            1. "进入工作流" (= existing enterWorkflow flow) — drills
-               into the post-compact continuation. Hidden when this
-               ChatNode's inner workflow has no llm_call (3/131 edge
-               case where there's nothing to look at).
-            2. "⤢ 展开 pre-compact" / "折叠 pre-compact" toggle —
-               flips this compact's id in foldedCompactIds. M1 ships
-               the slice + action wiring; M4 turns the label into a
-               two-state toggle so users can re-fold from the canvas
-               without right-clicking. */}
-      {/* v0.10 lazy ChatFlow B3: read llm_call count from summary
-          (server-computed, ships in lite ChatFlow). Same condition
-          as before — drill button visible when this compact carries
-          post-compact assistant continuation (128/131 do). Falls
-          back to walking workflow.nodes for hand-built test fixtures
-          without summary. */}
-      {(cn.workflow.summary?.llmCount ??
-        cn.workflow.nodes.filter((n) => n.kind === "llm_call").length) > 0 && (
-        <DrillButton chatNodeId={cn.id} />
-      )}
-      <CompactFoldToggleButton
-        chatNodeId={cn.id}
-        accent={palette.kind}
-        hasPreCompactRange={Boolean(cn.compactMetadata?.logicalParentChatNodeId)}
-      />
-
-      <NodeIdLine nodeId={cn.id} />
-
-      <Handle
-        type="source"
-        position={Position.Right}
-        isConnectable={false}
-        style={
-          hasOutgoing
-            ? { background: "#94a3b8", width: 5, height: 5, border: "none" }
-            : { background: "transparent", width: 0, height: 0, border: "none" }
-        }
-      />
-    </div>
-  );
-}
-
 // Palette resolver. Returns the Tailwind classes + the textual trigger
-// label + a "fallbackBadge" flag used by CompactCard.
+// label + a "fallbackBadge" flag used by ChatNodeCard's compact branch.
 function compactPalette(trigger: string | undefined) {
   if (trigger === "manual") {
     return {
@@ -704,75 +674,8 @@ function CompactFoldToggleButton({
   );
 }
 
-// Slash-command card — minimal chrome: violet accent, ⚡ command name,
-// stdout body (mono, multi-line), id at bottom.
-function SlashCommandCard({
-  cn,
-  slash,
-  selected,
-  hasIncoming,
-  hasOutgoing,
-}: {
-  cn: import("@/data/types").ChatNode;
-  slash: NonNullable<import("@/data/types").ChatNode["slashCommand"]>;
-  selected: boolean;
-  hasIncoming: boolean;
-  hasOutgoing: boolean;
-}) {
-  const offChain = useIsOffActiveChain(cn.contributingSessions);
-  const containerClass = [
-    "group/card relative w-52 rounded-lg border shadow-sm p-2.5 text-xs",
-    "transition-colors leading-snug bg-violet-50",
-    "border-l-[3px] border-l-violet-500",
-    selected ? "border-violet-500 ring-2 ring-violet-200" : "border-violet-300",
-    offChain ? "opacity-60 saturate-50" : "",
-  ].join(" ");
-  return (
-    <div className={containerClass} data-testid={`chat-node-${cn.id}`}>
-      <Handle
-        type="target"
-        position={Position.Left}
-        isConnectable={false}
-        style={
-          hasIncoming
-            ? { background: "#94a3b8", width: 5, height: 5, border: "none" }
-            : { background: "transparent", width: 0, height: 0, border: "none" }
-        }
-      />
-
-      {/* Command header — violet chip with ⚡ + /name */}
-      <div className="flex items-center mb-1.5">
-        <span className="inline-flex items-center gap-0.5 rounded bg-violet-200/80 px-1 py-0.5 text-[10px] font-semibold text-violet-900">
-          ⚡ {slash.name}
-          {slash.args ? ` ${slash.args}` : ""}
-        </span>
-      </div>
-
-      {/* Stdout (if any) */}
-      {slash.stdout && (
-        <div className="mb-1.5">
-          <div className="text-[10px] text-gray-500 mb-0.5">输出</div>
-          <pre className="text-[11px] text-gray-900 break-words whitespace-pre-wrap font-mono line-clamp-4 m-0">
-            {slash.stdout}
-          </pre>
-        </div>
-      )}
-
-      <NodeIdLine nodeId={cn.id} />
-
-      <Handle
-        type="source"
-        position={Position.Right}
-        isConnectable={false}
-        style={
-          hasOutgoing
-            ? { background: "#94a3b8", width: 5, height: 5, border: "none" }
-            : { background: "transparent", width: 0, height: 0, border: "none" }
-        }
-      />
-    </div>
-  );
-}
+// (SlashCommandCard helper deleted in v1.2 R6 unification — slash
+// rendering folded into the main ChatNodeCard render path.)
 
 // Drill-down button — pushes a ``chatnode`` frame onto the session's
 // drillStack, switching the main viewport to WorkFlowCanvas. Pulled out

@@ -193,6 +193,31 @@ describe("ChatNodeCard — compact branch", () => {
     // pre-compact button is independent of llm_call presence.
     expect(screen.getByTestId(`compact-foldtoggle-${cn.id}`)).toBeTruthy();
   });
+
+  // v1.2 R6 unification: compact ChatNodes now share the bottom chrome
+  // (chips row + TokenBar) with normal ChatNodes. Previously they
+  // had a downgraded card without these.
+  it("v1.2: compact card carries data-kind='compact' for kind dispatch", () => {
+    const cn = makeChatNode({
+      compactMetadata: makeCompactMeta({ trigger: "auto" }),
+    });
+    render(withRF(<ChatNodeCard {...nodeProps(cn)} />));
+    const card = screen.getByTestId(`chat-node-${cn.id}`);
+    expect(card.getAttribute("data-kind")).toBe("compact");
+    // Trigger attribute preserved (existing tests + parser fixtures rely on it).
+    expect(card.getAttribute("data-compact-trigger")).toBe("auto");
+  });
+
+  it("v1.2: compact card renders the chips row (was missing pre-unification)", () => {
+    const cn = makeChatNode({
+      compactMetadata: makeCompactMeta({ trigger: "auto" }),
+      workflow: { nodes: [makeCompactMeta(), llmCallNode()], edges: [] },
+    });
+    render(withRF(<ChatNodeCard {...nodeProps(cn)} />));
+    // Chips row was completely absent on the old CompactCard. Now
+    // unified — llm-count chip should be discoverable for compact too.
+    expect(screen.getByTestId(`chat-node-${cn.id}-llm-count`)).toBeTruthy();
+  });
 });
 
 describe("ChatNodeCard — fork indicator chip (v0.8 M5)", () => {
