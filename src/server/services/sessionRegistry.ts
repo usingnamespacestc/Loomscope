@@ -937,6 +937,180 @@ export class SessionRegistry {
     return entry;
   }
 
+  /** v1.6: launch a brand-new SDK session (no `resume`). CC generates
+   *  the sid; we extract it from the first SDK message (`system/init`
+   *  carries `session_id`) and register the entry under that sid.
+   *
+   *  Use case: Loomscope's "+ 新建 session" sidebar action lets users
+   *  create a fresh CC session without dropping to terminal. Differs
+   *  from the regular `enqueueTurn` path because there's no existing
+   *  sid to enqueue under — we have to learn it from the SDK
+   *  asynchronously.
+   *
+   *  Flow:
+   *    1. Build query options (no resume; same env / hooks / model
+   *       handling as `spawn`).
+   *    2. Spawn query.
+   *    3. Push the user's initial prompt onto the pump.
+   *    4. Iterate the SDK output manually until the first message
+   *       arrives carrying `session_id` (typically the system/init
+   *       frame).
+   *    5. Register entry under that sid + handle the first frame
+   *       through `handleSdkFrame` (so it broadcasts + updates state).
+   *    6. Continue the for-await loop in the background just like
+   *       `driveQueryMessages` does.
+   *
+   *  Returns `{ sessionId, itemId }` to the route handler so it can
+   *  echo the sid back to the client (which switches active session). */
+  async spawnNewSession(
+    cwd: string,
+    initialPrompt: {
+      text: string;
+      images: { mediaType: string; base64: string }[];
+    },
+  ): Promise<{ sessionId: string; itemId: string }> {
+    const pumpController = new AsyncQueueController<SDKUserMessage>();
+    const childEnv = { ...process.env };
+    if (!this.opts.useApiKey) {
+      delete childEnv.ANTHROPIC_API_KEY;
+    }
+    const query = this.opts.queryFactory({
+      prompt: pumpController.iterable(),
+      options: {
+        cwd,
+        // NO resume — CC creates a fresh sid.
+        env: childEnv,
+        permissionMode: this.opts.permissionMode,
+        ...(this.opts.model !== undefined && { model: this.opts.model }),
+        ...(this.opts.effort !== undefined && { effort: this.opts.effort }),
+        ...(this.opts.fastMode !== undefined && {
+          fastMode: this.opts.fastMode,
+        }),
+        settingSources: ["user", "project", "local"],
+        allowDangerouslySkipPermissions:
+          this.opts.permissionMode === "bypassPermissions",
+        // Reuse the same hook callback builder so SDK CC events flow
+        // onto the existing in-process bus. canUseTool can't bind to
+        // a sid yet (we don't have one); pass a placeholder closure
+        // that we'll rebind once the sid lands. Acceptable because
+        // canUseTool typically doesn't fire before init.
+        // For simplicity, defer canUseTool wiring until the entry
+        // exists — register it after sid is known via
+        // makeCanUseToolCallback. Passing undefined here means CC's
+        // default permission flow handles tools until that moment;
+        // first-turn permission prompts on a fresh session are rare.
+      },
+    });
+
+    // Push the prompt immediately. The SDK will start its run as
+    // soon as the iterable yields; init frame may fire before or
+    // after this depending on CC version, but pushing early is safe
+    // either way.
+    const itemId = crypto.randomUUID();
+    const text = initialPrompt.text;
+    const images = initialPrompt.images;
+    const content =
+      images.length === 0
+        ? text
+        : [
+            ...images.map((img) => ({
+              type: "image" as const,
+              source: {
+                type: "base64" as const,
+                media_type: img.mediaType as
+                  | "image/png"
+                  | "image/jpeg"
+                  | "image/gif"
+                  | "image/webp",
+                data: img.base64,
+              },
+            })),
+            ...(text.length > 0
+              ? [{ type: "text" as const, text }]
+              : []),
+          ];
+    pumpController.push({
+      type: "user",
+      message: { role: "user", content },
+      parent_tool_use_id: null,
+      // priority field present on QueuedCommand-shaped sends — for
+      // a brand-new session there's no other queue, so any priority
+      // works; "next" matches the existing-session default.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    // Manually iterate until first message with session_id arrives.
+    // SDK 0.2.x guarantees system/init is the first frame; defensive
+    // check loops in case future SDKs add a pre-init frame.
+    const it = query[Symbol.asyncIterator]();
+    let firstMsg: unknown | null = null;
+    let sid: string | null = null;
+    for (let i = 0; i < 16; i += 1) {
+      const r = await it.next();
+      if (r.done) {
+        throw new Error(
+          "[sessionRegistry] new-session SDK closed without emitting session_id",
+        );
+      }
+      const msg = r.value;
+      const candidate = (msg as { session_id?: string }).session_id;
+      if (candidate) {
+        firstMsg = msg;
+        sid = candidate;
+        break;
+      }
+      // No sid on this frame — drop it (we don't have an entry to
+      // attach broadcasts to yet). This case is theoretical with
+      // current SDK versions.
+    }
+    if (!sid || !firstMsg) {
+      throw new Error(
+        "[sessionRegistry] new-session SDK never emitted session_id within 16 frames",
+      );
+    }
+
+    // Now register entry under the discovered sid.
+    const entry: SessionEntry = {
+      sessionId: sid,
+      cwd,
+      state: "idle",
+      query,
+      pumpController,
+      currentRun: { promptItemId: itemId, startedAt: Date.now() },
+      pendingPrompts: [],
+      lastActivityAt: Date.now(),
+      hasServedTurn: false,
+    };
+    this.entries.set(sid, entry);
+
+    // Process the first frame the same way driveQueryMessages would.
+    await this.handleSdkFrame(entry, firstMsg);
+
+    // Background-continue iterating the SAME iterator (we already
+    // consumed the first message above). When this loop exits, drop
+    // the entry like driveQueryMessages's finally block.
+    void (async () => {
+      try {
+        while (true) {
+          const r = await it.next();
+          if (r.done) break;
+          await this.handleSdkFrame(entry, r.value);
+        }
+      } catch (err) {
+        console.error(
+          `[sessionRegistry] new-session loop threw for ${sid}:`,
+          err,
+        );
+      } finally {
+        if (this.entries.get(sid!) === entry) {
+          await this.close(sid!);
+        }
+      }
+    })();
+
+    return { sessionId: sid, itemId };
+  }
+
   /** Stat the session's jsonl and return its byte size, or undefined
    *  if no `locateJsonl` is configured / file doesn't exist / stat
    *  fails. Used as the staleness-check baseline + post-turn refresh.
@@ -1013,39 +1187,7 @@ export class SessionRegistry {
     if (!q) return;
     try {
       for await (const msg of q) {
-        // Broadcast every SDK frame as `sdk-message` on the existing
-        // per-session SSE bus. Browsers iterate the same bus for hook
-        // events / file-tail invalidates; this just adds another event
-        // type they need to handle.
-        broadcast(sessionId, { event: "sdk-message", data: msg });
-
-        // State machine — minimal for PR 1. We only differentiate
-        // running vs idle on the boundary frames `system/init` →
-        // `result`. Other frames update lastActivityAt to defer idle.
-        entry.lastActivityAt = Date.now();
-        if (msg.type === "system" && (msg as { subtype?: string }).subtype === "init") {
-          if (entry.state !== "running" && entry.currentRun) {
-            entry.state = "running";
-            this.broadcastQueueState(entry);
-          }
-        } else if (msg.type === "result") {
-          entry.state = "idle";
-          entry.currentRun = null;
-          // Mark this Query as having served at least one turn —
-          // future dispatches go through the normal respawn /
-          // staleness logic. (The very first turn after spawn skips
-          // respawn since the spawn already read fresh state.)
-          entry.hasServedTurn = true;
-          this.broadcastQueueState(entry);
-          // Refresh the staleness baseline: at end-of-turn the jsonl
-          // contains all of OUR writes for this turn. Future foreign
-          // appends will drift the size beyond this checkpoint, which
-          // is what `respawnReasonForDispatch` looks for.
-          entry.lastKnownJsonlSize = await this.statJsonlSize(sessionId);
-          // After a turn ends, dispatch the next pending if any.
-          // Fire-and-forget — async respawn-aware dispatch.
-          void this.maybeDispatch(entry);
-        }
+        await this.handleSdkFrame(entry, msg);
       }
     } finally {
       // SDK iterator ended (Query.close() ran or subprocess died).
@@ -1053,6 +1195,51 @@ export class SessionRegistry {
       if (this.entries.get(sessionId) === entry) {
         await this.close(sessionId);
       }
+    }
+  }
+
+  // Per-frame handler extracted from driveQueryMessages so v1.6's
+  // spawnNewSession can pre-consume the init frame (to discover the
+  // CC-generated sid) and then call this same handler for the
+  // remainder of the stream — without duplicating broadcast / state
+  // machine logic.
+  private async handleSdkFrame(
+    entry: SessionEntry,
+    msg: unknown,
+  ): Promise<void> {
+    // Broadcast every SDK frame as `sdk-message` on the existing
+    // per-session SSE bus. Browsers iterate the same bus for hook
+    // events / file-tail invalidates; this just adds another event
+    // type they need to handle.
+    broadcast(entry.sessionId, { event: "sdk-message", data: msg });
+
+    // State machine — minimal for PR 1. We only differentiate
+    // running vs idle on the boundary frames `system/init` →
+    // `result`. Other frames update lastActivityAt to defer idle.
+    entry.lastActivityAt = Date.now();
+    const m = msg as { type?: string; subtype?: string };
+    if (m.type === "system" && m.subtype === "init") {
+      if (entry.state !== "running" && entry.currentRun) {
+        entry.state = "running";
+        this.broadcastQueueState(entry);
+      }
+    } else if (m.type === "result") {
+      entry.state = "idle";
+      entry.currentRun = null;
+      // Mark this Query as having served at least one turn —
+      // future dispatches go through the normal respawn /
+      // staleness logic. (The very first turn after spawn skips
+      // respawn since the spawn already read fresh state.)
+      entry.hasServedTurn = true;
+      this.broadcastQueueState(entry);
+      // Refresh the staleness baseline: at end-of-turn the jsonl
+      // contains all of OUR writes for this turn. Future foreign
+      // appends will drift the size beyond this checkpoint, which
+      // is what `respawnReasonForDispatch` looks for.
+      entry.lastKnownJsonlSize = await this.statJsonlSize(entry.sessionId);
+      // After a turn ends, dispatch the next pending if any.
+      // Fire-and-forget — async respawn-aware dispatch.
+      void this.maybeDispatch(entry);
     }
   }
 

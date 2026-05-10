@@ -16,6 +16,8 @@ import { csrfMiddleware } from "@/server/middleware/csrf";
 import { ccHookRouter } from "@/server/routes/ccHook";
 import { ccHookOnboardingRouter } from "@/server/routes/ccHookOnboarding";
 import { forkRouter } from "@/server/routes/fork";
+import { fsRouter } from "@/server/routes/fs";
+import { newSessionRouter } from "@/server/routes/newSession";
 import {
   permissionPromptsRouter,
   permissionRulesRouter,
@@ -144,6 +146,12 @@ export function createApp(opts: AppOptions) {
     turnsRouter({ registry, rootDir: opts.rootDir }),
   );
   app.route("/api/sessions", forkRouter());
+  // v1.6: launch new session endpoint. Mounted at /api/sessions so
+  // POST /api/sessions/new doesn't collide with sessionsRouter's
+  // GET /api/sessions/:id (the validators reject anything matching
+  // both since "new" isn't a UUID-shaped sid).
+  app.route("/api/sessions", newSessionRouter({ registry }));
+  app.route("/api/fs", fsRouter());
   // Soft-delete surface. Mounted alongside other /api/sessions verbs
   // for trash-on-sid; the broader trash CRUD lives at /api/trash.
   const trashService = new TrashService({ extractMeta: readTrashSnapshotMeta });

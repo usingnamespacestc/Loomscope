@@ -766,6 +766,9 @@ export function stripChatFlowToLite(chatFlow: ChatFlow): ChatFlow {
           totalThinkingChars: 0,
           contextTokens: 0,
           maxContextTokens: 200_000,
+          inputTokens: 0,
+          outputTokens: 0,
+          durationMs: null,
           toolUseFilePaths: [],
         },
         // Empty arrays signal "lite" without introducing a separate
