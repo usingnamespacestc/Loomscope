@@ -177,6 +177,39 @@ export function computeWorkflowSummary(
   const contextTokens = lastReal ? llmCallContextTokens(lastReal.usage) : 0;
   const maxContextTokens = maxContextForModel(lastReal?.model);
 
+  // v1.5: per-turn token totals for the persistent MessageMeta row.
+  // Sum across ALL real llm_calls (not just the last) so a multi-
+  // step turn shows total fresh input + total generation, not just
+  // the final round.
+  let inputTokens = 0;
+  let outputTokens = 0;
+  for (const n of llms) {
+    const u = n.usage as Record<string, unknown> | undefined;
+    if (!u) continue;
+    const num = (k: string) =>
+      typeof u[k] === "number" ? (u[k] as number) : 0;
+    // input excludes cache_read (replay, not new work) — same
+    // semantics as deriveContextTokens / Composer status bar.
+    inputTokens += num("input_tokens") + num("cache_creation_input_tokens");
+    outputTokens += num("output_tokens");
+  }
+
+  // v1.5: turn duration. nodes are appended in jsonl order so [0]
+  // is earliest, [N-1] latest. Skip when either end has no
+  // timestamp (rare — synthetic compact nodes lack one).
+  let durationMs: number | null = null;
+  if (nodes.length > 0) {
+    const firstTs = nodes[0].timestamp;
+    const lastTs = nodes[nodes.length - 1].timestamp;
+    if (firstTs && lastTs) {
+      const a = Date.parse(firstTs);
+      const b = Date.parse(lastTs);
+      if (!Number.isNaN(a) && !Number.isNaN(b) && b >= a) {
+        durationMs = b - a;
+      }
+    }
+  }
+
   // Inline compact boundary (hybrid ChatNodes only). Walk nodes in
   // DAG / chronological order, count text-carrying real llm_calls
   // BEFORE the first `compact` WorkNode, and that count is the index
@@ -232,6 +265,9 @@ export function computeWorkflowSummary(
     totalThinkingChars,
     contextTokens,
     maxContextTokens,
+    inputTokens,
+    outputTokens,
+    durationMs,
     lastModel: lastReal?.model,
     toolUseFilePaths,
     innerCompactLlmCallBoundaryIdx,

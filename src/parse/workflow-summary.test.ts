@@ -113,3 +113,97 @@ describe("computeWorkflowSummary — innerCompactLlmCallBoundaryIdx", () => {
     expect(s.innerCompactLlmCallBoundaryIdx).toBe(1);
   });
 });
+
+describe("computeWorkflowSummary — v1.5 inputTokens / outputTokens / durationMs", () => {
+  function llmCallWithUsage(
+    id: string,
+    usage: Record<string, number>,
+    timestamp?: string,
+  ): WorkNode {
+    return {
+      id,
+      kind: "llm_call",
+      parentUuid: null,
+      text: "x",
+      thinking: [],
+      model: "claude-3-5-sonnet",
+      stopReason: "end_turn",
+      usage,
+      timestamp,
+    } as unknown as WorkNode;
+  }
+
+  it("sums input + cache_creation across all real llm_calls (excludes cache_read replay)", () => {
+    const nodes = [
+      llmCallWithUsage("a", {
+        input_tokens: 100,
+        cache_creation_input_tokens: 50,
+        cache_read_input_tokens: 9_999, // excluded
+        output_tokens: 30,
+      }),
+      llmCallWithUsage("b", {
+        input_tokens: 200,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 1_000, // excluded
+        output_tokens: 70,
+      }),
+    ];
+    const s = computeWorkflowSummary(nodes, []);
+    // input = (100+50) + (200+0) = 350
+    expect(s.inputTokens).toBe(350);
+    // output = 30 + 70
+    expect(s.outputTokens).toBe(100);
+  });
+
+  it("durationMs = last node's timestamp − first node's timestamp", () => {
+    const nodes = [
+      llmCallWithUsage("a", { input_tokens: 1 }, "2026-05-10T10:00:00.000Z"),
+      llmCallWithUsage(
+        "b",
+        { input_tokens: 1 },
+        "2026-05-10T10:01:23.000Z",
+      ),
+    ];
+    const s = computeWorkflowSummary(nodes, []);
+    expect(s.durationMs).toBe(83_000); // 1m 23s
+  });
+
+  it("durationMs is null when first or last timestamp missing", () => {
+    const nodes = [
+      llmCallWithUsage("a", { input_tokens: 1 }), // no timestamp
+      llmCallWithUsage("b", { input_tokens: 1 }, "2026-05-10T10:00:00.000Z"),
+    ];
+    const s = computeWorkflowSummary(nodes, []);
+    expect(s.durationMs).toBeNull();
+  });
+
+  it("durationMs is null when nodes is empty", () => {
+    const s = computeWorkflowSummary([], []);
+    expect(s.durationMs).toBeNull();
+    expect(s.inputTokens).toBe(0);
+    expect(s.outputTokens).toBe(0);
+  });
+
+  it("skips synthetic llm_calls when summing tokens (matches isRealLlmCall filter)", () => {
+    const synthetic: WorkNode = {
+      id: "syn",
+      kind: "llm_call",
+      parentUuid: null,
+      text: "fake",
+      thinking: [],
+      model: "<synthetic>",
+      stopReason: "rate_limit",
+      usage: { input_tokens: 99_999, output_tokens: 99_999 },
+    } as unknown as WorkNode;
+    const nodes = [
+      synthetic,
+      llmCallWithUsage("real", {
+        input_tokens: 100,
+        output_tokens: 50,
+      }),
+    ];
+    const s = computeWorkflowSummary(nodes, []);
+    expect(s.inputTokens).toBe(100);
+    expect(s.outputTokens).toBe(50);
+  });
+});

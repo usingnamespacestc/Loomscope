@@ -1615,23 +1615,47 @@ function MessageMeta({
   workflow: WorkFlow | null;
   assistantCopyText: string | null;
 }) {
-  // v0.10 lazy ChatFlow B5: model + tokens come from the loaded
-  // workflow's last llm_call. While pending we fall back to
-  // workflow.summary.lastModel (the lite endpoint inlines it) so
-  // the meta row shows model name immediately even if usage tokens
-  // haven't loaded yet.
+  // v1.5: read aggregate token totals + turn duration from the
+  // server-precomputed `workflow.summary`. Falls back to walking
+  // the loaded workflow when summary is absent (legacy fixtures).
+  // Comes "for free" with the lite ChatFlow payload — no lazy
+  // workflow load needed for the stat row to populate.
   const lastLlm = useMemo(
     () => (workflow ? findLastLlmCallInWorkflow(workflow) : null),
     [workflow],
   );
   const ts = chatNode.userMessage.timestamp;
-  const model = lastLlm?.model ?? chatNode.workflow.summary?.lastModel;
-  const usage = lastLlm?.usage;
-  const tokens =
-    typeof usage?.input_tokens === "number" || typeof usage?.output_tokens === "number"
-      ? (Number(usage?.input_tokens) || 0) + (Number(usage?.output_tokens) || 0)
-      : null;
-  if (!ts && !model && tokens === null && !assistantCopyText) return null;
+  const summary = chatNode.workflow.summary;
+  const model = lastLlm?.model ?? summary?.lastModel;
+
+  // Prefer summary's pre-aggregated totals (sum across all real
+  // llm_calls in the turn). When summary is missing (test fixtures)
+  // fall back to the loaded last-llm_call's usage — partial but
+  // better than nothing.
+  let inputTokens = 0;
+  let outputTokens = 0;
+  if (summary) {
+    inputTokens = summary.inputTokens;
+    outputTokens = summary.outputTokens;
+  } else if (lastLlm?.usage) {
+    const u = lastLlm.usage;
+    const num = (k: string) => {
+      const v = (u as Record<string, unknown>)[k];
+      return typeof v === "number" ? v : 0;
+    };
+    inputTokens = num("input_tokens") + num("cache_creation_input_tokens");
+    outputTokens = num("output_tokens");
+  }
+  const hasTokens = inputTokens > 0 || outputTokens > 0;
+
+  // Duration from summary (pre-computed last-node minus first-node
+  // timestamp). Persists after the run ends, so users can see how
+  // long any historical turn took.
+  const durationMs = summary?.durationMs ?? null;
+
+  if (!ts && !model && !hasTokens && durationMs == null && !assistantCopyText) {
+    return null;
+  }
   return (
     <div className="mt-1 flex items-center gap-2 text-[10px] text-gray-400 font-mono">
       {assistantCopyText && (
@@ -1644,9 +1668,55 @@ function MessageMeta({
       )}
       {ts && <span>{ts}</span>}
       {model && <span>{model}</span>}
-      {tokens !== null && tokens > 0 && <span>{tokens} tok</span>}
+      {hasTokens && (
+        <span
+          className="inline-flex items-center gap-1.5"
+          data-testid={`message-meta-tokens-${chatNode.id}`}
+        >
+          <span title="输入 token（input + cache_creation；不含 cache_read 重放）">
+            ↑ {formatTokensCompact(inputTokens)}
+          </span>
+          <span title="输出 token（CC 生成）">
+            ↓ {formatTokensCompact(outputTokens)}
+          </span>
+        </span>
+      )}
+      {durationMs != null && durationMs > 0 && (
+        <span
+          title="本 turn 耗时（最末记录时间 − 首条记录时间）"
+          data-testid={`message-meta-duration-${chatNode.id}`}
+        >
+          {formatDurationCompact(durationMs)}
+        </span>
+      )}
     </div>
   );
+}
+
+// Compact token formatter mirroring composer status bar style.
+function formatTokensCompact(n: number): string {
+  if (n < 1_000) return String(n);
+  if (n < 10_000) return `${(n / 1_000).toFixed(1)}k`;
+  if (n < 1_000_000) return `${Math.round(n / 1_000)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+// Duration formatter matching the composer status bar elapsed format
+// — "12s" / "1m 23s" / "2h 5m 30s" — so the two stat rows read
+// consistently. Sub-second clamps to "0s" since that scale isn't
+// useful at meta-row granularity.
+function formatDurationCompact(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1_000));
+  if (totalSec < 60) return `${totalSec}s`;
+  if (totalSec < 3_600) {
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m}m ${s}s`;
+  }
+  const h = Math.floor(totalSec / 3_600);
+  const m = Math.floor((totalSec % 3_600) / 60);
+  const s = totalSec % 60;
+  return `${h}h ${m}m ${s}s`;
 }
 
 function BranchSelector({

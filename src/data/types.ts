@@ -268,6 +268,23 @@ export interface WorkflowSummary {
   // TokenBar inputs.
   contextTokens: number;
   maxContextTokens: number;
+  // v1.5: per-turn aggregate token usage for the persistent stat
+  // line in MessageMeta (composer-bubble copy row). Sums across ALL
+  // real (non-synthetic, error-free) llm_calls in this ChatNode's
+  // workflow.
+  //   inputTokens  = Σ (input_tokens + cache_creation_input_tokens)
+  //                  ↑ "fresh stuff CC processed" — excludes
+  //                  cache_read replay since that's not new work.
+  //   outputTokens = Σ output_tokens
+  inputTokens: number;
+  outputTokens: number;
+  // v1.5: total turn duration in milliseconds — last node's
+  // timestamp minus the first record (first WorkNode timestamp,
+  // approximating "from CC starting work to CC stopping"). Null
+  // when timestamps are missing on either end (rare; all real
+  // jsonl records carry timestamps). Doesn't include the user's
+  // typing time since the user-message timestamp is set at submit.
+  durationMs: number | null;
   // Last llm_call's model — drives the edge-hover model tooltip and
   // the model ribbon overlay.
   lastModel?: string;

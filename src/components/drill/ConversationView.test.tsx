@@ -519,14 +519,19 @@ describe("ConversationView — content rendering", () => {
     expect(screen.getByText("user prompt")).toBeTruthy();
   });
 
-  it("MessageMeta surfaces model + token sum when last llm_call has usage", () => {
+  it("v1.5: MessageMeta surfaces model + ↑↓ token splits when last llm_call has usage", () => {
+    // Pre-v1.5 this was a single "8 tok" combined number; v1.5 splits
+    // into ↑ input + ↓ output (read from summary when present, falls
+    // back to last llm_call usage for fixtures without summary).
     const cf = flow([cn("a", null, "hi", "yo")]);
     seed(cf, "a");
     const { container } = render(
       <ConversationView sessionId={SID} chatFlow={cf} />,
     );
     expect(container.textContent).toContain("claude-opus-4-7");
-    expect(container.textContent).toMatch(/8 tok/);
+    // input=5 / output=3 from the test fixture.
+    expect(container.textContent).toContain("↑ 5");
+    expect(container.textContent).toContain("↓ 3");
   });
 });
 
