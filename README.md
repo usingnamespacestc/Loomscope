@@ -197,6 +197,7 @@ Chrome / Firefox cap at 6 EventSource per origin under HTTP/1.1; each Loomscope 
 - **`LOOMSCOPE_SECRET` shell-rc setup is manual.** The Settings modal generates the line for you, but it can't write to your `~/.bashrc` / `~/.zshrc`; you have to do it.
 - **`Notification` hook is wired but has no UI consumer yet.** Configure it if you want — Loomscope will accept the events, but nothing surfaces in the UI.
 - **3 browser tabs per host max** (see above).
+- **Dual-writer race not fully fixed (v1.3+).** Once Loomscope can write turns (v1.3 onward), DON'T run a terminal `claude` and Loomscope-driven sends on the same session id at the same time. We respawn-per-send + size-based staleness check to mitigate (see `docs/dual-writer-race-mitigation.md`), but a mid-turn foreign write can still corrupt the chain. Tracked as a follow-up; pure read-only viewing is unaffected.
 - **No public release.** This is v1.0.0-rc.1 for friends to try; expect rough edges. Issues / suggestions welcome on GitHub.
 
 ## Architecture
