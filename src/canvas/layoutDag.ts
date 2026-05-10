@@ -14,8 +14,19 @@ import {
   computeFoldProjection,
   type FoldProjection,
 } from "@/canvas/foldProjection";
+import type { AwaySummaryNodeData } from "@/canvas/nodes/AwaySummaryNodeCard";
 import type { ChatFoldNodeData } from "@/canvas/nodes/ChatFoldNodeCard";
 import type { ChatFlow, ChatNode } from "@/data/types";
+
+// v1.2 R5: synthetic id prefix for awaySummary nodes. Stable per-host
+// so the React Flow reconciler doesn't churn across re-layouts when
+// `cn.meta.awaySummary.uuid` is identical.
+export function awaySummaryIdFor(hostChatNodeId: string): string {
+  return `awaySummary-${hostChatNodeId}`;
+}
+export function isAwaySummaryId(id: string): boolean {
+  return id.startsWith("awaySummary-");
+}
 
 // Match Agentloom's w-52 (208px) for visual family resemblance.
 // Height auto-grows with content; dagre uses NODE_HEIGHT only as a
@@ -101,13 +112,20 @@ export interface ChatNodeRFData extends Record<string, unknown> {
 
 export type ChatNodeRFNode = RFNode<ChatNodeRFData, "chatNode">;
 type LayoutChatFoldRFNode = RFNode<ChatFoldNodeData, "chatFold">;
-export type LayoutRFNode = ChatNodeRFNode | LayoutChatFoldRFNode;
+type LayoutAwaySummaryRFNode = RFNode<AwaySummaryNodeData, "awaySummary">;
+export type LayoutRFNode =
+  | ChatNodeRFNode
+  | LayoutChatFoldRFNode
+  | LayoutAwaySummaryRFNode;
 
 // Approximate height of a ChatFoldNodeCard. Used as a layout hint;
 // dagre also tolerates undersized hints — the actual card auto-grows
 // with content. Slightly shorter than NODE_HEIGHT because the fold
 // card has less chrome.
 const FOLD_NODE_HEIGHT = 92;
+// AwaySummaryNodeCard is the smallest synthetic node — just badge +
+// truncated summary body.
+const AWAY_SUMMARY_NODE_HEIGHT = 80;
 
 // Public API: derive React Flow nodes/edges with positions from a
 // ChatFlow + the set of compact ChatNode ids whose pre-compact range
@@ -152,6 +170,20 @@ export function layoutChatFlow(
       width: NODE_WIDTH,
       height: FOLD_NODE_HEIGHT,
     });
+  }
+  // v1.2 R5: synthetic awaySummary nodes upstream of any visible
+  // ChatNode that has `meta.awaySummary` populated. Same dagre
+  // mechanism as chatFold (setNode + setEdge) so they participate in
+  // rank computation; chronologically reads "this summary covered
+  // the gap before the host turn". Skipped when the host is hidden
+  // by a fold projection (the chatFold absorbs that whole range).
+  const awayHostIds = new Set<string>();
+  for (const cn of chatFlow.chatNodes) {
+    if (projection.hidden.has(cn.id)) continue;
+    if (!cn.meta?.awaySummary?.content) continue;
+    const synId = awaySummaryIdFor(cn.id);
+    g.setNode(synId, { width: NODE_WIDTH, height: AWAY_SUMMARY_NODE_HEIGHT });
+    awayHostIds.add(cn.id);
   }
 
   const edges: RFEdge[] = [];
@@ -240,6 +272,23 @@ export function layoutChatFlow(
   // populated by parser/jsonl.ts and consumed by computeCompactRange
   // for fold projection — only the visual edge path is gone.
 
+  // v1.2 R5: dagre edges + emitted RFEdges for synthetic awaySummary
+  // anchor links. These read as "the away gap that produced this
+  // summary preceded the host turn". Dashed amber rendering hints
+  // they're not real data flow.
+  for (const hostId of awayHostIds) {
+    const synId = awaySummaryIdFor(hostId);
+    g.setEdge(synId, hostId);
+    edges.push({
+      id: `e-${synId}->${hostId}`,
+      source: synId,
+      sourceHandle: "away-anchor",
+      target: hostId,
+      type: "awaySummary",
+      data: { kind: "awaySummary" },
+    });
+  }
+
   dagre.layout(g);
 
   // Pre-compute which (visible) nodes have parents/children — drives
@@ -310,7 +359,32 @@ export function layoutChatFlow(
     });
   }
 
-  return { nodes: [...chatNodeRfs, ...foldRfs], edges };
+  // v1.2 R5: synthetic awaySummary RFNodes. Dagre laid them out
+  // upstream of their host (one rank to the left in LR), connected
+  // via a dashed anchor edge. Position picked off the dagre node
+  // record — same x/y arithmetic as chatFold.
+  const awayRfs: LayoutAwaySummaryRFNode[] = [];
+  for (const hostId of awayHostIds) {
+    const synId = awaySummaryIdFor(hostId);
+    const pos = g.node(synId);
+    const x = (pos?.x ?? 0) - NODE_WIDTH / 2;
+    const y = (pos?.y ?? 0) - AWAY_SUMMARY_NODE_HEIGHT / 2;
+    const host = chatFlow.chatNodes.find((c) => c.id === hostId);
+    const meta = host?.meta?.awaySummary;
+    if (!meta) continue;
+    awayRfs.push({
+      id: synId,
+      type: "awaySummary",
+      position: { x, y },
+      data: {
+        hostChatNodeId: hostId,
+        content: meta.content,
+        timestamp: meta.timestamp,
+      },
+    });
+  }
+
+  return { nodes: [...chatNodeRfs, ...foldRfs, ...awayRfs], edges };
 }
 
 // Re-export so consumers (tests, future tooling) can introspect the

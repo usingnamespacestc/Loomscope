@@ -39,23 +39,28 @@ import {
 } from "@/store/livenessHooks";
 import { NODE_HEIGHT, NODE_WIDTH, layoutChatFlow } from "@/canvas/layoutDag";
 import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
+import { AwaySummaryNodeCard } from "@/canvas/nodes/AwaySummaryNodeCard";
 import { ChatFoldNodeCard } from "@/canvas/nodes/ChatFoldNodeCard";
 import { ChatNodeCard } from "@/canvas/nodes/ChatNodeCard";
+import { AwaySummaryEdge } from "@/canvas/edges/AwaySummaryEdge";
 import { ContinuationArrowDefs, ContinuationEdge } from "@/canvas/edges/ContinuationEdge";
 import {
   FoldAnchorContext,
   type FoldAnchorAPI,
 } from "@/canvas/FoldAnchorContext";
 import { computeUnfoldChainTo, isChatFoldId } from "@/canvas/foldProjection";
+import { isAwaySummaryId } from "@/canvas/layoutDag";
 import type { ChatFlow } from "@/data/types";
 import { useStore } from "@/store/index";
 
 const nodeTypes: NodeTypes = {
   chatNode: ChatNodeCard,
   chatFold: ChatFoldNodeCard,
+  awaySummary: AwaySummaryNodeCard,
 };
 const edgeTypes: EdgeTypes = {
   continuation: ContinuationEdge,
+  awaySummary: AwaySummaryEdge,
 };
 
 export interface ChatFlowCanvasProps {
@@ -264,7 +269,7 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
   const hoverScrollReleaseRef = useRef<(() => void) | null>(null);
   const onNodeClick = useCallback(
     (_e: unknown, node: { id: string }) => {
-      if (isChatFoldId(node.id)) return;
+      if (isChatFoldId(node.id) || isAwaySummaryId(node.id)) return;
       // Click → drop any in-flight hover preview WITHOUT restoring,
       // so the click's persistent scroll wins.
       hoverScrollReleaseRef.current = null;
@@ -286,7 +291,7 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
   const hoverTimerRef = useRef<number | null>(null);
   const onNodeMouseEnter = useCallback(
     (_e: unknown, node: { id: string }) => {
-      if (isChatFoldId(node.id)) return;
+      if (isChatFoldId(node.id) || isAwaySummaryId(node.id)) return;
       if (hoverTimerRef.current !== null) {
         window.clearTimeout(hoverTimerRef.current);
       }
@@ -338,7 +343,7 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     (e: React.MouseEvent, node: { id: string }) => {
       // Skip synthetic chatFold nodes — they're not real ChatNodes,
       // there's nothing to fork from / jump to.
-      if (isChatFoldId(node.id)) return;
+      if (isChatFoldId(node.id) || isAwaySummaryId(node.id)) return;
       e.preventDefault();
       setContextMenu({ x: e.clientX, y: e.clientY, chatNodeId: node.id });
     },

@@ -915,3 +915,76 @@ describe("nodeOwnFileChanges (v0.8.1 #9 — selfDelta semantics)", () => {
     expect(nodeOwnFileChanges(cn, makeChatFlow([cn]))).toEqual(new Set());
   });
 });
+
+describe("layoutChatFlow — awaySummary synthetic nodes (v1.2 R5)", () => {
+  it("does not emit awaySummary nodes when no ChatNode has meta.awaySummary", () => {
+    const cf = makeChatFlow([
+      makeChatNode({ id: "p1" }),
+      makeChatNode({ id: "p2", parentChatNodeId: "p1" }),
+    ]);
+    const { nodes } = layoutChatFlow(cf);
+    expect(
+      nodes.filter((n) => n.id.startsWith("awaySummary-")).length,
+    ).toBe(0);
+  });
+
+  it("emits a synthetic awaySummary node + dashed edge when host has meta.awaySummary", () => {
+    const host = makeChatNode({
+      id: "p2",
+      parentChatNodeId: "p1",
+      meta: {
+        awaySummary: {
+          uuid: "u-away-1",
+          content: "while away, the user took a long break",
+          timestamp: "2026-05-09T00:00:00.000Z",
+        },
+      },
+    });
+    const cf = makeChatFlow([makeChatNode({ id: "p1" }), host]);
+    const { nodes, edges } = layoutChatFlow(cf);
+
+    const synId = "awaySummary-p2";
+    const syn = nodes.find((n) => n.id === synId);
+    expect(syn).toBeTruthy();
+    expect(syn?.type).toBe("awaySummary");
+    expect(syn?.data.hostChatNodeId).toBe("p2");
+    expect(syn?.data.content).toContain("while away");
+    expect(syn?.data.timestamp).toBe("2026-05-09T00:00:00.000Z");
+
+    const synEdge = edges.find(
+      (e) => e.source === synId && e.target === "p2",
+    );
+    expect(synEdge).toBeTruthy();
+    expect(synEdge?.type).toBe("awaySummary");
+  });
+
+  it("places the synthetic node upstream (smaller x) than its host on LR", () => {
+    const cf = makeChatFlow([
+      makeChatNode({
+        id: "p1",
+        meta: {
+          awaySummary: { uuid: "u", content: "x" },
+        },
+      }),
+    ]);
+    const { nodes } = layoutChatFlow(cf);
+    const host = nodes.find((n) => n.id === "p1")!;
+    const syn = nodes.find((n) => n.id === "awaySummary-p1")!;
+    expect(syn.position.x).toBeLessThan(host.position.x);
+  });
+
+  it("skips awaySummary injection when content is empty", () => {
+    const cf = makeChatFlow([
+      makeChatNode({
+        id: "p1",
+        meta: {
+          awaySummary: { uuid: "u", content: "" },
+        },
+      }),
+    ]);
+    const { nodes } = layoutChatFlow(cf);
+    expect(
+      nodes.filter((n) => n.id.startsWith("awaySummary-")).length,
+    ).toBe(0);
+  });
+});
