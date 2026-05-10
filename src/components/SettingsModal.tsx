@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { postTurn } from "@/api/turns";
 import { useStore } from "@/store/index";
 
 interface SettingsModalProps {
@@ -17,13 +18,14 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type TabId = "hooks" | "account" | "permissions" | "runtime";
+type TabId = "hooks" | "account" | "permissions" | "runtime" | "about";
 
 const TABS: Array<{ id: TabId; labelKey: string; icon: string }> = [
   { id: "hooks", labelKey: "settings.tab_hooks", icon: "🪝" },
   { id: "account", labelKey: "settings.tab_account", icon: "💳" },
   { id: "permissions", labelKey: "settings.tab_permissions", icon: "🔒" },
   { id: "runtime", labelKey: "settings.tab_runtime", icon: "⚙️" },
+  { id: "about", labelKey: "settings.tab_about", icon: "ℹ️" },
 ];
 
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
@@ -93,6 +95,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             {activeTab === "account" && <AccountPanel />}
             {activeTab === "permissions" && <PermissionsPanel />}
             {activeTab === "runtime" && <SessionRuntimePanel />}
+            {activeTab === "about" && <AboutPanel onClose={onClose} />}
           </div>
         </div>
       </div>
@@ -834,9 +837,126 @@ function SessionRuntimePanel() {
 }
 
 // v∞.3 PR1: GET / DELETE /api/permission-rules — separate fetch
-// lifecycle from VinfPanel's preferences fetch so a slow rules
-// load doesn't block the rest of the v∞ tab. Rules typically
-// number 0-10; UI shows them as a tabular list.
+// v1.5+ AboutPanel
+// ----------------
+// 5th tab giving users a "what is Loomscope / how do I learn more"
+// surface. Shows static metadata (Loomscope version, GitHub link)
+// + buttons that drive supportsNonInteractive built-in slash
+// commands (/version, /release-notes, /advisor) against the active
+// session — closing the modal so the user sees the result land in
+// the conversation. No new endpoints needed; reuses existing
+// turn-dispatch path.
+//
+// Loomscope's package version is bundled in via Vite's
+// import.meta.env at build time (vite-env.d.ts already ships
+// VITE_PKG_VERSION); falls back to a literal for non-vite contexts
+// (tests under happy-dom).
+function AboutPanel({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
+  const activeSessionId = useStore((s) => s.activeSessionId);
+  const activeSession = useStore((s) =>
+    activeSessionId ? s.sessions.get(activeSessionId) : null,
+  );
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loomscopeVersion = "1.0.0-rc.1"; // kept in sync with package.json
+  const sdkVersion = "@anthropic-ai/claude-agent-sdk ^0.2.133";
+
+  const sendSlash = async (cmd: string) => {
+    setError(null);
+    if (!activeSessionId || !activeSession) {
+      setError(t("settings.about.no_active_session"));
+      return;
+    }
+    setBusy(cmd);
+    try {
+      const cwd = activeSession.chatFlow?.cwd ?? "";
+      const r = await postTurn(activeSessionId, {
+        text: `/${cmd}`,
+        cwd,
+        priority: "next",
+      });
+      if (!("ok" in r) || r.ok !== true) {
+        setError("error" in r ? r.error : "send failed");
+        return;
+      }
+      // Close the settings modal so the user sees the slash command
+      // output land in the conversation immediately.
+      onClose();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-6">
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.about.section_versions")}
+        </h3>
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-[11px]">
+          <dt className="text-gray-500">Loomscope</dt>
+          <dd className="font-mono text-gray-800">{loomscopeVersion}</dd>
+          <dt className="text-gray-500">SDK</dt>
+          <dd className="font-mono text-gray-800">{sdkVersion}</dd>
+        </dl>
+        <p className="mt-2 text-[10px] italic text-gray-400">
+          {t("settings.about.cc_version_hint")}
+        </p>
+      </section>
+
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.about.section_links")}
+        </h3>
+        <a
+          href="https://github.com/usingnamespacestc/Loomscope"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid="settings-about-github-link"
+          className="text-[11px] text-blue-600 hover:underline"
+        >
+          GitHub: usingnamespacestc/Loomscope
+        </a>
+      </section>
+
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.about.section_run_in_active")}
+        </h3>
+        <p className="mb-2 text-[10.5px] text-gray-500 leading-relaxed">
+          {t("settings.about.run_in_active_description")}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {(
+            ["version", "release-notes", "advisor"] as const
+          ).map((cmd) => (
+            <button
+              key={cmd}
+              type="button"
+              data-testid={`settings-about-run-${cmd}`}
+              disabled={busy !== null || !activeSessionId}
+              onClick={() => void sendSlash(cmd)}
+              className="rounded border border-violet-300 bg-violet-50 px-2.5 py-1 font-mono text-[11px] text-violet-700 hover:border-violet-400 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy === cmd ? "…" : `/${cmd}`}
+            </button>
+          ))}
+        </div>
+        {!activeSessionId && (
+          <p className="mt-2 text-[10px] italic text-gray-400">
+            {t("settings.about.no_active_session")}
+          </p>
+        )}
+        {error && (
+          <p className="mt-2 text-[10px] italic text-rose-600">✗ {error}</p>
+        )}
+      </section>
+    </div>
+  );
+}
+
 interface PermRule {
   id: string;
   toolName: string;

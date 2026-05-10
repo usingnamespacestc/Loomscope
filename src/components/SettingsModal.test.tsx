@@ -258,14 +258,39 @@ describe("SettingsModal — 4-tab structure (v1.1)", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders all 4 tab buttons (Hooks / Account / Permissions / Runtime)", () => {
+  it("renders all 5 tab buttons (Hooks / Account / Permissions / Runtime / About)", () => {
     render(<SettingsModal open={true} onClose={() => undefined} />);
     expect(screen.getByTestId("settings-tab-hooks")).toBeTruthy();
     expect(screen.getByTestId("settings-tab-account")).toBeTruthy();
     expect(screen.getByTestId("settings-tab-permissions")).toBeTruthy();
     expect(screen.getByTestId("settings-tab-runtime")).toBeTruthy();
+    expect(screen.getByTestId("settings-tab-about")).toBeTruthy();
     // The old "vinf" tab id must not exist.
     expect(screen.queryByTestId("settings-tab-vinf")).toBeNull();
+  });
+
+  it("About tab shows version info + slash-command runner buttons", () => {
+    render(<SettingsModal open={true} onClose={() => undefined} />);
+    fireEvent.click(screen.getByTestId("settings-tab-about"));
+    // Loomscope version literal renders.
+    expect(screen.getByText(/1\.0\.0-rc\.1/)).toBeTruthy();
+    // SDK package note renders.
+    expect(screen.getByText(/claude-agent-sdk/)).toBeTruthy();
+    // Three slash command runner buttons.
+    expect(screen.getByTestId("settings-about-run-version")).toBeTruthy();
+    expect(screen.getByTestId("settings-about-run-release-notes")).toBeTruthy();
+    expect(screen.getByTestId("settings-about-run-advisor")).toBeTruthy();
+    // GitHub link.
+    expect(screen.getByTestId("settings-about-github-link")).toBeTruthy();
+  });
+
+  it("About tab slash buttons disabled when no active session", () => {
+    render(<SettingsModal open={true} onClose={() => undefined} />);
+    fireEvent.click(screen.getByTestId("settings-tab-about"));
+    const btn = screen.getByTestId(
+      "settings-about-run-version",
+    ) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
   });
 
   it("Account tab shows the API key toggle", async () => {

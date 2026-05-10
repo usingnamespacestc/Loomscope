@@ -275,6 +275,15 @@
     "tab_account": "Account",
     "tab_permissions": "Permissions",
     "tab_runtime": "Session runtime",
+    "tab_about": "About",
+    "about": {
+      "section_versions": "Versions",
+      "section_links": "Links",
+      "section_run_in_active": "Run in active session",
+      "run_in_active_description": "Click a button below to send the slash command to the active session; the result appears in the conversation / canvas.",
+      "cc_version_hint": "Claude Code version: run /version in the active session (button below)",
+      "no_active_session": "No active session — pick one from the sidebar, then come back to run."
+    },
     "account": {
       "section_title": "Billing / auth",
       "description": "Defaults to OAuth credentials from your claude.ai subscription. Toggle the switch below to use ANTHROPIC_API_KEY (per-token API billing) instead.",

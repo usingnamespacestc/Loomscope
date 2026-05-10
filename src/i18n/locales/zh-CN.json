@@ -275,6 +275,15 @@
     "tab_account": "账户",
     "tab_permissions": "权限",
     "tab_runtime": "会话运行",
+    "tab_about": "关于",
+    "about": {
+      "section_versions": "版本",
+      "section_links": "链接",
+      "section_run_in_active": "在当前 session 中运行",
+      "run_in_active_description": "点击下面的按钮把 slash 命令发送到当前打开的 session，结果会出现在 conversation / canvas 中。",
+      "cc_version_hint": "Claude Code 版本：在当前 session 跑 /version 查看（下方按钮）",
+      "no_active_session": "没有打开的 session — 先在侧栏选一个再回来运行"
+    },
     "account": {
       "section_title": "计费 / 认证",
       "description": "默认走 claude.ai 订阅的 OAuth 凭据。打开下面这个开关才会改用 ANTHROPIC_API_KEY 走按量计费。",
