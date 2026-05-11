@@ -83,28 +83,85 @@ export function sidecarSubagentsDir(jsonlPath: string): string {
   return path.join(jsonlPath.replace(/\.jsonl$/, ""), "subagents");
 }
 
+// 2026-05-11 fix: chokidar's `awaitWriteFinish` waits for the file
+// to be QUIET for stabilityThreshold ms before firing. Empirically,
+// CC writes streaming records every <50 ms during long turns; with
+// stabilityThreshold=80 ms the file is never quiet, so `change`
+// events fire ZERO times during a 30 s streaming response and the
+// browser sees nothing until the turn ends (or the user refreshes).
+//
+// Replace it with a manual rate-limit:
+//   - first event in a burst: schedule fire after QUIET_MS
+//     (low latency on idle activity → matches the old UX)
+//   - sustained writes: rate-limit to one fire per MAX_WAIT_MS
+//     keyed off the last fire time (so a 30 s streaming turn
+//     produces ~30 invalidate events spaced ~1 s apart, instead
+//     of zero)
+//
+// Parsers are line-oriented and discard partial last lines, so an
+// invalidate firing mid-write is safe — the next event picks up
+// whatever new full lines have been appended since.
+const THROTTLE_QUIET_MS = 80;
+const THROTTLE_MAX_WAIT_MS = 1000;
+
+interface ThrottleState {
+  pendingTimer: NodeJS.Timeout | null;
+  lastFireAt: number;
+  reason: "change" | "add" | "unlink";
+}
+const throttleState = new Map<string, ThrottleState>();
+
+function scheduleFire(
+  filePath: string,
+  reason: "change" | "add" | "unlink",
+): void {
+  const now = Date.now();
+  let s = throttleState.get(filePath);
+  if (!s) {
+    s = { pendingTimer: null, lastFireAt: 0, reason };
+    throttleState.set(filePath, s);
+  } else {
+    // Upgrade reason if a stronger one arrives (unlink > add > change).
+    if (reason === "unlink") s.reason = "unlink";
+    else if (reason === "add" && s.reason === "change") s.reason = "add";
+  }
+  // Don't reset an already-pending fire — that would push the fire
+  // back indefinitely during sustained writes. The first event in
+  // the burst owns the timer; later events just update the reason.
+  if (s.pendingTimer) return;
+  const earliestAllowedFireAt = s.lastFireAt + THROTTLE_MAX_WAIT_MS;
+  const fireAt = Math.max(now + THROTTLE_QUIET_MS, earliestAllowedFireAt);
+  const delay = Math.max(0, fireAt - now);
+  s.pendingTimer = setTimeout(() => {
+    const cur = throttleState.get(filePath);
+    if (!cur) return;
+    const fireReason = cur.reason;
+    cur.pendingTimer = null;
+    cur.lastFireAt = Date.now();
+    cur.reason = "change"; // reset for the next burst
+    handleEvent(filePath, fireReason);
+  }, delay);
+}
+
 function ensureWatcher(): FSWatcher {
   if (watcher) return watcher;
   watcher = watch([], {
     persistent: true,
     ignoreInitial: true,
-    awaitWriteFinish: {
-      stabilityThreshold: 80,
-      pollInterval: 30,
-    },
+    // No awaitWriteFinish — we throttle manually via scheduleFire.
   });
   // change = existing file modified; add = new file appeared. For
   // main jsonl, only `change` matters (file already existed when we
   // started watching). For sidecar dir, both matter — a brand-new
   // sub-agent shows up as `add`, subsequent appends as `change`.
-  watcher.on("change", (filePath: string) => handleEvent(filePath, "change"));
-  watcher.on("add", (filePath: string) => handleEvent(filePath, "add"));
+  watcher.on("change", (filePath: string) => scheduleFire(filePath, "change"));
+  watcher.on("add", (filePath: string) => scheduleFire(filePath, "add"));
   // Tasks under `~/.claude/tasks/<sid>/` get unlinked when CC's
   // `deleteTask` flow runs (or status "deleted"). Surface that as a
   // tasks-kind invalidate too. unlink on a main jsonl or sidecar
   // means the session was nuked — handled elsewhere; we route through
   // the same dispatcher.
-  watcher.on("unlink", (filePath: string) => handleEvent(filePath, "unlink"));
+  watcher.on("unlink", (filePath: string) => scheduleFire(filePath, "unlink"));
   watcher.on("error", (err) => {
     console.error("[sessionWatcher] chokidar error:", err);
   });
@@ -269,6 +326,10 @@ export async function _resetForTests(): Promise<void> {
   sessionToPaths.clear();
   pathKind.clear();
   sidecarDirsCache = null;
+  for (const s of throttleState.values()) {
+    if (s.pendingTimer) clearTimeout(s.pendingTimer);
+  }
+  throttleState.clear();
 }
 
 /** Test helper: peek state. */
