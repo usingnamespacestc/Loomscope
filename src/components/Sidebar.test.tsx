@@ -126,6 +126,55 @@ describe("Sidebar", () => {
     });
   });
 
+  it("right-click on workspace folder opens 'Create session here' menu (interactive mode)", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.includes("/sessions")) {
+        return new Response(
+          JSON.stringify([
+            { cwd: "/proj", sessionCount: 1, lastModified: "2026-05-01T00:00:00Z" },
+          ]),
+          { status: 200 },
+        );
+      }
+      return new Response("[]", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useStore.setState({ interactiveMode: true });
+    render(<Sidebar />);
+    const row = await screen.findByTestId("workspace-row-/proj");
+    fireEvent.contextMenu(row);
+    // ContextMenu portals to body — query via text.
+    await waitFor(() => {
+      expect(screen.getByText(/在此创建 session|Create session here/)).toBeTruthy();
+    });
+    // Clicking the item opens the modal pre-filled with this cwd.
+    fireEvent.click(screen.getByText(/在此创建 session|Create session here/));
+    await waitFor(() => {
+      expect(screen.getByTestId("new-session-modal")).toBeTruthy();
+    });
+  });
+
+  it("right-click on workspace folder is a no-op in viewer mode", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.includes("/sessions")) {
+        return new Response(
+          JSON.stringify([
+            { cwd: "/proj", sessionCount: 1, lastModified: "2026-05-01T00:00:00Z" },
+          ]),
+          { status: 200 },
+        );
+      }
+      return new Response("[]", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useStore.setState({ interactiveMode: false });
+    render(<Sidebar />);
+    const row = await screen.findByTestId("workspace-row-/proj");
+    fireEvent.contextMenu(row);
+    // No menu appears — interactive gate blocks it.
+    expect(screen.queryByText(/在此创建 session|Create session here/)).toBeNull();
+  });
+
   it("clicking a session row sets it active in the store", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (!url.includes("/sessions")) {

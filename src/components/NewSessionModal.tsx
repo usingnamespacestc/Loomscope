@@ -30,11 +30,15 @@ import { useStore } from "@/store/index";
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** v1.6: when the modal is opened from a workspace right-click,
+   *  pre-fill cwd to that folder instead of running the default
+   *  active-session/most-recent fallback. */
+  initialCwd?: string;
 }
 
 type Stage = "form" | "submitting" | "mkdir-confirm";
 
-export function NewSessionModal({ open, onClose }: Props) {
+export function NewSessionModal({ open, onClose, initialCwd }: Props) {
   const { t } = useTranslation();
   const workspaces = useStore((s) => s.workspaces);
   const hiddenWorkspaces = useStore((s) => s.hiddenWorkspaces);
@@ -50,7 +54,9 @@ export function NewSessionModal({ open, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [pendingMkdir, setPendingMkdir] = useState<string | null>(null);
 
-  // Initial selection: active session's cwd → most-recent workspace.
+  // Initial selection: explicit initialCwd > active session's cwd >
+  // most-recent workspace. initialCwd wins because it's an explicit
+  // user gesture (right-click on a workspace folder).
   useEffect(() => {
     if (!open) return;
     setStage("form");
@@ -58,6 +64,10 @@ export function NewSessionModal({ open, onClose }: Props) {
     setPendingMkdir(null);
     setPrompt("");
     setCustomPath("");
+    if (initialCwd) {
+      setSelectedCwd(initialCwd);
+      return;
+    }
     const activeCwd =
       activeId && sessions.get(activeId)?.chatFlow?.cwd;
     if (activeCwd) {
@@ -74,7 +84,7 @@ export function NewSessionModal({ open, onClose }: Props) {
       )[0];
       setSelectedCwd(recent.cwd);
     }
-  }, [open, activeId, sessions, workspaces, hiddenWorkspaces]);
+  }, [open, initialCwd, activeId, sessions, workspaces, hiddenWorkspaces]);
 
   // Esc to close — only when not mid-mkdir-confirm (let the confirm
   // banner own its own Esc handler).
@@ -230,6 +240,7 @@ export function NewSessionModal({ open, onClose }: Props) {
                           <button
                             type="button"
                             data-testid={`new-session-workspace-${w.cwd}`}
+                            data-selected={sel ? "true" : "false"}
                             onClick={() => {
                               setSelectedCwd(w.cwd);
                               setCustomPath("");

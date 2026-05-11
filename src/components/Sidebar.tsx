@@ -85,13 +85,31 @@ export function Sidebar() {
   // target row; {x, y} are pixel coords from the contextmenu event.
   // Single-instance — only one menu open at a time.
   const [newSessionOpen, setNewSessionOpen] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-    sessionId: string;
-    cwd: string;
-    title: string;
-  } | null>(null);
+  // v1.6 #186: when the user picks "在此创建 session" from a
+  // workspace-folder right-click, the modal opens with this cwd
+  // pre-selected. Null = opens with default selection logic.
+  const [newSessionInitialCwd, setNewSessionInitialCwd] = useState<
+    string | null
+  >(null);
+  // Context menu either targets a session row (existing) or a
+  // workspace folder (v1.6). Discriminated by `kind`.
+  const [contextMenu, setContextMenu] = useState<
+    | {
+        kind: "session";
+        x: number;
+        y: number;
+        sessionId: string;
+        cwd: string;
+        title: string;
+      }
+    | {
+        kind: "workspace";
+        x: number;
+        y: number;
+        cwd: string;
+      }
+    | null
+  >(null);
   // Destructive-confirm banner state. Replaces window.confirm so the
   // confirmation UX matches Loomscope's design language (and survives
   // browser confirm-dialog quirks like "prevent further dialogs"
@@ -432,6 +450,20 @@ export function Sidebar() {
                   <button
                     className="w-full flex items-center gap-1.5 px-2 py-1.5 hover:bg-gray-100 text-left transition-colors group/folder"
                     onClick={() => toggleExpanded(ws.cwd)}
+                    onContextMenu={(e) => {
+                      // v1.6 #186: right-click on workspace folder
+                      // opens a context menu whose primary action is
+                      // "create new session here". Skip in viewer
+                      // mode (write actions all gated together).
+                      if (!interactiveMode) return;
+                      e.preventDefault();
+                      setContextMenu({
+                        kind: "workspace",
+                        x: e.clientX,
+                        y: e.clientY,
+                        cwd: ws.cwd,
+                      });
+                    }}
                     data-testid={`workspace-row-${ws.cwd}`}
                   >
                     <span className="inline-block w-3 text-center text-[9px] text-gray-400 transition-transform">
@@ -475,6 +507,7 @@ export function Sidebar() {
                               onContextMenu={(e) => {
                                 e.preventDefault();
                                 setContextMenu({
+                                  kind: "session",
                                   x: e.clientX,
                                   y: e.clientY,
                                   sessionId: s.sessionId,
@@ -539,7 +572,11 @@ export function Sidebar() {
           new-session flow needs the mkdir confirm dialog. */}
       <NewSessionModal
         open={newSessionOpen}
-        onClose={() => setNewSessionOpen(false)}
+        initialCwd={newSessionInitialCwd ?? undefined}
+        onClose={() => {
+          setNewSessionOpen(false);
+          setNewSessionInitialCwd(null);
+        }}
       />
       <ConfirmBanner
         open={!!confirmAction}
@@ -588,7 +625,7 @@ export function Sidebar() {
             : undefined
         }
       />
-      {contextMenu && (
+      {contextMenu && contextMenu.kind === "session" && (
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
@@ -625,6 +662,36 @@ export function Sidebar() {
               onClick: () => {
                 void navigator.clipboard
                   .writeText(contextMenu.sessionId)
+                  .catch(() => undefined);
+              },
+            },
+          ] satisfies ContextMenuItem[]}
+        />
+      )}
+      {contextMenu && contextMenu.kind === "workspace" && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          items={[
+            {
+              key: "new-session-here",
+              label: t("sidebar.context_menu_new_session_here"),
+              description: t(
+                "sidebar.context_menu_new_session_here_desc",
+                { cwd: contextMenu.cwd },
+              ),
+              onClick: () => {
+                setNewSessionInitialCwd(contextMenu.cwd);
+                setNewSessionOpen(true);
+              },
+            },
+            {
+              key: "copy-path",
+              label: t("sidebar.context_menu_copy_path"),
+              onClick: () => {
+                void navigator.clipboard
+                  .writeText(contextMenu.cwd)
                   .catch(() => undefined);
               },
             },

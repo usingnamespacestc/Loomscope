@@ -170,4 +170,18 @@ describe("NewSessionModal", () => {
     // Hint about override visible.
     expect(screen.getByText(/覆盖|overrides/)).toBeTruthy();
   });
+
+  it("initialCwd pre-selects that workspace (skips active-session/recent fallback)", () => {
+    // proj-a is most recent; without initialCwd it would win by default.
+    // With initialCwd=/tmp/proj-b we expect proj-b to be marked selected.
+    render(
+      <NewSessionModal
+        open
+        initialCwd="/tmp/proj-b"
+        onClose={() => {}}
+      />,
+    );
+    const rowB = screen.getByTestId("new-session-workspace-/tmp/proj-b");
+    expect(rowB.getAttribute("data-selected")).toBe("true");
+  });
 });
