@@ -336,6 +336,14 @@ export interface SessionRegistryOptions {
    *  `setEnableHookSdkPath` — but the next-spawn caveat applies:
    *  in-flight Query keeps its original wiring. */
   enableHookSdkPath?: boolean;
+  /** v1.6: explicit path to the Claude Code binary. When set, passed
+   *  through to SDK `query({ pathToClaudeCodeExecutable })` and the SDK
+   *  skips its built-in platform-variant lookup. Needed because the
+   *  SDK can ship multiple optional-dep variants (linux-x64,
+   *  linux-x64-musl) and may pick the wrong one on systems where both
+   *  install but only one matches libc. Resolved at startup in
+   *  `app.ts` (see `resolveClaudePath`). */
+  pathToClaudeCodeExecutable?: string;
 }
 
 /** v∞.3 PR1: a pending permission prompt awaiting browser response.
@@ -861,6 +869,13 @@ export class SessionRegistry {
         // via Settings → v∞ tab; respecting that intent.
         allowDangerouslySkipPermissions:
           this.opts.permissionMode === "bypassPermissions",
+        // v1.6: when resolveClaudePath() locates a working CC binary
+        // (e.g. user's ~/.local/bin/claude on WSL where SDK's bundled
+        // musl variant fails), pass it through so SDK skips its own
+        // platform-variant auto-detection.
+        ...(this.opts.pathToClaudeCodeExecutable !== undefined && {
+          pathToClaudeCodeExecutable: this.opts.pathToClaudeCodeExecutable,
+        }),
         // ──────────────────────────────────────────────────────────
         // Programmatic hooks. SDK provides `options.hooks` so we
         // register ALL hook events as JS callbacks that publish onto
@@ -989,6 +1004,13 @@ export class SessionRegistry {
         settingSources: ["user", "project", "local"],
         allowDangerouslySkipPermissions:
           this.opts.permissionMode === "bypassPermissions",
+        // v1.6: when resolveClaudePath() locates a working CC binary
+        // (e.g. user's ~/.local/bin/claude on WSL where SDK's bundled
+        // musl variant fails), pass it through so SDK skips its own
+        // platform-variant auto-detection.
+        ...(this.opts.pathToClaudeCodeExecutable !== undefined && {
+          pathToClaudeCodeExecutable: this.opts.pathToClaudeCodeExecutable,
+        }),
         // Reuse the same hook callback builder so SDK CC events flow
         // onto the existing in-process bus. canUseTool can't bind to
         // a sid yet (we don't have one); pass a placeholder closure

@@ -35,7 +35,7 @@ import { initHookSseForwarder } from "@/server/services/hookSseForwarder";
 import { locateSessionJsonl } from "@/server/services/locateJsonl";
 import { initPendingPermissionTracker } from "@/server/services/pendingPermissionTracker";
 import { loadPreferences } from "@/server/services/preferences";
-import { realSdkQuery } from "@/server/services/sdkAdapter";
+import { realSdkQuery, resolveClaudePath } from "@/server/services/sdkAdapter";
 import { SessionRegistry } from "@/server/services/sessionRegistry";
 import { TrashService } from "@/server/services/trash";
 import { readTrashSnapshotMeta } from "@/server/services/workspaceScanner";
@@ -112,6 +112,11 @@ export function createApp(opts: AppOptions) {
                             // docs/dual-writer-race-mitigation.md
       enableHookHttpPath: true, // default; PATCH updates live
       enableHookSdkPath: true,  // default; PATCH updates live
+      // v1.6: explicit CC binary path. Works around SDK picking the
+      // wrong libc variant (e.g. musl on a glibc host). See
+      // resolveClaudePath() jsdoc for ordering. Undefined = SDK's
+      // own auto-detection (works on cleaner systems).
+      pathToClaudeCodeExecutable: resolveClaudePath(),
       // Staleness check needs to stat the session's jsonl;
       // SessionRegistry calls this on the dispatch path. Reuses the
       // shared lookup helper.
