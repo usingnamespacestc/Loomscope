@@ -2,6 +2,47 @@
 
 All user-facing changes to Loomscope are noted here. v0.x history is highlights only — chronological detail in [`docs/devlog.md`](docs/devlog.md).
 
+## [2.0.0-rc.1] — 2026-05-11
+
+First public-facing release candidate. Folds in everything from the v1.1→v1.6 line — v1.0 was canceled (friends-only). After a short rc soak the same code ships as 2.0.0 final.
+
+### Interactive layer (v1.1 → v1.6)
+
+The 1.0 line stopped at read-only viewing. 2.0 makes Loomscope a real workbench for driving sessions:
+
+- **Viewer / Interactive mode toggle** — global gate; Viewer still browses every session read-only, Interactive surfaces write affordances. Sidebar write actions (＋ new-session, trash, restore, purge, empty) all render visible-but-disabled in Viewer with tooltip pointers, matching composer's pattern — discoverability stays, side-effects are gated.
+- **Composer settings popover** — per-turn `model` / `effort` / `fastMode` knobs synced to `SessionRegistry` via `postTurn`; settings live in client localStorage (composer = source of truth).
+- **Running status bar** — CC-terminal-style `● Running · Ns` strip above the composer, gated on a 4-source `isRunning` OR-selector (SDK channel state | UserPromptSubmit hook | data-shape `hasInFlightWork && sessionLive` | optimistic anchor for first-turn). Sticky `lastTurnUserSubmittedAt` survives mid-turn Stop fires (CC re-fires Stop after each assistant message during tool loops).
+- **Slash command picker** — typing `/` opens an inline picker; built-in `/compact` `/cost` `/context` `/release-notes` `/advisor` `/version` listed; pinned `/compact` button on the composer (with confirm banner) for the high-frequency case.
+- **Trash flow** — soft-delete sessions into `~/.loomscope/trash/`, restore back to their original cwd, purge permanently. Sidebar `🗑️ Trash` section + per-row restore / purge + section-level empty. Trashed sessions stay browsable (read-only banner) so observers can recover.
+- **Launch new session via SDK** — sidebar `＋` button opens `NewSessionModal`: workspace picker + custom path + initial prompt. Validates cwd server-side (`/api/fs/validate-cwd`), offers to `mkdir -p` non-existent paths, then spawns CC via `query({ cwd, prompt })` and switches active session. Right-click any workspace folder → "在此创建 session" pre-fills cwd.
+- **Draft session mode** — submitting the new-session modal with an empty prompt mints a `draft-<uuid>` placeholder; canvas shows a friendly empty state with the cwd, right-side panel hosts a draft-aware Composer. The first real message routes through `POST /api/sessions/new` (= spawn) and commits the draft to the real CC sid with no layout shift. Mirrors terminal CC's "clicking 创建 without typing means nothing happened" semantics.
+- **About settings tab** — version badge + SDK package note + GitHub link + one-click runner buttons for `/version`, `/release-notes`, `/advisor`.
+- **Header Σ↑↓ token chip** — cumulative session token totals; click for per-ChatNode breakdown modal + "Run /cost" button.
+- **Compact node first-class on canvas** — pure compact records now render as distinct canvas chips (drilling into the underlying WorkFlow) plus a token bar; idle-time conversation summaries surface in DrillPanel.
+
+### Reliability / infrastructure
+- **SDK CC binary path resolver** — `pathToClaudeCodeExecutable` is now set explicitly via a startup `resolveClaudePath()` helper (env override → `~/.local/bin/claude` → `command -v claude` → SDK default). Works around a WSL bug where the SDK's optional-dep auto-detection picks the musl variant on glibc systems and spawn fails before any of our code runs.
+- **CSRF prefix bypass for `/api/fs/`** — `validate-cwd` and `mkdir` follow the same Mode A trust model as the per-session POST endpoints.
+- **GET /api/workspaces/:cwd/sessions fallback** — when `scanWorkspaces` misses (fresh jsonl with only `queue-operation` pre-cwd records), the route now maps cwd → projectDir directly via CC's slash-to-dash encoding so the workspace stays accessible during the spawn-write window.
+- **spawnNewSession waits for jsonl** — polls `locateJsonl` for up to 3 s after the SDK's `system/init` frame so `POST /api/sessions/new` resolves only once the session is observable via `GET /api/sessions/:id` (previously the client raced into a 404).
+- **Optimistic status-bar anchor** — `markTurnSubmittedOptimistic` writes `lastTurnUserSubmittedAt` from the modal's success path so the running clock appears immediately rather than waiting for the SSE hook to land.
+- **`setActiveSession` chatFlow-presence gate** — fixes a regression where the optimistic anchor created a blank session entry and short-circuited `loadSession`, leaving canvas + composer permanently blank for fresh sessions.
+
+### Tests
+921 passing — added Sidebar / Composer / NewSessionModal / SettingsModal / DrillPanel coverage on top of the v1.0 suite. New regression tests pin the CSRF bypass, the workspace-scan-race fallback, and the visible-but-disabled viewer-mode pattern.
+
+### Known limitations (carried from 1.0)
+- Verified on **Linux + WSL2** only.
+- 3 browser tabs per host max (EventSource limit under HTTP/1.1).
+- `LOOMSCOPE_SECRET` shell-rc setup still manual.
+- Dual-writer race (Loomscope-spawned + terminal `claude` on the same sid) mitigated by respawn-per-send + size staleness check, not fully prevented. See `docs/dual-writer-race-mitigation.md`.
+
+### Coming after 2.0
+- **v2.1 — any-node fork.** SDK `resumeSessionAt: messageId` driven; right-click any ChatNode (incl. assistant / sibling-fork branches) to fork from there. Originally slotted at v2.0; promoted to its own release once 2.0 covers shipping the interactive layer cleanly.
+- **CC usage progress bars** (5h rolling + weekly) below the composer — gated on locating a reliable CC quota data source.
+- **Delta-SSE architecture refactor** — push parsed records over SSE rather than re-parsing the full jsonl on every change; fs.watch becomes drift detection.
+
 ## [1.0.0-rc.1] — 2026-05-07
 
 First release candidate. Internal / friends-only — not publicly announced.

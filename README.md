@@ -6,7 +6,7 @@
 
 ![ChatFlow canvas](docs/screenshots/02-chatflow-canvas.png)
 
-> **Status (2026-05-07)** — **v1.0.0-rc.1** ready for friends-only testing. Read-only viewer + live SSE observation + 11 CC hook events + 4-tab DrillPanel (Conversation / Detail / Git / Effective Context) all shipped. v∞.1 (Loomscope-driven sessions via Agent SDK) is next.
+> **Status (2026-05-11)** — **v2.0.0-rc.1** ready for friends-only testing. Adds the full v1.1→v1.6 interactive layer on top of the read-only viewer: trash, viewer/interactive gate, composer settings popover, running status bar, slash command picker (`/compact` etc.), launch-new-session via SDK, and draft-session UX. v2.0 final after a short rc soak; v2.1 = any-node fork.
 
 ## Quickstart
 
@@ -198,7 +198,7 @@ Chrome / Firefox cap at 6 EventSource per origin under HTTP/1.1; each Loomscope 
 - **`Notification` hook is wired but has no UI consumer yet.** Configure it if you want — Loomscope will accept the events, but nothing surfaces in the UI.
 - **3 browser tabs per host max** (see above).
 - **Dual-writer race not fully fixed (v1.3+).** Once Loomscope can write turns (v1.3 onward), DON'T run a terminal `claude` and Loomscope-driven sends on the same session id at the same time. We respawn-per-send + size-based staleness check to mitigate (see `docs/dual-writer-race-mitigation.md`), but a mid-turn foreign write can still corrupt the chain. Tracked as a follow-up; pure read-only viewing is unaffected.
-- **No public release.** This is v1.0.0-rc.1 for friends to try; expect rough edges. Issues / suggestions welcome on GitHub.
+- **No public release.** This is v2.0.0-rc.1 for friends to try; expect rough edges. Issues / suggestions welcome on GitHub.
 
 ## Architecture
 

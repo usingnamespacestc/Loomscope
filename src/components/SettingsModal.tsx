@@ -860,7 +860,7 @@ function AboutPanel({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const loomscopeVersion = "1.0.0-rc.1"; // kept in sync with package.json
+  const loomscopeVersion = "2.0.0-rc.1"; // kept in sync with package.json
   const sdkVersion = "@anthropic-ai/claude-agent-sdk ^0.2.133";
 
   const sendSlash = async (cmd: string) => {

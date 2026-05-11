@@ -23,13 +23,14 @@
 | ~~v1.0~~ | ~~ship~~ | ❌ **canceled 2026-05-09** —— packaging + 截图不再阻塞；首次公开发布直接到 v2.0 |
 | **v∞.0**（历史命名）| live read-only | 文件监听 + settings.json hooks push，浏览器实时观察终端 CC + PermissionRequest banner | ✅ shipped 2026-05-06 晚 PR 1-4 (`a437d30` / `dd7b301` / `a7b0bb5` / `ca1ee0a`) + bug fixes (`246ae0c` schema / `7f74e34` CORS / `0105ee6` staleSince)；下文统一改用 v1.x 命名 |
 | **trash**（编号外）| soft-delete + 回收站 | TrashService + sidebar 上下文菜单 + ConfirmBanner + 只读 banner + Composer 锁定 | ✅ M1+M2+M3 shipped 2026-05-08 → 2026-05-09 commits `8e0c078` / `786579d` / `a07dc39` / `c8855f0` / `54c9b85`；M4 收口归入 v1.1 |
-| **v1.1** | trash 收口 + Settings 重构 + Viewer/Interactive toggle | M4 search exclusion + sidebar/ConfirmBanner 单测 + i18n / SettingsModal 4 tab（Hooks / 账户 / 权限 / 会话运行）+ permission_rules 改名 / 全局 viewer-vs-interactive 模式开关 + 现有写入口 gating | 🚧 |
-| **v1.2** | compact + summary 显示统一 | conversation 视图隐藏纯 compact 节点；canvas 上 compact 节点对齐普通 ChatNode（chips + drill 进 WorkFlow + 内部 llm_call 显示 token bar）；CC idle 时生成的 conversation summary 显示 | |
-| **v1.3** | composer 地基（≈ 旧 v∞.2）| mtime 冲突检测 + advisory lock；postTurn 透传 model/effort/fastMode → turns 路由 → sessionRegistry；setModel/setEffort/setFastMode + respawn 策略；Composer 尊重 Viewer/Interactive gate | |
-| **v1.4** | running status 条 | composer 上方"运行 12s..."CC terminal 风格状态条，订阅 SDK queue-state SSE | |
-| **v1.5** | slash command 子系统 | 输入 `/` 触发 picker（commands + 末尾 custom 项）+ /compact pinned 按钮；先 spike SDK streamInput 是否透传 slash | |
-| **v1.6** | 启动新 session（≈ 旧 v∞.1）| sidebar"+ 新建"按钮 → SDK `query({prompt, cwd})` 不带 resume → chokidar 自动捡起新 jsonl | |
-| **v2.0** | 任意节点 fork（≈ 旧 v∞.3）| SDK `resumeSessionAt: messageId` —— canvas 上点任意 ChatNode（含 assistant / 旁支）作为 fork 起点；首次公开发布也定在这一档 | |
+| **v1.1** | trash 收口 + Settings 重构 + Viewer/Interactive toggle | M4 search exclusion + sidebar/ConfirmBanner 单测 + i18n / SettingsModal 4 tab（Hooks / 账户 / 权限 / 会话运行）+ permission_rules 改名 / 全局 viewer-vs-interactive 模式开关 + 现有写入口 gating | ✅ shipped |
+| **v1.2** | compact + summary 显示统一 | conversation 视图隐藏纯 compact 节点；canvas 上 compact 节点对齐普通 ChatNode（chips + drill 进 WorkFlow + 内部 llm_call 显示 token bar）；CC idle 时生成的 conversation summary 显示 | ✅ shipped |
+| **v1.3** | composer 地基（≈ 旧 v∞.2）| mtime 冲突检测 + advisory lock；postTurn 透传 model/effort/fastMode → turns 路由 → sessionRegistry；setModel/setEffort/setFastMode + respawn 策略；Composer 尊重 Viewer/Interactive gate | ✅ shipped |
+| **v1.4** | running status 条 | composer 上方"运行 12s..."CC terminal 风格状态条，订阅 SDK queue-state SSE | ✅ shipped |
+| **v1.5** | slash command 子系统 | 输入 `/` 触发 picker（commands + 末尾 custom 项）+ /compact pinned 按钮；先 spike SDK streamInput 是否透传 slash | ✅ shipped |
+| **v1.6** | 启动新 session（≈ 旧 v∞.1）| sidebar"+ 新建"按钮 → SDK `query({prompt, cwd})` 不带 resume → chokidar 自动捡起新 jsonl；草稿模式（空 prompt 不真 spawn）；右键 workspace → 在此创建；viewer 模式 visible-but-disabled 统一 | ✅ shipped |
+| **v2.0.0-rc.1** | 首次公开发布 rc | v1.1→v1.6 全部内容打包为 2.0 rc，friends-only soak；soak 顺利后 promote 2.0.0 final | ✅ shipped 2026-05-11 |
+| **v2.1** | 任意节点 fork（≈ 旧 v∞.3）| SDK `resumeSessionAt: messageId` —— canvas 上点任意 ChatNode（含 assistant / 旁支）作为 fork 起点；原本占着 v2.0 槽位，因 2.0 直接装 v1.1-v1.6 顺延到 v2.1 | |
 
 ## v0.1 — parser（详细）
 
