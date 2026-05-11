@@ -734,6 +734,101 @@ describe("SessionRegistry", () => {
       expect(captured[0].model).toBe("claude-opus-4-7");
       expect(captured[1].model).toBe("claude-haiku-4-5-20251001");
     });
+
+    // 2026-05-11: with respawnPerSend=false the existing Query
+    // normally rides the old model for the full idleTimeoutMin
+    // before any natural respawn. Composer popover changes should
+    // override that — setModel marks the entry for force-respawn so
+    // the new model applies on the very next turn regardless of
+    // mode.
+    it("setModel mid-session force-respawns on the next dispatch even with respawnPerSend=false", async () => {
+      const captured: Array<Record<string, unknown>> = [];
+      const { factory, spawned } = makeFactory((_fake, params) => {
+        captured.push(params.options as Record<string, unknown>);
+      });
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+        respawnPerSend: false, // <-- key: persistent Query mode
+      });
+      reg.setModel("claude-opus-4-7");
+      await reg.enqueueTurn(SID, CWD, {
+        text: "first",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      spawned[0].emitInit(SID);
+      spawned[0].emitResult();
+      await flush();
+
+      // Sanity: without setting setModel a second time, the second
+      // turn would reuse the existing Query (no respawn → captured
+      // stays at 1).
+      reg.setModel("claude-haiku-4-5-20251001");
+      await reg.enqueueTurn(SID, CWD, {
+        text: "second",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      expect(captured.length).toBe(2);
+      expect(captured[1].model).toBe("claude-haiku-4-5-20251001");
+
+      // Third send with NO setting change → no respawn, captured
+      // stays at 2 (confirms force-respawn is only triggered by the
+      // model change, not by being in mode=false).
+      spawned[1].emitInit(SID);
+      spawned[1].emitResult();
+      await flush();
+      await reg.enqueueTurn(SID, CWD, {
+        text: "third",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      expect(captured.length).toBe(2);
+    });
+
+    // No-op setter calls (same value as before) shouldn't trigger
+    // a respawn — the user's "change" is a no-op so the existing
+    // Query is fine to keep.
+    it("setModel with unchanged value does not force a respawn", async () => {
+      const captured: Array<Record<string, unknown>> = [];
+      const { factory, spawned } = makeFactory((_fake, params) => {
+        captured.push(params.options as Record<string, unknown>);
+      });
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+        respawnPerSend: false,
+      });
+      reg.setModel("claude-opus-4-7");
+      await reg.enqueueTurn(SID, CWD, {
+        text: "first",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      spawned[0].emitInit(SID);
+      spawned[0].emitResult();
+      await flush();
+
+      // Re-set with the SAME value.
+      reg.setModel("claude-opus-4-7");
+      await reg.enqueueTurn(SID, CWD, {
+        text: "second",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      // Still only one spawn — no respawn triggered by the no-op.
+      expect(captured.length).toBe(1);
+    });
   });
 });
 

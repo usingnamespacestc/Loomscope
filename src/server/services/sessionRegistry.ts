@@ -113,6 +113,18 @@ interface SessionEntry {
    *  See `docs/dual-writer-race-mitigation.md` + the rationale on
    *  `LoomscopePreferences.respawnPerSend` for the full picture. */
   lastKnownJsonlSize?: number;
+  /** 2026-05-11: when the user changes a spawn-time SDK option
+   *  (model / effort / fastMode) via Composer popover, opts mutates
+   *  but the existing Query keeps the old setting until something
+   *  else triggers a respawn. With respawnPerSend=true that's the
+   *  very next send so the staleness is sub-second, but with
+   *  respawnPerSend=false the change could sit unapplied for the
+   *  full idleTimeoutMin (default 30 min). Set this flag on every
+   *  live entry from the relevant setter so respawnReasonForDispatch
+   *  forces a fresh spawn on the next turn regardless of the
+   *  respawnPerSend mode. Cleared naturally when respawnPreservingQueue
+   *  replaces the entry. */
+  forceRespawnReason: string | null;
 }
 
 /**
@@ -611,25 +623,49 @@ export class SessionRegistry {
     this.opts.permissionMode = mode;
   }
 
-  /** v1.3: live-update the model passed to SDK query(). Same NEXT-
-   *  spawn caveat as setUseApiKey — opts snapshot at spawn time,
-   *  so the change takes effect on the next respawn. With
-   *  respawnPerSend=true (production default) this is "the very
-   *  next send"; with =false the existing Query keeps the old
-   *  model until staleness check or idle-close triggers respawn.
-   *  Pass undefined to clear the override (= SDK default model). */
+  /** v1.3: live-update the model passed to SDK query(). The new value
+   *  is mutated onto this.opts immediately, but the existing Query was
+   *  spawned with the old options — its model only changes on the next
+   *  spawn. With respawnPerSend=true that's the very next send (~1 s
+   *  delay), but with respawnPerSend=false the Query could ride the
+   *  old model for the full idleTimeoutMin (default 30 min) before
+   *  any respawn naturally happens.
+   *
+   *  2026-05-11 fix: when the value actually changes, mark every live
+   *  entry with forceRespawnReason="settings-changed" so the next
+   *  dispatch respawns regardless of mode. The user's "I changed the
+   *  model in the popover and clicked send" intent then takes effect
+   *  on the very next turn. Pass undefined to clear the override
+   *  (= SDK default model). */
   setModel(model: string | undefined): void {
+    if (this.opts.model === model) return;
     this.opts.model = model;
+    this.markEntriesForForceRespawn("settings-changed");
   }
 
-  /** v1.3: live-update reasoning-effort. Same NEXT-spawn caveat. */
+  /** v1.3: live-update reasoning-effort. Same force-respawn semantics
+   *  as setModel — see its jsdoc. */
   setEffort(effort: SessionRegistryOptions["effort"]): void {
+    if (this.opts.effort === effort) return;
     this.opts.effort = effort;
+    this.markEntriesForForceRespawn("settings-changed");
   }
 
-  /** v1.3: live-update fast-mode. Same NEXT-spawn caveat. */
+  /** v1.3: live-update fast-mode. Same force-respawn semantics as
+   *  setModel — see its jsdoc. */
   setFastMode(fastMode: boolean): void {
+    if (this.opts.fastMode === fastMode) return;
     this.opts.fastMode = fastMode;
+    this.markEntriesForForceRespawn("settings-changed");
+  }
+
+  /** Flip the force-respawn flag on every live entry. Called by
+   *  spawn-time-option setters (model / effort / fastMode) so the
+   *  next dispatch respawns even when respawnPerSend=false. */
+  private markEntriesForForceRespawn(reason: string): void {
+    for (const e of this.entries.values()) {
+      e.forceRespawnReason = reason;
+    }
   }
 
   /** Live-update the dual-writer race mitigation strategy. Takes
@@ -803,6 +839,7 @@ export class SessionRegistry {
       pendingPrompts: [],
       lastActivityAt: Date.now(),
       hasServedTurn: false,
+      forceRespawnReason: null,
     };
 
     // Start the Query with the AsyncIterable input form so we can
@@ -1102,6 +1139,7 @@ export class SessionRegistry {
       pendingPrompts: [],
       lastActivityAt: Date.now(),
       hasServedTurn: false,
+      forceRespawnReason: null,
     };
     this.entries.set(sid, entry);
 
@@ -1184,13 +1222,21 @@ export class SessionRegistry {
    *  can see why their send took longer / why the queue paused. */
   private async respawnReasonForDispatch(
     entry: SessionEntry,
-  ): Promise<"per-send" | "staleness-detected" | null> {
+  ): Promise<"per-send" | "staleness-detected" | "settings-changed" | null> {
     // Skip respawn before the FIRST turn — the just-spawned Query
     // hasn't had a chance to write anything yet, and its initial
     // read is already the freshest jsonl state. Without this guard
     // every first send would spawn → immediately close → spawn
     // again, doubling the cold-start cost.
     if (!entry.hasServedTurn) return null;
+    // 2026-05-11: spawn-time SDK option changed via Composer popover
+    // (model / effort / fastMode). Force respawn regardless of mode
+    // so the new setting actually applies to this turn. Highest
+    // priority — checked before per-send / staleness because user
+    // intent is most explicit here.
+    if (entry.forceRespawnReason) {
+      return "settings-changed";
+    }
     if (this.opts.respawnPerSend) return "per-send";
     if (entry.lastKnownJsonlSize === undefined) return null;
     const current = await this.statJsonlSize(entry.sessionId);
