@@ -675,10 +675,19 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         set({ sessions: updated });
       }
     }
-    if (id && !get().sessions.has(id) && !id.startsWith("draft-")) {
-      // Auto-load if we haven't fetched it yet. Fire-and-forget.
-      // Skip the "draft-" prefix — those have no on-disk session yet.
-      void get().loadSession(id);
+    // v1.6 fix: gate on chatFlow presence, not entry presence. The
+    // optimistic-anchor action `markTurnSubmittedOptimistic` creates a
+    // blank SessionState (chatFlow=null) BEFORE setActive runs; the
+    // old `!sessions.has(id)` check then suppressed loadSession,
+    // leaving the canvas + composer permanently blank for fresh
+    // sessions opened via the new-session modal. Now we re-fetch
+    // whenever chatFlow isn't populated yet, regardless of which
+    // action created the entry.
+    if (id && !id.startsWith("draft-")) {
+      const cur = get().sessions.get(id);
+      if (!cur || !cur.chatFlow) {
+        void get().loadSession(id);
+      }
     }
     set({ activeSessionId: id });
   },

@@ -1316,7 +1316,29 @@ function ComposerStatusBar({ sessionId }: { sessionId: string }) {
   // so sessionLive stays true through real turns.
   const sessionLive = useSessionLiveness(sessionId);
 
-  const isRunning = sdkRunning || hookRunning || (hasInFlight && sessionLive);
+  // v1.6 #182: optimistic clause. For a brand-new session, the
+  // post-spawn window can be entirely signal-less (no sdk-message
+  // events yet, no hook event arrived over SSE, no chatNodes parsed
+  // yet) for several seconds. The new-session modal sets
+  // lastTurnUserSubmittedAt before the SSE channel opens, so we
+  // treat that as a fallback "running" signal — but only while no
+  // hook has ever fired (lastTurnHookAt === 0) so a stale anchor
+  // from a past session can't keep the bar pinned forever. The 120s
+  // hard cap belt-and-braces against CC crashing before its first
+  // hook.
+  const lastTurnHookAt = useStore(
+    (s) => s.sessions.get(sessionId)?.lastTurnHookAt ?? 0,
+  );
+  const optimisticRunning =
+    lastTurnUserSubmittedAt > 0 &&
+    lastTurnHookAt === 0 &&
+    Date.now() - lastTurnUserSubmittedAt < 120_000;
+
+  const isRunning =
+    sdkRunning ||
+    hookRunning ||
+    (hasInFlight && sessionLive) ||
+    optimisticRunning;
   // Anchor the elapsed clock to the user-submit moment so it survives
   // mid-turn Stop fires. Priority: SDK timestamp (server-side, earliest)
   // → sticky lastTurnUserSubmittedAt (set on UserPromptSubmit, never

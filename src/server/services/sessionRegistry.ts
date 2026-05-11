@@ -1130,6 +1130,25 @@ export class SessionRegistry {
       }
     })();
 
+    // v1.6 fix: SDK's `system/init` frame fires before CC has written
+    // the first record to the jsonl on disk. If we return here
+    // immediately the client's loadSession (GET /api/sessions/:id)
+    // 404s — locateSessionJsonl scans for `<sid>.jsonl` in the project
+    // dirs and finds nothing. Poll briefly so the contract becomes
+    // "POST /api/sessions/new resolves once the session is observable
+    // via GET". Bounded at ~3s — beyond that we return anyway and let
+    // the client's SSE invalidate stream eventually pick the session
+    // up; better than holding the request open indefinitely if CC is
+    // unusually slow to commit the first write.
+    if (this.opts.locateJsonl) {
+      const deadline = Date.now() + 3_000;
+      while (Date.now() < deadline) {
+        const p = await this.opts.locateJsonl(sid);
+        if (p) break;
+        await new Promise((res) => setTimeout(res, 60));
+      }
+    }
+
     return { sessionId: sid, itemId };
   }
 
