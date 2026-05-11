@@ -85,6 +85,29 @@ describe("GET /api/workspaces/:cwdEnc/sessions", () => {
     const res = await app.request(`/api/workspaces/${cwdEnc}/sessions`);
     expect(res.status).toBe(404);
   });
+
+  // v1.6 fallback: scanWorkspaces races a freshly-spawned jsonl whose
+  // initial records (queue-operation, etc.) carry no `cwd` field. The
+  // dir gets dropped from scanWorkspaces' results → findWorkspaceByCwd
+  // returns null → previously this surfaced as a 404 banner. Fallback
+  // maps cwd → projectDir directly (CC's slash-to-dash encoding) and
+  // lists files there even if no record yet declares the cwd.
+  it("falls back to direct projectDir lookup when no jsonl record yet declares the cwd", async () => {
+    const projectDir = path.join(tmpRoot, "-home-user-Bar");
+    // jsonl exists but only carries pre-cwd records — mimics the
+    // race window during fresh spawn.
+    await writeJsonl(path.join(projectDir, "22222222-2222-4000-8000-000000000001.jsonl"), [
+      { type: "queue-operation", op: "init" },
+    ]);
+    const cwdEnc = encodeURIComponent("/home/user/Bar");
+    const res = await app.request(`/api/workspaces/${cwdEnc}/sessions`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{ sessionId: string }>;
+    expect(body).toHaveLength(1);
+    expect(body[0].sessionId).toBe(
+      "22222222-2222-4000-8000-000000000001",
+    );
+  });
 });
 
 describe("GET /api/sessions/:id", () => {
