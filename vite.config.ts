@@ -26,6 +26,13 @@ export default defineConfig({
       // some http-proxy defaults trigger 502 well before that. Pin
       // both timeouts explicitly to a generous window so the proxy
       // waits for slow upstream responses instead of bailing.
+      //
+      // 中: 大 session（作者自己 120MB Loomscope dev session）单次
+      // GET /api/sessions/<sid> 要 4 秒；http-proxy 的默认 timeout
+      // 因版本而异，某些场景会提前 502。显式 pin 60s 让 proxy 老
+      // 老实实等慢上游。配合 sessionSlice 里的 refreshSession
+      // dedup，是 #184 真 Delta-SSE 做完前的 soak-week 续命方案。
+      // 详细见 docs/devlog.md 2026-05-11 entry #4。
       "/api": {
         target: "http://localhost:5174",
         changeOrigin: true,

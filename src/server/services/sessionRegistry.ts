@@ -123,7 +123,17 @@ interface SessionEntry {
    *  live entry from the relevant setter so respawnReasonForDispatch
    *  forces a fresh spawn on the next turn regardless of the
    *  respawnPerSend mode. Cleared naturally when respawnPreservingQueue
-   *  replaces the entry. */
+   *  replaces the entry.
+   *
+   *  中: 用户在 Composer popover 改 spawn-time SDK 选项（model /
+   *  effort / fastMode）时 opts 立即变了，但运行中的 SDK Query 在
+   *  spawn 时已经 snapshot 过 opts，要等下次 spawn 才看新值。
+   *  respawnPerSend=true 下次 send 就 spawn 没事；=false 模式
+   *  Query 可能等到 idleTimeoutMin（默认 30min）才被自然 respawn
+   *  收掉，期间 setter 完全无效。所以 setter 改值时给每个 live
+   *  entry 打这个 flag，respawnReasonForDispatch 看到就强制 respawn
+   *  不论模式。respawnPreservingQueue 替换 entry 时 flag 自然清零。
+   *  详细背景见 docs/devlog.md 2026-05-11 entry #3。*/
   forceRespawnReason: string | null;
 }
 
@@ -636,7 +646,16 @@ export class SessionRegistry {
    *  dispatch respawns regardless of mode. The user's "I changed the
    *  model in the popover and clicked send" intent then takes effect
    *  on the very next turn. Pass undefined to clear the override
-   *  (= SDK default model). */
+   *  (= SDK default model).
+   *
+   *  中: 改 opts.model 立即生效到 this.opts，但运行中的 SDK Query
+   *  spawn 时已经把 model snapshot 进去了；要 model 真换得等到下
+   *  次 spawn。respawnPerSend=true 模式下下次 send 就 spawn，几乎
+   *  无感；respawnPerSend=false 模式下 Query 可能撑到 30 分钟
+   *  idleTimeout 才被自然 respawn，期间用户在 popover 改了 model
+   *  完全没生效。2026-05-11 修：值真变才标 forceRespawnReason，
+   *  下次 dispatch 强制 respawn。同值 setter 不触发（no-op 跳
+   *  过）。详细见 docs/devlog.md 2026-05-11 entry #3。*/
   setModel(model: string | undefined): void {
     if (this.opts.model === model) return;
     this.opts.model = model;

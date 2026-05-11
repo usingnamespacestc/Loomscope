@@ -6,6 +6,200 @@
 
 ---
 
+## 2026-05-11 — v2.0.0-rc.2：live-observation pipeline 四个 bug 串修
+
+rc.1 在 05-10 晚 ship 给作者自己 soak。当晚试用就把"实时观察"这条故事线撞穿了四个独立 bug，全部跟 SSE / chokidar / 状态机相关。当天连发 4 个 fix commit + cut rc.2。
+
+| commit | 短描 | 触发场景 |
+|---|---|---|
+| `05d164b` | chokidar `awaitWriteFinish` 改成手写节流 | 30s streaming turn 完全收不到 update |
+| `4f0141b` | `useIsChatNodeRunning` 改 OR-multiplex 多信号 | 卡片 pulse / 边动画一直灭，只在 turn 快结束才亮 |
+| `bb2ebe1` | `setModel/setEffort/setFastMode` force respawn next dispatch | respawnPerSend=false 下改 model 无效 |
+| `539209f` | `refreshSession` dedup + vite proxy timeout 60s | 120 MB session 撞 502 + pile-up |
+
+### #1 chokidar `awaitWriteFinish` 在 sustained writes 下完全不响应（`05d164b`）
+
+**症状**：作者在某条 ChatFlow 发了消息，30 秒内浏览器没任何更新，手动刷新才看到回复已经写好。
+
+**误判一次**：作者最先怀疑"CC 把整个 turn 攒着一起 flush"，我顺着这条 narrative 走了一段——读 jsonl 内部 timestamp 看到 user 跟 assistant 间隔 16 秒，但 file mtime 几乎跟 assistant 时间一致，确实像是"批量 flush"。作者及时打断："如果不刷新根本收不到更新，是事件推送机制的问题，不是 flush 的问题"——把判断从"上游写入模式"扳回"watcher 这层"。
+
+**empirical probe 钉死**：5 行 chokidar 监听 + `setInterval(appendFileSync, 50)`：
+
+```
+[probe] sustained 5s × 50ms appends
+[event] change fired at t=5058ms     ← 写停 56ms 才触发
+[probe] events fired during burst: 0  ← burst 期间 0 次
+```
+
+`awaitWriteFinish: { stabilityThreshold: 80 }` 的语义是"文件**安静** 80ms 才 fire"。CC streaming 单条 record 间隔 <50ms，文件全程不安静 → 30s 内 chokidar **一次都不报**。这是 chokidar 的"feature"，但配上 streaming writer 就是 silent bug。
+
+**修法**：去掉 `awaitWriteFinish`，自己做带 max-wait 的 rate limiter：
+
+- 第一个 change 来：80ms QUIET 延迟后 fire（idle 场景跟旧行为一致）
+- 已有 pending fire：不 reset 它（关键 —— 后续 event 不能把 fire 时间推后）
+- fire 完落 `lastFireAt`：下一次 fire 不早于 `lastFireAt + 1000ms`（sustained writes 下限速到 1Hz）
+
+probe 再跑：5s burst → 6 个 fire 在 133/1132/2132/3132/4132/5133ms，完美 1Hz cadence + 最后一个 trailing。
+
+代码位置：`src/server/services/sessionWatcher.ts` 的 `scheduleFire` + `THROTTLE_QUIET_MS / THROTTLE_MAX_WAIT_MS`。
+
+### #2 ChatNode pulse 跟 continuation edge 动画 mid-turn 灭（`4f0141b`）
+
+**症状**（修完 #1 之后立刻出现的下一个）：用户消息 ~2s 出现了，但**卡片不脉动**、**边不流动**，只在 turn 快结束才看到动画亮。
+
+**根因**：`useIsChatNodeRunning` 在 `trust && turnRunning`（hook 驱动 `currentTurn`）分支**独占**控制权，不再 fallback 看数据形态/liveness。问题是 CC 在 tool 循环里**每段 assistant 之后都会发一次 Stop**，每个 Stop 清掉 `currentTurn`：
+
+```
+T=0:  UserPromptSubmit → currentTurn={...}   pulse 亮
+T=3:  assistant 段 1 完 → Stop → currentTurn=null   pulse 灭
+T=4:  assistant 段 2 开始（无新 UserPromptSubmit）    pulse 不亮
+…
+T=27: 最后一段 → 你看到的"快结束才亮"
+T=30: 真 Stop → pulse 灭
+```
+
+`memory/project_loomscope_timing_followups.md` 早就标过"卡片 pulse 起止不准（hook 数据源应该切 SDK channel）"——今天对症修。
+
+**修法**：改 `useIsChatNodeRunning` 用 OR-multiplex：
+
+```ts
+return (trust && turnRunning) || hasInFlight || live;
+```
+
+- `trust && turnRunning`：hook 信号还在的话留着用
+- `hasInFlight`：data-shape 信号（llm_call 无 stopReason / tool_call 无 resultBlock 等），Stop 误清不影响
+- `live`：5s decay 的 invalidate 信号，配合 #1 fix（1Hz invalidate）整段 turn 都为 true
+
+`latest === chatNodeId` 守门保留，旧 ChatNode 不会乱亮。
+
+代码位置：`src/store/livenessHooks.ts` 的 `useIsChatNodeRunning`。
+
+### #3 `setModel/setEffort/setFastMode` 不重启 SDK 就不生效（`bb2ebe1`）
+
+**触发**：作者问"如果我关掉 respawnPerSend 会有什么坏处"，我列了几条 con 的时候提到这一条是真坑：opts 是 spawn-time 选项，运行中 SDK Query 不感知 setter 变化，除非自然 respawn（默认 30min idle timeout 才到）。作者："确实是个需要修复的问题"。
+
+**修法**：三个 setter 比较新值 vs 当前值，**真变了**才在所有 live entry 上打 `forceRespawnReason = "settings-changed"` flag；`respawnReasonForDispatch` 把这个 flag 放最高优先级，下次 dispatch 必 respawn。no-op setter（同值）跳过，避免没改动也 spawn。
+
+3 条单测：
+- `respawnPerSend=false` 下 setModel 强制 respawn（第二 turn 拿新 model）
+- 之后 idle send 仍复用 Query（第三 turn 复用，证明 flag 已清）
+- 同值 setter 不触发 respawn（spawn count 不变）
+
+代码位置：`src/server/services/sessionRegistry.ts` 的 `setModel / setEffort / setFastMode / markEntriesForForceRespawn / respawnReasonForDispatch` + `SessionEntry.forceRespawnReason` 字段。
+
+### #4 120 MB session 502 + pile-up（`539209f`）
+
+**症状**：作者在浏览器 devtools 看到一串 `502 Bad Gateway` from `/api/sessions/<sid>` + workflows endpoint。
+
+**stat 现场**：
+
+| 项 | 数字 |
+|---|---|
+| jsonl | 120 MB / 38905 行 |
+| GET lite payload | 16.8 MB |
+| 服务端 parse + 序列化 | 4.2 s |
+| #1 修完的 invalidate 频率 | ~1 Hz |
+| 结果 | 1 Hz × 4.2 s → 多个 refresh 并发 pile up → vite proxy bail 502 |
+
+**有点讽刺**：rc.1 ship 几小时前我才跟作者说"Delta-SSE 不急，当前 fix 已经够好"。120 MB session 一上场就把这个判断打脸。
+
+**两层 mitigation**（pending 真 Delta-SSE）：
+
+1. **客户端 `refreshSession` dedup + coalesce**。新加 module-level `refreshInFlight: Map<sid, Promise>` + `refreshPending: Set<sid>`：
+   - 已 in-flight → 仅 `refreshPending.add(id)` 返回
+   - 否则起 refresh，`finally` 里清 in-flight + 看 pending → 自动追一次 trailing re-run
+   - 把真 fetch + diff-merge body 拆出来成 `_refreshSessionInner` 让 wrapper 调
+2. **vite proxy `timeout: 60_000` + `proxyTimeout: 60_000`**。`http-proxy` 默认 timeout 各版本不一致，4 秒上游响应在某些环境下就 502。pin 死 60s。
+
+效果：120 MB session 现在大约**每 4-5 秒**刷一次（被单次 4.2s parse 卡住），不再 502。视觉仍 live，不爆。
+
+代码位置：`src/store/sessionSlice.ts` 的 `refreshInFlight / refreshPending` 模块顶 + `refreshSession` wrapper + `_refreshSessionInner`；`vite.config.ts` 的 proxy 配置。
+
+### Roadmap 调整（同日）
+
+- **#183 任意节点 fork 关掉**。作者一开始以为"任意节点 fork"是基础功能没做，问到才发现 ChatNode 级 fork 早就 v0.8 ship 过；他不需要 message-level，"够好了"。Task 直接删除。
+- **#184 Delta-SSE 从 backlog 提升到 v2.1 milestone**。120 MB session 撞 502 是真实需求，soak-week mitigation 续命，但根治还得是 push delta records 而不是每次 invalidate 全量 re-fetch。
+
+### Release：`f1175d2` cut rc.2
+
+- `package.json` 2.0.0-rc.1 → 2.0.0-rc.2
+- `SettingsModal.tsx` 版本字面量 + `SettingsModal.test.tsx` 断言同步
+- `README.md` status 行 + `docs/plan.md` 表格 + `CHANGELOG.md` 新条目
+- tag `v2.0.0-rc.2` + `gh release create --prerelease`
+- 923/923 vitest pass
+
+### 教训
+
+1. **用户直觉 > 我顺着证据走的 narrative**。"flush 批量"是合理的看上去对的解释，但作者基于"刷新才看到"的事实把方向扳回 watcher。我应该更早把"observation 链路是不是通的"作为 default 排查项，而不是先信"上游写入模式怪"。
+
+2. **chokidar `awaitWriteFinish` 配 streaming writer 是 silent bug**。文档不会告诉你"对持续写入的文件 stabilityThreshold 不安全"——只能 empirical probe 撞到。这种"框架默认值跟实际场景不匹配"的坑在生产很难提前预知，但**5 行 node 脚本能 1 分钟定位**。建议养成"撞到莫名其妙的 silent failure 先写个 probe"的习惯。
+
+3. **单 OR-clause 的 `running` selector 不抗 hook 抖动**。CC mid-turn Stop 是 CC 自己的设计，不会改。我们的 running gate 必须假设任何一个信号源都会抖，用 OR 兜底是健壮做法。这条也适用于其他类似 multi-source 状态机。
+
+4. **soak 才是真 stress test**。rc.1 跑全套单测 921 绿，跑 e2e probe 完，结论"看起来 OK 可以 ship"——但 6 小时真用就撞穿四个独立 bug。**测试覆盖再充分都不替代真用户在真 session 上跑**，这个项目这条结论已经反复验证过了。
+
+---
+
+## 2026-05-08 → 2026-05-10 — v1.1 到 v1.6 + 2.0.0-rc.1：从 read-only viewer 到 interactive workbench
+
+v1.0 取消后（packaging 截图不再阻塞，决定首次公开发布跳到 v2.0），这三天连推 v1.1→v1.6 六个小版本，每个聚焦一条独立故事线，最后 05-10 晚 ship 2.0.0-rc.1。
+
+### 6 个版本的主线
+
+| 版本 | 主线 | 关键 commit |
+|---|---|---|
+| **v1.1** | trash 收口 + Settings 4-tab 重构 + Viewer/Interactive 全局开关 | `7001c5a` + `7b046f4` + `13fd125` |
+| **v1.2** | compact + summary 显示统一（隐藏纯 compact / first-class canvas chip / idle summary 显示） | `4009db4` + `6d41966` + `6e4340d` + `cd4da17` |
+| **v1.3** | composer 地基：postTurn 透传 model/effort/fastMode + setModel 等 setter + Viewer/Interactive gate + #174 race mitigation 部分 | `8da8488` + `13863bc` |
+| **v1.4** | running status 条（spinner + elapsed timer + CC terminal 风格） | `c71a179` |
+| **v1.5** | slash command picker UI + `/compact` 钉按钮 + post-Stop sticky 锚点 | `b9aebd4` + `4c275e6` + `0bceff8` + `c0986d8` + `a8bf7bb` |
+| **v1.6** | 启动新 session（NewSessionModal + cwd 校验 + mkdir-p + 草稿模式 + 右键 workspace + viewer visible-but-disabled） | `4948b31` → `e9d769e` 一连串 |
+
+### v1.6 子任务密度（自己一条故事线）
+
+v1.6 一共 11 个 commit，覆盖：
+
+- 后端 `POST /api/sessions/new` + `/api/fs/validate-cwd` + `/api/fs/mkdir`
+- 前端 NewSessionModal（workspace 选 / 自定义路径 / 校验 / mkdir 确认 / 初始 prompt）
+- Sidebar `＋` 按钮（gating 走 visible-but-disabled）
+- workspace 文件夹右键菜单"在此创建 session"
+- viewer / interactive 模式 sidebar 写动作统一成 visible-but-disabled（跟 composer 对齐）
+- **草稿模式**：空 prompt 提交 → `draft-<uuid>` 占位 session，DraftMain 主视图 + DraftPanel 右侧 Composer；首条消息走 `postNewSession` 提交并 commitDraftSession 切到真 sid
+- 一连串 6 个细节 bug 修：
+  - CSRF prefix bypass 加 `/api/fs/`
+  - SDK CC binary path resolver（WSL musl/glibc 混装挑错变体）
+  - ESM imports（require not defined 因为我第一版用 require）
+  - `resolveClaudePath()` 加 PATH lookup fallback
+  - GET workspaces sessions race（jsonl 写入 cwd 之前先有 queue-operation 记录，scan 找不到 cwd 返 null → 加 slash-to-dash 直接映射 fallback）
+  - optimistic status-bar anchor（modal 拿到 sid 后立即 mark turn submitted，不等 SSE hook）
+  - `setActiveSession` 跳 `loadSession` 因为我加的 optimistic 改 entry presence 检查导致 chatFlow 一直 null
+
+### 期间撞到的 chokidar 跟 SDK 经验值（已落 memory）
+
+- **SDK CC binary**：WSL Ubuntu npm install `@anthropic-ai/claude-agent-sdk` 同时拿 `linux-x64`（glibc）+ `linux-x64-musl` 两个变体；SDK auto-detect 在 glibc 主机上**误选 musl**导致 spawn 直接挂。修法：startup `resolveClaudePath()` 显式传 `pathToClaudeCodeExecutable`。memory `project_loomscope_sdk_binary_path.md`。
+- **session id race**：`POST /api/sessions/new` 在 SDK `system/init` frame 立刻 return，但 CC 此时 jsonl 还没写到盘 → 客户端立即 `GET /api/sessions/:id` 拿 404。修法：spawnNewSession 后 poll `locateJsonl` 最多 3s 等盘。
+- **优化 UI fix 必须 visually 验证**。status bar fix 修了 3 次：第一次单测过实际 UI 死的（optimistic 字段没接 visibility gate）；第二次 setActiveSession 副作用导致 canvas 全空；第三次 playwright 真打开 + 截图 + 长 prompt 一眼看清三个 bug 一起修。memory `feedback_verify_visually_not_just_units.md`。
+
+### Release `e6b17f8`：2.0.0-rc.1
+
+`v1.0` 直接取消，首次公开发布跳 `v2.0.0-rc.1`：
+
+- 版本字面量改三处（`package.json` / `SettingsModal.tsx` / `README.md`）
+- `CHANGELOG.md` 加 2.0.0-rc.1 条目，分 "Interactive layer (v1.1→v1.6)" / "Reliability/infrastructure" 几节
+- `docs/plan.md` 表格 v1.1→v1.6 全标 ✅；新增 v2.0.0-rc.1 / v2.1 (任意节点 fork) 行（v2.1 任意节点 fork 第二天就关掉了，见上）
+- tag `v2.0.0-rc.1` + GitHub prerelease
+- 921/921 vitest pass at release moment
+
+### 教训补充
+
+1. **小步迭代 + 每条子任务自己开/关**：v1.6 一共 11 个 commit 拼起来才完整，但每个都能独立 ship + 验证。这种"每条小路径自己活"的节奏让 30+ task 列表一直可控；如果攒到一起做，回归调试会很痛。memory `feedback_small_steps_strategy.md` 提了这点。
+
+2. **viewer 模式 UI 一致性 = visible-but-disabled**。Composer 早就这风格，sidebar 写动作之前在 v1.1 取了相反路径（"hide entirely"）—— 一致性 review 时改齐 (`1cbf9b4`)。规则落在 `docs/design-visual-language.md` 防再走回头路。
+
+3. **chokidar 第一回坑出现在 v1.6 workspaces race**。同一份 jsonl 在 spawn 的第一秒里只有 queue-operation 没 cwd → scanWorkspaces 拿不到 cwd 给当前 workspace 列空。修法路径在路由层做 slash-to-dash 直接映射 fallback。**第二回 chokidar 大坑就是 05-11 的 awaitWriteFinish**——上面那个 entry。两条都是"chokidar/jsonl 写入时机比 parser 想得复杂"。
+
+---
+
 ## 2026-05-07 凌晨 → 早晨 — 工具/设置/动画/Git 全栈 polish 通宵
 
 承 v∞.0 read-only ship + drill panel 重做之后，连续 8 小时把以下几条线都推完。28 个 commit，从 `a4d3109` (docs filetouch 语义修正) 到 `c9f4206` (Phase C pending files)，全程 691 → 711 tests pass。

@@ -213,6 +213,13 @@ const loadInFlight = new Map<string, Promise<SubAgentCacheEntry>>();
 // Strategy: at most one in-flight refresh per session. Invalidates
 // arriving during in-flight coalesce into ONE trailing re-run, so
 // we don't lose mid-fetch updates but we don't multiply load either.
+//
+// 中: refreshSession dedup + 合并。120MB session 下 GET 单次
+// /api/sessions/<sid> 要 4 秒，比节流后 chokidar 的 1Hz invalidate
+// 还慢；不 dedup 多个 refresh 并发，vite proxy 撑不住给 502。
+// 策略：每个 session 同时最多 1 个在飞的 refresh。在飞期间又来
+// invalidate 就只 set 一个 pending flag，飞完再追一次（不丢更新
+// 也不并发拉）。详细见 docs/devlog.md 2026-05-11 entry #4。
 const refreshInFlight = new Map<string, Promise<void>>();
 const refreshPending = new Set<string>();
 
@@ -364,6 +371,10 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     // Another refresh is already running — just mark that a new
     // invalidate arrived and let the in-flight call schedule a
     // trailing re-run on completion.
+    //
+    // 中: 看上方 refreshInFlight jsdoc。若已有 refresh 在飞，只
+    // 标记 pending 直接返回；那个在飞的 refresh finally 块会自动
+    // 看 pending 并追一次 trailing refresh。
     if (refreshInFlight.has(id)) {
       refreshPending.add(id);
       return;

@@ -205,6 +205,16 @@ export function useIsChatNodeRunning(
   // 5 s) catches sustained-write streaming turns where the jsonl is
   // changing 1× / sec via the throttled watcher. After the turn
   // ends, live decays in 5 s for a tasteful trailing indicator.
+  //
+  // 中: 之前 `if (trust) return turnRunning` 一旦最近收过 hook 就
+  // 独占控制权，不再 fallback 看数据 + liveness。但 CC 在 tool 循环
+  // 里每段 assistant 完都会 fire 一次 Stop，每个 Stop 清掉
+  // currentTurn → pulse 灭。改成所有正向信号 OR：任何一个为真就
+  // 说明 turn 还在跑。turnRunning 信任 hook 链路；hasInFlight 走
+  // 数据形态（llm_call 没 stopReason / tool_call 没 resultBlock）；
+  // live 走 watcher 的 invalidate 信号（chokidar 节流后 ~1Hz
+  // streaming 期间一直为 true，结束后 5s 衰减做"刚跑完"trailing
+  // 指示）。详细见 docs/devlog.md 2026-05-11 entry。
   return (trust && turnRunning) || hasInFlight || live;
 }
 

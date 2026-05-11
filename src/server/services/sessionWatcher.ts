@@ -101,6 +101,21 @@ export function sidecarSubagentsDir(jsonlPath: string): string {
 // Parsers are line-oriented and discard partial last lines, so an
 // invalidate firing mid-write is safe — the next event picks up
 // whatever new full lines have been appended since.
+//
+// 中: chokidar 的 `awaitWriteFinish` 等"文件安静 stabilityThreshold
+// ms"才 fire。实测 CC streaming 写 record 间隔 <50ms，文件全程不
+// 安静 → 30s 内 chokidar 一次 change 都不报，浏览器看不到任何更
+// 新直到 turn 结束（或用户手动刷新）。
+//
+// 改成手写 rate limiter：
+//   - burst 首个 event：延迟 QUIET_MS 后 fire（idle 场景跟旧行
+//     为一致）
+//   - sustained writes：每次 fire 之间硬性留 MAX_WAIT_MS 冷却，
+//     所以 30s streaming turn 大约产 30 个 invalidate，间距 1s
+//
+// parser 是行模式，最后一行 partial 会被 JSON.parse 失败丢弃，
+// 所以中间 fire 安全——下次 fire 自然接上后续完整行。
+// 详细推导见 docs/devlog.md 2026-05-11 entry。
 const THROTTLE_QUIET_MS = 80;
 const THROTTLE_MAX_WAIT_MS = 1000;
 
@@ -128,6 +143,10 @@ function scheduleFire(
   // Don't reset an already-pending fire — that would push the fire
   // back indefinitely during sustained writes. The first event in
   // the burst owns the timer; later events just update the reason.
+  //
+  // 中: 已经 schedule 了一次 fire 就不再重置 timer，否则连续 event
+  // 会一直把 fire 时间推后（这就是 awaitWriteFinish 行为的本质 bug）。
+  // 后续 event 只升级 reason 不动 timer。
   if (s.pendingTimer) return;
   const earliestAllowedFireAt = s.lastFireAt + THROTTLE_MAX_WAIT_MS;
   const fireAt = Math.max(now + THROTTLE_QUIET_MS, earliestAllowedFireAt);
