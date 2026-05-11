@@ -193,8 +193,19 @@ export function useIsChatNodeRunning(
     return cn?.workflow.summary?.hasInFlightWork === true;
   });
   if (latest !== chatNodeId) return false;
-  if (trust) return turnRunning;
-  return hasInFlight || live;
+  // 2026-05-11: previously `if (trust) return turnRunning` ate the
+  // data-shape/liveness fallback whenever a hook had landed recently,
+  // and CC fires Stop after EVERY assistant message during tool
+  // loops — so `currentTurn` gets cleared mid-turn and the pulse
+  // strobes off + on (or off entirely if Stop happened to land
+  // before our render). Take the OR of all positive signals
+  // instead: any one of them indicates the turn is still in motion.
+  // hasInFlight catches the data-shape "llm_call missing stopReason
+  // / pending tool_call / etc." case; live (= invalidate within
+  // 5 s) catches sustained-write streaming turns where the jsonl is
+  // changing 1× / sec via the throttled watcher. After the turn
+  // ends, live decays in 5 s for a tasteful trailing indicator.
+  return (trust && turnRunning) || hasInFlight || live;
 }
 
 /**
