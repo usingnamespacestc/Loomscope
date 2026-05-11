@@ -64,6 +64,11 @@ export function Sidebar() {
   const toggleExpanded = useStore((s) => s.toggleExpanded);
   const setActive = useStore((s) => s.setActiveSession);
   const activeId = useStore((s) => s.activeSessionId);
+  // v1.6 #182: draft row at the top of the workspace tree when a
+  // draft session exists. Disappears the moment commitDraftSession()
+  // swaps the draft id for a real CC sid.
+  const draftSession = useStore((s) => s.draftSession);
+  const clearDraftSession = useStore((s) => s.clearDraftSession);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const collapsed = useStore((s) => s.sidebarCollapsed);
   const trashedSessions = useStore((s) => s.trashedSessions);
@@ -436,6 +441,50 @@ export function Sidebar() {
           />
         ) : (
           <>
+          {draftSession && (
+            <ul data-testid="sidebar-draft-row">
+              <li className="border-b border-gray-100">
+                <div
+                  className={[
+                    "flex w-full items-center gap-1.5 px-2 py-1.5 transition-colors",
+                    activeId === draftSession.id
+                      ? "bg-amber-50 border-l-2 border-amber-400"
+                      : "hover:bg-gray-100 border-l-2 border-transparent",
+                  ].join(" ")}
+                >
+                  <button
+                    type="button"
+                    className="flex-1 flex items-center gap-1.5 text-left"
+                    onClick={() => setActive(draftSession.id)}
+                    data-testid="sidebar-draft-activate"
+                    title={t("sidebar_draft.row_title", {
+                      cwd: draftSession.cwd,
+                    })}
+                  >
+                    <span className="text-[12px]">📝</span>
+                    <span className="text-[11px] text-gray-800 font-medium">
+                      {t("sidebar_draft.row_label")}
+                    </span>
+                    <span
+                      className="font-mono text-[10px] text-gray-500 truncate"
+                      title={draftSession.cwd}
+                    >
+                      {basename(draftSession.cwd)}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearDraftSession}
+                    className="px-1 py-0.5 rounded text-[10px] text-gray-400 hover:bg-rose-100 hover:text-rose-700 transition-colors"
+                    title={t("draft_main.discard")}
+                    data-testid="sidebar-draft-discard"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </li>
+            </ul>
+          )}
           <ul data-testid="sidebar-workspace-tree">
             {visibleWorkspaces.map((ws) => {
               const isOpen = expanded.has(ws.cwd);

@@ -286,6 +286,10 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
   draftSession: null,
 
   loadSession: async (id) => {
+    // v1.6 #182: short-circuit draft ids. They map to a client-side
+    // placeholder, not a real CC sid — GET /api/sessions/draft-<uuid>
+    // would 404 and leave a confusing red banner.
+    if (id.startsWith("draft-")) return;
     const next = new Map(get().sessions);
     const prev = next.get(id) ?? blankSessionState();
     next.set(id, { ...prev, isLoading: true, error: null });

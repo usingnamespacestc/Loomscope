@@ -22,6 +22,7 @@ import { ChatFlowCanvas } from "@/canvas/ChatFlowCanvas";
 import { WorkFlowCanvas } from "@/canvas/WorkFlowCanvas";
 import { TaskListPanel } from "@/components/TaskListPanel";
 import { SessionSearchBar } from "@/components/SessionSearchBar";
+import { DraftPanel } from "@/components/drill/DraftPanel";
 import { DrillPanel } from "@/components/drill/DrillPanel";
 import { Header } from "@/components/Header";
 import { HookOnboardingModal } from "@/components/HookOnboardingModal";
@@ -44,6 +45,15 @@ export default function App() {
   // hides via display:none and the panel's flex:1 grows into the
   // canvas track. Sidebar stays visible.
   const drillPanelFullscreen = useStore((s) => s.drillPanelFullscreen);
+  // v1.6 #182: draft session branch — `draft-<uuid>` activeId means
+  // the user landed on the new-session modal's empty-prompt path. No
+  // CC subprocess exists; the canvas shows a placeholder and the
+  // right side hosts a draft-aware Composer (DraftPanel).
+  const draftSession = useStore((s) => s.draftSession);
+  const isDraft =
+    !!activeId &&
+    !!draftSession &&
+    activeId === draftSession.id;
 
   useEffect(() => {
     if (activeId && !session) {
@@ -80,6 +90,8 @@ export default function App() {
   // The SSE handler below pushes refreshes via `kind: "tasks"`.
   useEffect(() => {
     if (!activeId) return;
+    // v1.6 #182: draft id has no jsonl yet → skip task fetch.
+    if (activeId.startsWith("draft-")) return;
     void useStore.getState().loadTasks(activeId);
     return () => {
       // Don't clear on unmount — user may switch back; cache survives.
@@ -100,6 +112,13 @@ export default function App() {
   //   onerror → 'error' (browser will auto-retry; we don't reconstruct)
   useEffect(() => {
     if (!activeId) {
+      useStore.getState().setLiveStatus("session", "idle");
+      return;
+    }
+    // v1.6 #182: draft session id has no server-side counterpart —
+    // skip SSE attach + leave the live-status as idle until
+    // commitDraftSession swaps in the real sid.
+    if (activeId.startsWith("draft-")) {
       useStore.getState().setLiveStatus("session", "idle");
       return;
     }
@@ -434,8 +453,11 @@ export default function App() {
           data-testid="canvas-host"
         >
           {!activeId && <EmptyState />}
-          {activeId && session?.isLoading && <LoadingState />}
-          {activeId && session?.error && <ErrorState message={session.error} />}
+          {isDraft && draftSession && <DraftMain cwd={draftSession.cwd} />}
+          {activeId && !isDraft && session?.isLoading && <LoadingState />}
+          {activeId && !isDraft && session?.error && (
+            <ErrorState message={session.error} />
+          )}
           {activeId && <PermissionBanner sessionId={activeId} />}
           {activeId && <InteractivePermissionBanner sessionId={activeId} />}
           {activeId && <TrashedSessionBanner sessionId={activeId} />}
@@ -484,6 +506,9 @@ export default function App() {
             viewMode={view.mode}
             drilledChatNode={drilledChatNode}
           />
+        )}
+        {isDraft && draftSession && (
+          <DraftPanel sessionId={draftSession.id} cwd={draftSession.cwd} />
         )}
       </div>
     </div>
@@ -624,6 +649,35 @@ function ErrorState({ message }: { message: string }) {
       <code className="text-[11px] bg-rose-50 border border-rose-200 px-2 py-1 rounded font-mono text-rose-900 max-w-[480px] break-words">
         {message}
       </code>
+    </div>
+  );
+}
+
+// v1.6 #182 draft mode: canvas-area placeholder shown while user has
+// activated a `draft-<uuid>` session but hasn't sent a message yet.
+// The DraftPanel on the right hosts the Composer; sending from there
+// commits the draft to a real CC sid and this placeholder gets
+// replaced by the normal ChatFlowCanvas on the same render tick.
+function DraftMain({ cwd }: { cwd: string }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
+      data-testid="draft-main"
+    >
+      <div className="text-6xl opacity-25 select-none">📝</div>
+      <div className="text-xl font-semibold tracking-tight text-gray-700">
+        {t("draft_main.title")}
+      </div>
+      <div className="max-w-md text-sm text-gray-500">
+        {t("draft_main.subtitle")}
+      </div>
+      <div className="inline-flex items-center gap-1.5 rounded border border-gray-200 bg-white px-2.5 py-1 font-mono text-[11px] text-gray-600 shadow-sm">
+        <span>📁</span>
+        <span className="truncate max-w-[420px]" title={cwd}>
+          {cwd}
+        </span>
+      </div>
     </div>
   );
 }

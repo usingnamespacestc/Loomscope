@@ -74,12 +74,37 @@ describe("NewSessionModal", () => {
     expect(screen.queryByTestId("new-session-workspace-/tmp/proj-b")).toBeNull();
   });
 
-  it("blocks submit with empty prompt + shows v1.6 'prompt required' error", () => {
-    render(<NewSessionModal open onClose={() => {}} />);
+  it("empty prompt + valid cwd → startDraftSession + close (no SDK spawn)", async () => {
+    let draftCwd: string | null = null;
+    const startDraftSpy = vi
+      .spyOn(useStore.getState(), "startDraftSession")
+      .mockImplementation((cwd) => {
+        draftCwd = cwd;
+      });
+    let spawnCalled = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = String(url);
+        if (u.includes("/api/fs/validate-cwd")) {
+          return new Response(
+            JSON.stringify({ ok: true, path: "/tmp/proj-a" }),
+            { status: 200 },
+          );
+        }
+        if (u.includes("/api/sessions/new")) spawnCalled = true;
+        return new Response("{}", { status: 200 });
+      }),
+    );
+    const onClose = vi.fn();
+    render(<NewSessionModal open onClose={onClose} />);
     fireEvent.click(screen.getByTestId("new-session-workspace-/tmp/proj-a"));
+    // Submit immediately with empty prompt — should mint a draft.
     fireEvent.click(screen.getByTestId("new-session-submit"));
-    // Error message contains the v1.6-specific draft-mode hint.
-    expect(screen.getByText(/草稿|draft mode/)).toBeTruthy();
+    await waitFor(() => expect(draftCwd).toBe("/tmp/proj-a"));
+    expect(spawnCalled).toBe(false);
+    expect(onClose).toHaveBeenCalled();
+    startDraftSpy.mockRestore();
   });
 
   it("happy path: validate-cwd ok → POST /new → activates returned sid", async () => {

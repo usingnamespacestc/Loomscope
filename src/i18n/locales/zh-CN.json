@@ -126,6 +126,19 @@
     "mkdir_confirm_message": "{{path}}\n\n该目录不存在。是否要 mkdir -p 创建后继续？取消则返回修改路径。",
     "mkdir_confirm_button": "创建并继续"
   },
+  "draft_panel": {
+    "title": "草稿 Session",
+    "hint": "还没说话 — Loomscope 不会启动 Claude Code 子进程。在下方输入框写点什么，回车发送即真正开始。"
+  },
+  "sidebar_draft": {
+    "row_label": "草稿",
+    "row_title": "占位 session（{{cwd}}）— 发出第一条消息后才真正启动 Claude Code"
+  },
+  "draft_main": {
+    "title": "草稿 Session",
+    "subtitle": "在右侧编辑器写点什么，回车后启动新会话",
+    "discard": "丢弃草稿"
+  },
   "session_usage": {
     "chip_tooltip": "本 session 累计 token 使用量。点击查看分轮明细 + 运行 /cost 查实际花费",
     "modal_title": "Session 使用统计",

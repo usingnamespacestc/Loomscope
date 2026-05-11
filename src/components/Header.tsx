@@ -23,6 +23,11 @@ export function Header() {
   const activeId = useStore((s) => s.activeSessionId);
   const session = useStore((s) => (activeId ? s.sessions.get(activeId) : null));
   const cf = session?.chatFlow ?? null;
+  // v1.6 #182: draft mode shows a distinct header label rather than
+  // the no-session "Pick a session →" placeholder. Draft id can't
+  // populate a chatFlow until the user sends the first message.
+  const draftSession = useStore((s) => s.draftSession);
+  const isDraft = !!activeId && activeId === draftSession?.id;
   const liveStatus = useStore((s) => s.liveStatus);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -61,6 +66,19 @@ export function Header() {
             </span>
             <span title="path" className="truncate max-w-[260px] text-gray-400">
               {cf.mainJsonlPath}
+            </span>
+          </span>
+        ) : isDraft && draftSession ? (
+          <span className="text-[11px] text-gray-500 flex items-center gap-2 font-mono min-w-0">
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-800 text-[10px] font-semibold">
+              {t("sidebar_draft.row_label")}
+            </span>
+            <span
+              className="inline-flex items-center gap-1 text-gray-700 truncate"
+              title={draftSession.cwd}
+            >
+              📁
+              <span className="truncate max-w-[260px]">{draftSession.cwd}</span>
             </span>
           </span>
         ) : (

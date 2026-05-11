@@ -49,6 +49,7 @@ export function NewSessionModal({ open, onClose, initialCwd }: Props) {
   const markTurnSubmittedOptimistic = useStore(
     (s) => s.markTurnSubmittedOptimistic,
   );
+  const startDraftSession = useStore((s) => s.startDraftSession);
 
   const [selectedCwd, setSelectedCwd] = useState<string>("");
   const [customPath, setCustomPath] = useState<string>("");
@@ -127,17 +128,11 @@ export function NewSessionModal({ open, onClose, initialCwd }: Props) {
       setError(t("new_session.err_no_cwd"));
       return;
     }
-    if (prompt.trim().length === 0) {
-      // v1.6 first cut: require a non-empty prompt — SDK can't spawn
-      // without one and the "draft session, send later" UX needs
-      // sidebar/App-canvas/DrillPanel hooks not yet wired. Tracked
-      // for follow-up via startDraftSession (already in store).
-      setError(t("new_session.err_no_prompt"));
-      return;
-    }
     setStage("submitting");
 
-    // Validate cwd with server.
+    // Validate cwd with server. Same validation runs regardless of
+    // empty-vs-filled prompt — draft mode still owns a cwd, the user
+    // just hasn't typed the first message yet.
     const validation = await validateCwd(effectiveCwd);
     if ("error" in validation) {
       setError(validation.error);
@@ -163,6 +158,18 @@ export function NewSessionModal({ open, onClose, initialCwd }: Props) {
   };
 
   const spawnAndFinish = async (cwd: string) => {
+    // v1.6 #182 draft path: empty prompt → no SDK spawn yet. Stash a
+    // client-side draft "draft-<uuid>" id; the user lands on a
+    // placeholder canvas + composer. The Composer's send routes the
+    // first real message through POST /api/sessions/new (= spawn) and
+    // commits the draft to the real CC sid. Matches the user's #5
+    // decision: "just clicking 创建 without typing means nothing was
+    // created — should mirror terminal CC's behavior."
+    if (prompt.trim().length === 0) {
+      startDraftSession(cwd);
+      onClose();
+      return;
+    }
     const r = await postNewSession({
       text: prompt.trim(),
       cwd,

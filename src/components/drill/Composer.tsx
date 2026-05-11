@@ -42,6 +42,7 @@ import {
 import type { PointerEvent as RPointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 
+import { postNewSession } from "@/api/newSession";
 import { postInterrupt, postTurn } from "@/api/turns";
 import { ConfirmBanner } from "@/components/ConfirmBanner";
 import { findLatestLeafId } from "@/components/drill/pathUtils";
@@ -256,6 +257,19 @@ export function Composer({
   const setSdkError = useStore((s) => s.setSdkError);
   const isRunning = inflight.state === "running";
 
+  // v1.6 #182: draft mode detection. When activeSessionId is "draft-
+  // <uuid>" (set by NewSessionModal's empty-prompt path), the first
+  // send must spawn a real CC subprocess via POST /api/sessions/new
+  // rather than POST /api/sessions/:id/turns (the real sid doesn't
+  // exist yet). On success commitDraftSession swaps the draft id for
+  // the real sid so subsequent sends use the normal postTurn path.
+  const isDraft = sessionId.startsWith("draft-");
+  const draftSession = useStore((s) => s.draftSession);
+  const commitDraftSession = useStore((s) => s.commitDraftSession);
+  const markTurnSubmittedOptimistic = useStore(
+    (s) => s.markTurnSubmittedOptimistic,
+  );
+
   // Subscribe to the active session's selection + chatFlow refs so we
   // can decide whether the composer should be enabled. Two cheap
   // selectors instead of one heavy one — keeps re-render frequency
@@ -338,6 +352,39 @@ export function Composer({
       setAttachments([]);
       setSdkError(sessionId, null);
 
+      // v1.6 #182 draft branch: first send on a "draft-<uuid>"
+      // session id has no CC subprocess yet — route through
+      // POST /api/sessions/new (spawn) then commitDraftSession so
+      // future sends use the real CC sid.
+      if (isDraft) {
+        const r = await postNewSession({
+          text: snapshotText,
+          cwd,
+          images: snapshotAttachments.map((a) => ({
+            mediaType: a.mediaType,
+            base64: a.base64,
+          })),
+          model: settings.model,
+          effort: settings.effort,
+          fastMode: settings.fastMode,
+        });
+        if (!("ok" in r) || r.ok !== true) {
+          setText(snapshotText);
+          setAttachments(snapshotAttachments);
+          setSdkError(
+            sessionId,
+            "error" in r ? r.error : "spawn failed",
+          );
+          return;
+        }
+        // Anchor the status bar clock for the real sid before
+        // commit (mirrors NewSessionModal's optimistic write path —
+        // see project_loomscope_first_turn_status_bar memo).
+        markTurnSubmittedOptimistic(r.sessionId);
+        commitDraftSession(r.sessionId);
+        return;
+      }
+
       // Always sends to the active session's leaf — no fork
       // semantics. composerBlock above guarantees we only get here
       // when selection is null or === leaf.
@@ -368,7 +415,20 @@ export function Composer({
         return;
       }
     },
-    [canSend, text, attachments, sessionId, cwd, setSdkError],
+    [
+      canSend,
+      text,
+      attachments,
+      sessionId,
+      cwd,
+      setSdkError,
+      isDraft,
+      settings.model,
+      settings.effort,
+      settings.fastMode,
+      markTurnSubmittedOptimistic,
+      commitDraftSession,
+    ],
   );
 
   // v1.5 R3: slash command confirm + send. Spike (handoff-v1.5-slash-

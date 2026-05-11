@@ -126,6 +126,19 @@
     "mkdir_confirm_message": "{{path}}\n\nThis directory doesn't exist. Run mkdir -p and continue? Cancel to edit the path.",
     "mkdir_confirm_button": "Create and continue"
   },
+  "draft_panel": {
+    "title": "Draft session",
+    "hint": "Nothing said yet — Loomscope hasn't spawned a Claude Code subprocess. Type a message below and press Enter to start it for real."
+  },
+  "sidebar_draft": {
+    "row_label": "Draft",
+    "row_title": "Placeholder session ({{cwd}}) — Claude Code won't spawn until you send the first message"
+  },
+  "draft_main": {
+    "title": "Draft session",
+    "subtitle": "Type a message in the panel on the right and hit Enter to spawn the session",
+    "discard": "Discard draft"
+  },
   "session_usage": {
     "chip_tooltip": "Cumulative token usage for this session. Click for per-turn breakdown + a button to run /cost for the actual dollar figure.",
     "modal_title": "Session usage",
