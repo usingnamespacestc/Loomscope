@@ -15,6 +15,11 @@
 // 单测可以塞 mock 不烧 token；2) 未来可能直接调 CC 二进制时，只改这
 // 一个文件。
 
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { execSync } from "node:child_process";
+
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import type {
   Options,
@@ -61,20 +66,14 @@ export const realSdkQuery: QueryFactory = (params) => sdkQuery(params);
  * absolute path that exists on disk.
  */
 export function resolveClaudePath(): string | undefined {
-  /* eslint-disable @typescript-eslint/no-require-imports */
-  const fs = require("node:fs") as typeof import("node:fs");
-  const path = require("node:path") as typeof import("node:path");
-  const os = require("node:os") as typeof import("node:os");
-  const { execSync } = require("node:child_process") as typeof import("node:child_process");
-  /* eslint-enable @typescript-eslint/no-require-imports */
   const candidates: (string | undefined)[] = [
     process.env.LOOMSCOPE_CC_PATH,
-    path.join(os.homedir(), ".local", "bin", "claude"),
+    join(homedir(), ".local", "bin", "claude"),
   ];
   for (const c of candidates) {
     if (!c) continue;
     try {
-      if (fs.existsSync(c)) return c;
+      if (existsSync(c)) return c;
     } catch {
       // ignore stat failures, fall through
     }
@@ -84,7 +83,7 @@ export function resolveClaudePath(): string | undefined {
       stdio: ["ignore", "pipe", "ignore"],
       encoding: "utf8",
     }).trim();
-    if (onPath && fs.existsSync(onPath)) return onPath;
+    if (onPath && existsSync(onPath)) return onPath;
   } catch {
     // command not found
   }
