@@ -396,6 +396,11 @@ export interface SessionSlice {
   // underlying jsonl was deleted from disk so retaining its UI
   // state can never serve a future visit.
   removeSession: (id: string) => void;
+  /** v1.6 #182: optimistic anchor for the composer status bar so the
+   *  spinner + elapsed clock appear immediately after the new-session
+   *  modal succeeds, rather than waiting for the UserPromptSubmit SSE
+   *  hook to arrive (which can race the SSE subscription opening). */
+  markTurnSubmittedOptimistic: (sessionId: string, ts?: number) => void;
   setSelected: (sessionId: string, nodeId: string | null) => void;
   setViewport: (sessionId: string, vp: { x: number; y: number; zoom: number }) => void;
   // ── Drill-down navigation (v0.3 inner WorkFlow) ──

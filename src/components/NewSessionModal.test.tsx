@@ -113,6 +113,12 @@ describe("NewSessionModal", () => {
       .mockImplementation((id) => {
         activatedSid = id;
       });
+    let optimisticSid: string | null = null;
+    const markOptimisticSpy = vi
+      .spyOn(useStore.getState(), "markTurnSubmittedOptimistic")
+      .mockImplementation((id) => {
+        optimisticSid = id;
+      });
     const onClose = vi.fn();
     render(<NewSessionModal open onClose={onClose} />);
     fireEvent.click(screen.getByTestId("new-session-workspace-/tmp/proj-a"));
@@ -125,8 +131,13 @@ describe("NewSessionModal", () => {
       expect(newCalled).toBe(true);
     });
     expect(activatedSid).toBe("11111111-1111-4000-8000-000000000aaa");
+    // v1.6 #182: optimistic status-bar anchor must fire on the same
+    // sid before setActive — otherwise the spinner is invisible until
+    // the SSE UserPromptSubmit hook lands.
+    expect(optimisticSid).toBe("11111111-1111-4000-8000-000000000aaa");
     expect(onClose).toHaveBeenCalled();
     setActiveSpy.mockRestore();
+    markOptimisticSpy.mockRestore();
   });
 
   it("not_found cwd path → opens mkdir confirm; cancel returns to form without spawning", async () => {

@@ -46,6 +46,9 @@ export function NewSessionModal({ open, onClose, initialCwd }: Props) {
   const activeId = useStore((s) => s.activeSessionId);
   const sessions = useStore((s) => s.sessions);
   const setActive = useStore((s) => s.setActiveSession);
+  const markTurnSubmittedOptimistic = useStore(
+    (s) => s.markTurnSubmittedOptimistic,
+  );
 
   const [selectedCwd, setSelectedCwd] = useState<string>("");
   const [customPath, setCustomPath] = useState<string>("");
@@ -169,6 +172,11 @@ export function NewSessionModal({ open, onClose, initialCwd }: Props) {
       setStage("form");
       return;
     }
+    // v1.6 #182: anchor the status bar clock BEFORE setActive so the
+    // running spinner + elapsed seconds appear immediately rather than
+    // waiting for the UserPromptSubmit SSE hook (which can race the
+    // subscription opening for a brand-new session).
+    markTurnSubmittedOptimistic(r.sessionId);
     setActive(r.sessionId);
     onClose();
   };

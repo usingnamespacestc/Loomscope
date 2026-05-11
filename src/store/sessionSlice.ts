@@ -764,6 +764,25 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     set({ sessions: updated });
   },
 
+  // v1.6 #182: optimistic turn-start anchor. The composer status bar's
+  // elapsed clock keys off `lastTurnUserSubmittedAt`, which is normally
+  // set when the UserPromptSubmit hook fires over SSE. For a fresh
+  // session that hook can fire BEFORE the client's SSE subscription
+  // opens (SSE attaches after setActiveSession, which only fires after
+  // POST /api/sessions/new returns; CC may already be processing by
+  // then). Without this optimistic write, the status bar is invisible
+  // for the entire first turn. Subsequent loadSession spreads `...cur`
+  // so the anchor survives the chatFlow merge.
+  markTurnSubmittedOptimistic: (sessionId, ts) => {
+    const updated = new Map(get().sessions);
+    const cur = updated.get(sessionId) ?? blankSessionState();
+    updated.set(sessionId, {
+      ...cur,
+      lastTurnUserSubmittedAt: ts ?? Date.now(),
+    });
+    set({ sessions: updated });
+  },
+
   setViewport: (sessionId, vp) => {
     const updated = new Map(get().sessions);
     const cur = updated.get(sessionId) ?? blankSessionState();
