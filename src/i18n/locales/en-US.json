@@ -31,6 +31,7 @@
     "context_menu_new_session_here": "Create session here",
     "context_menu_new_session_here_desc": "Start a new Claude Code session in {{cwd}}",
     "context_menu_copy_path": "Copy path",
+    "viewer_disabled_tooltip": "Viewer-only mode — enable Interactive in Settings → Session runtime first",
     "trash_folder": "Trash",
     "trash_empty_button": "Empty",
     "trash_empty_button_title": "Permanently delete all sessions in trash",

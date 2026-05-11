@@ -31,6 +31,7 @@
     "context_menu_new_session_here": "在此创建 session",
     "context_menu_new_session_here_desc": "在 {{cwd}} 启动新的 Claude Code 会话",
     "context_menu_copy_path": "复制路径",
+    "viewer_disabled_tooltip": "Viewer-only 模式 — 在「设置 → 会话运行」打开 Interactive 才能使用",
     "trash_folder": "回收站",
     "trash_empty_button": "清空",
     "trash_empty_button_title": "永久删除回收站内全部 session",

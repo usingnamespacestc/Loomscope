@@ -274,18 +274,23 @@ export function Sidebar() {
           {t("sidebar.section_title")}
         </span>
         <div className="flex items-center gap-1">
-          {/* v1.6 #182: launch new session. Hidden in viewer mode
-              (composer / write actions all gated together). */}
-          {interactiveMode && (
-            <button
-              data-testid="sidebar-new-session"
-              className="flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-blue-100 hover:text-blue-700 transition-colors"
-              title={t("sidebar.new_session_title")}
-              onClick={() => setNewSessionOpen(true)}
-            >
-              ＋
-            </button>
-          )}
+          {/* v1.6 #182: launch new session. v1.6 #187: stays visible
+              in viewer mode but grays out + tooltip explains why —
+              mirrors Composer's visible-but-disabled pattern so the
+              feature stays discoverable. */}
+          <button
+            data-testid="sidebar-new-session"
+            disabled={!interactiveMode}
+            className="flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-blue-100 hover:text-blue-700 transition-colors disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent disabled:hover:text-gray-300"
+            title={
+              interactiveMode
+                ? t("sidebar.new_session_title")
+                : t("sidebar.viewer_disabled_tooltip")
+            }
+            onClick={() => setNewSessionOpen(true)}
+          >
+            ＋
+          </button>
           <button
             className="flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700 transition-colors"
             title={t("sidebar.refresh_workspaces")}
@@ -451,11 +456,11 @@ export function Sidebar() {
                     className="w-full flex items-center gap-1.5 px-2 py-1.5 hover:bg-gray-100 text-left transition-colors group/folder"
                     onClick={() => toggleExpanded(ws.cwd)}
                     onContextMenu={(e) => {
-                      // v1.6 #186: right-click on workspace folder
+                      // v1.6 #186/#187: right-click on workspace folder
                       // opens a context menu whose primary action is
-                      // "create new session here". Skip in viewer
-                      // mode (write actions all gated together).
-                      if (!interactiveMode) return;
+                      // "create new session here". Menu opens in viewer
+                      // mode too — the write item is rendered disabled
+                      // (visible-but-gated pattern, matches composer).
                       e.preventDefault();
                       setContextMenu({
                         kind: "workspace",
@@ -631,31 +636,31 @@ export function Sidebar() {
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
           items={[
-            // Trash item only appears in interactive mode. Viewer-only
-            // gets the read-only "copy id" option only.
-            ...(interactiveMode
-              ? [
-                  {
-                    key: "trash",
-                    label: t("sidebar.context_menu_trash"),
-                    description: t("sidebar.context_menu_trash_desc"),
-                    accent: "danger" as const,
-                    onClick: () => {
-                      void (async () => {
-                        const r = await trashSession(
-                          contextMenu.sessionId,
-                          contextMenu.cwd,
-                        );
-                        if (!r.ok) {
-                          window.alert(
-                            t("sidebar.trash_action_failed", { error: r.error }),
-                          );
-                        }
-                      })();
-                    },
-                  },
-                ]
-              : []),
+            // v1.6 #187: trash item stays visible in viewer mode but
+            // is disabled — keeps the menu shape stable + matches the
+            // composer pattern of "discoverable but gated".
+            {
+              key: "trash",
+              label: t("sidebar.context_menu_trash"),
+              description: interactiveMode
+                ? t("sidebar.context_menu_trash_desc")
+                : t("sidebar.viewer_disabled_tooltip"),
+              accent: "danger" as const,
+              disabled: !interactiveMode,
+              onClick: () => {
+                void (async () => {
+                  const r = await trashSession(
+                    contextMenu.sessionId,
+                    contextMenu.cwd,
+                  );
+                  if (!r.ok) {
+                    window.alert(
+                      t("sidebar.trash_action_failed", { error: r.error }),
+                    );
+                  }
+                })();
+              },
+            },
             {
               key: "copy-id",
               label: t("sidebar.context_menu_copy_id"),
@@ -677,10 +682,12 @@ export function Sidebar() {
             {
               key: "new-session-here",
               label: t("sidebar.context_menu_new_session_here"),
-              description: t(
-                "sidebar.context_menu_new_session_here_desc",
-                { cwd: contextMenu.cwd },
-              ),
+              description: interactiveMode
+                ? t("sidebar.context_menu_new_session_here_desc", {
+                    cwd: contextMenu.cwd,
+                  })
+                : t("sidebar.viewer_disabled_tooltip"),
+              disabled: !interactiveMode,
               onClick: () => {
                 setNewSessionInitialCwd(contextMenu.cwd);
                 setNewSessionOpen(true);
@@ -765,11 +772,16 @@ function TrashSection({
             {sessions.length}
           </span>
         </button>
-        {expanded && sessions.length > 0 && interactiveMode && (
+        {expanded && sessions.length > 0 && (
           <button
-            className="mr-2 px-1.5 py-0.5 rounded text-[10px] text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition-colors"
+            className="mr-2 px-1.5 py-0.5 rounded text-[10px] text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition-colors disabled:cursor-not-allowed disabled:text-rose-300 disabled:hover:bg-transparent disabled:hover:text-rose-300"
+            disabled={!interactiveMode}
             onClick={() => void onEmpty()}
-            title={t("sidebar.trash_empty_button_title")}
+            title={
+              interactiveMode
+                ? t("sidebar.trash_empty_button_title")
+                : t("sidebar.viewer_disabled_tooltip")
+            }
             data-testid="sidebar-trash-empty"
           >
             {t("sidebar.trash_empty_button")}
@@ -837,36 +849,46 @@ function TrashSection({
                     <span className="font-mono">
                       {s.sessionId.slice(0, 8)}
                     </span>
-                    {interactiveMode && (
-                      <span className="flex items-center gap-1">
-                        {/* Inline action buttons stop propagation so
-                            clicking 还原 / ✕ doesn't also fire onOpen. */}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void onRestore(s.sessionId);
-                          }}
-                          className="px-1 py-0.5 rounded hover:bg-blue-100 hover:text-blue-700 transition-colors"
-                          title={t("sidebar.trash_restore_title")}
-                          data-testid={`sidebar-trash-restore-${s.sessionId}`}
-                        >
-                          ↩ {t("sidebar.trash_restore")}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onPurge(s.sessionId, s.title);
-                          }}
-                          className="px-1 py-0.5 rounded hover:bg-rose-100 hover:text-rose-700 transition-colors"
-                          title={t("sidebar.trash_purge_title")}
-                          data-testid={`sidebar-trash-purge-${s.sessionId}`}
-                        >
-                          ✕
-                        </button>
-                      </span>
-                    )}
+                    <span className="flex items-center gap-1">
+                      {/* v1.6 #187: stays visible in viewer mode, but
+                          disabled + tooltip explains why. Inline action
+                          buttons stop propagation so clicking 还原 / ✕
+                          doesn't also fire onOpen. */}
+                      <button
+                        type="button"
+                        disabled={!interactiveMode}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void onRestore(s.sessionId);
+                        }}
+                        className="px-1 py-0.5 rounded hover:bg-blue-100 hover:text-blue-700 transition-colors disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent disabled:hover:text-gray-300"
+                        title={
+                          interactiveMode
+                            ? t("sidebar.trash_restore_title")
+                            : t("sidebar.viewer_disabled_tooltip")
+                        }
+                        data-testid={`sidebar-trash-restore-${s.sessionId}`}
+                      >
+                        ↩ {t("sidebar.trash_restore")}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!interactiveMode}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPurge(s.sessionId, s.title);
+                        }}
+                        className="px-1 py-0.5 rounded hover:bg-rose-100 hover:text-rose-700 transition-colors disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent disabled:hover:text-gray-300"
+                        title={
+                          interactiveMode
+                            ? t("sidebar.trash_purge_title")
+                            : t("sidebar.viewer_disabled_tooltip")
+                        }
+                        data-testid={`sidebar-trash-purge-${s.sessionId}`}
+                      >
+                        ✕
+                      </button>
+                    </span>
                   </div>
                 </div>
               </li>

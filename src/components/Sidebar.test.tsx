@@ -154,7 +154,7 @@ describe("Sidebar", () => {
     });
   });
 
-  it("right-click on workspace folder is a no-op in viewer mode", async () => {
+  it("right-click on workspace folder in viewer mode shows menu with create item disabled", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (!url.includes("/sessions")) {
         return new Response(
@@ -171,8 +171,12 @@ describe("Sidebar", () => {
     render(<Sidebar />);
     const row = await screen.findByTestId("workspace-row-/proj");
     fireEvent.contextMenu(row);
-    // No menu appears — interactive gate blocks it.
-    expect(screen.queryByText(/在此创建 session|Create session here/)).toBeNull();
+    // v1.6 #187: menu appears in viewer mode too (visible-but-disabled
+    // pattern matching the composer). Create item is disabled.
+    const item = await screen.findByTestId(
+      "context-menu-item-new-session-here",
+    );
+    expect(item.hasAttribute("disabled")).toBe(true);
   });
 
   it("clicking a session row sets it active in the store", async () => {
@@ -437,31 +441,31 @@ describe("Sidebar — TrashSection", () => {
     expect(useStore.getState().activeSessionId).toBe(sid);
   });
 
-  // v1.1 viewer-only gating — write affordances must hide when
-  // interactiveMode is false.
+  // v1.1 viewer-only gating; v1.6 #187 reworked the pattern: write
+  // affordances stay visible (so users still discover them) but are
+  // rendered disabled, matching the composer's visible-but-disabled
+  // approach.
   describe("viewer-only mode (interactiveMode=false)", () => {
     beforeEach(() => {
       useStore.setState({ interactiveMode: false });
     });
 
-    it("hides per-row restore + purge buttons", () => {
+    it("renders per-row restore + purge buttons disabled (not hidden)", () => {
       const sid = "33334444-5555-4000-8000-000000000001";
       useStore.setState({
         trashedSessions: [makeTrashed({ sessionId: sid })],
         trashExpanded: true,
       });
       render(<Sidebar />);
-      expect(
-        screen.queryByTestId(`sidebar-trash-restore-${sid}`),
-      ).toBeNull();
-      expect(
-        screen.queryByTestId(`sidebar-trash-purge-${sid}`),
-      ).toBeNull();
+      const restore = screen.getByTestId(`sidebar-trash-restore-${sid}`);
+      const purge = screen.getByTestId(`sidebar-trash-purge-${sid}`);
+      expect(restore.hasAttribute("disabled")).toBe(true);
+      expect(purge.hasAttribute("disabled")).toBe(true);
       // Row body still renders so observers can browse.
       expect(screen.getByTestId(`sidebar-trash-open-${sid}`)).toBeTruthy();
     });
 
-    it("hides the empty-trash button", () => {
+    it("renders the empty-trash button disabled (not hidden)", () => {
       useStore.setState({
         trashedSessions: [
           makeTrashed({ sessionId: "44445555-6666-4000-8000-000000000001" }),
@@ -469,7 +473,18 @@ describe("Sidebar — TrashSection", () => {
         trashExpanded: true,
       });
       render(<Sidebar />);
-      expect(screen.queryByTestId("sidebar-trash-empty")).toBeNull();
+      const btn = screen.getByTestId("sidebar-trash-empty");
+      expect(btn.hasAttribute("disabled")).toBe(true);
+    });
+
+    it("renders the + new-session button disabled (not hidden)", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("[]", { status: 200 })),
+      );
+      render(<Sidebar />);
+      const btn = await screen.findByTestId("sidebar-new-session");
+      expect(btn.hasAttribute("disabled")).toBe(true);
     });
   });
 });
