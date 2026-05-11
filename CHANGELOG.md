@@ -2,6 +2,25 @@
 
 All user-facing changes to Loomscope are noted here. v0.x history is highlights only — chronological detail in [`docs/devlog.md`](docs/devlog.md).
 
+## [2.0.0-rc.2] — 2026-05-11
+
+Bugfix soak on rc.1 — five issues surfaced while the dev was actually using rc.1 for real work. Same feature set as rc.1; new build only because every one of these affects "is the live observation story working at all" or "does respawnPerSend=false stay usable".
+
+### Live-observation pipeline fixes
+
+- **chokidar `awaitWriteFinish` silently swallowed mid-turn invalidates** — Probed empirically: with `stabilityThreshold: 80 ms`, sustained 50 ms-interval appends produce **zero** `change` events during a 5 s burst; only fires ~56 ms after writes stop. CC's streaming response writes records every <50 ms during long turns → file is never quiet → the browser sees nothing for 30 s until CC stops. Replaced with a manual rate-limiter: first event fires after 80 ms quiet (preserves old idle UX), then a 1 s cooldown floor caps sustained-write fire rate at ~1 Hz. A 30 s streaming turn now produces ~30 invalidate events spaced ~1 s apart.
+- **ChatNode pulse + continuation-edge dashed flow strobed off mid-turn** — The `useIsChatNodeRunning` hook's `trust` branch returned only `turnRunning` (hook-driven `currentTurn != null`), and CC fires Stop after EVERY assistant message during tool loops. Each Stop cleared `currentTurn`; the animation went dark until the very last segment landed. Fix: OR all positive signals — `(trust && turnRunning) || hasInFlight || live`. Animation stays on through the turn and decays in 5 s after for a tasteful trailing indicator.
+- **`setModel` / `setEffort` / `setFastMode` didn't apply without a natural respawn** — With `respawnPerSend: false` the existing SDK Query rides the old model until idle timeout (default 30 min) or staleness detection. User changes model in the composer popover, clicks send, still gets the old model. Fix: each setter now marks every live entry with `forceRespawnReason = "settings-changed"` when the value actually changes; `respawnReasonForDispatch` returns it at highest priority. No-op setter calls (same value) skip the flag flip, so re-saving identical settings doesn't trigger spurious spawns.
+- **502 + pile-up on large sessions (~120 MB+)** — The dev's own Loomscope working session hit 120 MB / 38905 lines, where `/api/sessions/<sid>` takes ~4.2 s to serialise the 16.8 MB lite ChatFlow payload. The freshly-throttled 1 Hz invalidate cadence fires faster than the response returns; concurrent refreshes pile up and the vite dev proxy 502s on whichever upstream connection it bails on first. Two-layer mitigation: client-side `refreshSession` dedup + coalesce (at most one in-flight per session, trailing re-run for any invalidate that arrived during) and `timeout: 60_000` / `proxyTimeout: 60_000` pinned on the vite proxy. Real fix tracked as v2.1 Delta-SSE — push record deltas over SSE rather than re-fetching the whole ChatFlow on each change.
+
+### Task list cleanup
+
+- **Any-node-fork (originally v2.1) closed as already-shipped.** ChatNode-level fork (v0.8: right-click any on-chain ChatNode → "fork from here") covers the practical use case; message-level granularity isn't needed.
+- **Delta-SSE promoted from backlog to v2.1 milestone.** Real session size where it bites confirmed; soak-week mitigations buy time but architectural fix is the right next step after 2.0.0 final.
+
+### Tests
+923 vitest (added: setModel/setEffort/setFastMode force-respawn coverage, no-op same-value skip, settings-changed force-respawn even with respawnPerSend=false). Plus a 5-line chokidar empirical probe (not checked in) that pinned the awaitWriteFinish behaviour.
+
 ## [2.0.0-rc.1] — 2026-05-11
 
 First public-facing release candidate. Folds in everything from the v1.1→v1.6 line — v1.0 was canceled (friends-only). After a short rc soak the same code ships as 2.0.0 final.

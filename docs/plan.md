@@ -30,7 +30,9 @@
 | **v1.5** | slash command 子系统 | 输入 `/` 触发 picker（commands + 末尾 custom 项）+ /compact pinned 按钮；先 spike SDK streamInput 是否透传 slash | ✅ shipped |
 | **v1.6** | 启动新 session（≈ 旧 v∞.1）| sidebar"+ 新建"按钮 → SDK `query({prompt, cwd})` 不带 resume → chokidar 自动捡起新 jsonl；草稿模式（空 prompt 不真 spawn）；右键 workspace → 在此创建；viewer 模式 visible-but-disabled 统一 | ✅ shipped |
 | **v2.0.0-rc.1** | 首次公开发布 rc | v1.1→v1.6 全部内容打包为 2.0 rc，friends-only soak；soak 顺利后 promote 2.0.0 final | ✅ shipped 2026-05-11 |
-| **v2.1** | 任意节点 fork（≈ 旧 v∞.3）| SDK `resumeSessionAt: messageId` —— canvas 上点任意 ChatNode（含 assistant / 旁支）作为 fork 起点；原本占着 v2.0 槽位，因 2.0 直接装 v1.1-v1.6 顺延到 v2.1 | |
+| **v2.0.0-rc.2** | soak 期 bugfix | watcher throttle / ChatNode pulse OR-multiplex / setModel force-respawn / 大 session 502 + pile-up（dedup + vite proxy timeout） | ✅ shipped 2026-05-11 |
+| ~~v2.1 任意节点 fork~~ | ❌ 关掉 — 已被 v0.8 ChatNode 级 fork 满足；message-level 没需求 | | — |
+| **v2.1** | **Delta-SSE 重构**（原 backlog 上提）| chokidar 改成读 jsonl byte-offset delta records 推 SSE；客户端 store apply delta；fs.watch 退成 drift detection。trigger: 120 MB session 实测 502 + pile-up，soak 期 mitigation 续命 | 🚧 v2.0 final 后开 |
 
 ## v0.1 — parser（详细）
 

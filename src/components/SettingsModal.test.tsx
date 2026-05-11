@@ -273,7 +273,7 @@ describe("SettingsModal — 4-tab structure (v1.1)", () => {
     render(<SettingsModal open={true} onClose={() => undefined} />);
     fireEvent.click(screen.getByTestId("settings-tab-about"));
     // Loomscope version literal renders.
-    expect(screen.getByText(/2\.0\.0-rc\.1/)).toBeTruthy();
+    expect(screen.getByText(/2\.0\.0-rc\.2/)).toBeTruthy();
     // SDK package note renders.
     expect(screen.getByText(/claude-agent-sdk/)).toBeTruthy();
     // Three slash command runner buttons.
