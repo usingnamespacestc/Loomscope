@@ -203,6 +203,19 @@ export function hydrateFoldedCompactIds(
 // cheap dedupe without re-rendering subscribers.
 const loadInFlight = new Map<string, Promise<SubAgentCacheEntry>>();
 
+// 2026-05-11: refreshSession dedup + coalesce. For large sessions
+// (the 120 MB Loomscope dev session prompted this), each
+// `/api/sessions/<sid>` response is ~4 s — slower than the 1 Hz
+// invalidate cadence from the throttled watcher. Without dedup,
+// concurrent refreshes pile up and the vite proxy 502s on
+// timed-out upstreams.
+//
+// Strategy: at most one in-flight refresh per session. Invalidates
+// arriving during in-flight coalesce into ONE trailing re-run, so
+// we don't lose mid-fetch updates but we don't multiply load either.
+const refreshInFlight = new Map<string, Promise<void>>();
+const refreshPending = new Set<string>();
+
 // v0.10 lazy ChatFlow B5 polish: microtask-coalesced flush buffer for
 // `loadChatNodeWorkflows`. React's effect lifecycle fires children's
 // useEffects BEFORE the parent's, so a ConversationView showing 50
@@ -347,6 +360,33 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
   // subAgentCache 保留（避免 sub-agent drill 视图闪 loading）。失败
   // 不致命，记 log 等下次 SSE 重试。
   refreshSession: async (id) => {
+    // 2026-05-11: dedup + coalesce per `refreshInFlight` jsdoc.
+    // Another refresh is already running — just mark that a new
+    // invalidate arrived and let the in-flight call schedule a
+    // trailing re-run on completion.
+    if (refreshInFlight.has(id)) {
+      refreshPending.add(id);
+      return;
+    }
+    const promise = (async () => {
+      try {
+        await get()._refreshSessionInner(id);
+      } finally {
+        refreshInFlight.delete(id);
+        // If at least one invalidate landed while we were fetching,
+        // run one more refresh so the resulting chatFlow reflects
+        // those updates. Future invalidates during this second pass
+        // get re-coalesced via the same flag.
+        if (refreshPending.delete(id)) {
+          void get().refreshSession(id);
+        }
+      }
+    })();
+    refreshInFlight.set(id, promise);
+    await promise;
+  },
+
+  _refreshSessionInner: async (id) => {
     try {
       const cf = await fetchJson<ChatFlow>(`/api/sessions/${id}`);
       const updated = new Map(get().sessions);

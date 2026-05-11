@@ -333,6 +333,11 @@ export interface SessionSlice {
   // drillStack / foldedCompactIds — and clears `workflowCache` so the
   // lazy hooks pull fresh per-ChatNode workflow data.
   refreshSession: (id: string) => Promise<void>;
+  /** Internal: actual fetch + diff-merge body. Used by `refreshSession`
+   *  through a dedup wrapper. Not a public API — listed on the slice
+   *  type because zustand needs every closure-captured action to be
+   *  visible on the store. */
+  _refreshSessionInner: (id: string) => Promise<void>;
   // EN: bump lastInvalidateAt for `sessionId` to now. Called from the
   // SSE `invalidate` handler in App.tsx so liveness UI flips into
   // active state.

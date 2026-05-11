@@ -21,7 +21,17 @@ export default defineConfig({
   server: {
     port: 5175,
     proxy: {
-      "/api": { target: "http://localhost:5174", changeOrigin: true },
+      // 2026-05-11: large sessions (the dev's own 120 MB Loomscope
+      // session is a real case) take ~4 s to serialise + transmit;
+      // some http-proxy defaults trigger 502 well before that. Pin
+      // both timeouts explicitly to a generous window so the proxy
+      // waits for slow upstream responses instead of bailing.
+      "/api": {
+        target: "http://localhost:5174",
+        changeOrigin: true,
+        timeout: 60_000,
+        proxyTimeout: 60_000,
+      },
     },
   },
   test: {
