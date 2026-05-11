@@ -648,6 +648,18 @@ describe("CSRF middleware", () => {
     });
     expect(res.status).toBe(403);
   });
+
+  // v1.6: /api/fs/* (validate-cwd + mkdir) is on the prefix bypass —
+  // same Mode A rationale as /api/sessions/*. Without this bypass the
+  // new-session modal couldn't validate the cwd or create dirs.
+  it("does NOT 403 /api/fs/validate-cwd without a token", async () => {
+    const res = await app.request("/api/fs/validate-cwd", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN },
+      body: JSON.stringify({ path: "/tmp" }),
+    });
+    expect(res.status).not.toBe(403);
+  });
 });
 
 describe("CORS middleware", () => {

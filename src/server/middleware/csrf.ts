@@ -40,10 +40,12 @@ const CSRF_BYPASS_PATHS = new Set([
 const CSRF_BYPASS_PREFIXES = [
   "/api/sessions/", // /:id/turns, /:id/queue/:itemId, /:id/interrupt,
                     // /:id/permission-prompts/:promptId/decision (v∞.3),
-                    // /:id/trash (v1.x soft-delete)
+                    // /:id/trash (v1.x soft-delete), /new (v1.6)
   "/api/preferences", // GET + PATCH
   "/api/permission-rules", // v∞.3: GET / POST / DELETE
   "/api/trash", // /empty, /:sid/restore, DELETE /:sid (v1.x soft-delete)
+  "/api/fs/", // v1.6: validate-cwd + mkdir — same Mode A trust model
+              // as turns (localhost binding + strict same-origin CORS).
 ];
 
 export function csrfMiddleware(token: string): MiddlewareHandler {
