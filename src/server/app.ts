@@ -2,6 +2,8 @@
 // `index.ts` so unit tests can spin up an app instance against a tmpfs
 // fixture without booting a real listener.
 
+import * as path from "node:path";
+
 import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
 
@@ -32,11 +34,16 @@ import {
 import { turnsRouter } from "@/server/routes/turns";
 import { workspacesRouter } from "@/server/routes/workspaces";
 import { initHookSseForwarder } from "@/server/services/hookSseForwarder";
+import { getOrLoad as getOrLoadCachedChatFlow } from "@/server/services/chatFlowCache";
+import { processFresh as processChatFlowDelta } from "@/server/services/chatFlowDeltaEngine";
+import { findForkClosure } from "@/server/services/forkTree";
 import { locateSessionJsonl } from "@/server/services/locateJsonl";
 import { initPendingPermissionTracker } from "@/server/services/pendingPermissionTracker";
 import { loadPreferences } from "@/server/services/preferences";
 import { realSdkQuery, resolveClaudePath } from "@/server/services/sdkAdapter";
 import { SessionRegistry } from "@/server/services/sessionRegistry";
+import { setMainJsonlChangeHandler } from "@/server/services/sessionWatcher";
+import { loadMergedChatFlowForDelta } from "@/server/services/mergedChatFlowLoader";
 import { TrashService } from "@/server/services/trash";
 import { readTrashSnapshotMeta } from "@/server/services/workspaceScanner";
 
@@ -139,6 +146,48 @@ export function createApp(opts: AppOptions) {
     // hydration attaches state when the session next spawns.
     // 中: 跨重启 restore deferral 记录 + 重新挂 setTimeout。
     void registry.restoreDeferralStateFromDisk();
+  }
+  // v2.1 PR D1: register the delta engine handler. Sessionwatcher
+  // fires this after invalidateSession + the legacy `invalidate` SSE
+  // broadcast, fire-and-forget. We load the fresh ChatFlow via the
+  // SAME cache as the GET /:id route (so we don't duplicate the parse
+  // — both call sites hit the same key), then pipe to the delta
+  // engine which diffs against the per-session snapshot and emits
+  // semantic `delta` SSE events. Skipped in test mode (registry
+  // injected) so unit tests don't pull the watcher pipeline.
+  // 中: PR D1 注册 delta handler。fire-and-forget；用同一 LRU 缓存
+  // 装新 ChatFlow，丢进 delta engine 算 diff，推语义 SSE 事件。
+  if (!opts.registry) {
+    setMainJsonlChangeHandler((sessionId, jsonlPath /* reason */) => {
+      // Fire-and-forget — never throws into the watcher pipeline.
+      // 中: 异步执行，watcher 不阻塞。错误吞到 console。
+      void (async () => {
+        try {
+          const projectDir = path.dirname(jsonlPath);
+          const closure = await findForkClosure({
+            projectDir,
+            entrySessionId: sessionId,
+          });
+          const { chatFlow } = await getOrLoadCachedChatFlow({
+            sessionId,
+            closure,
+            fallbackJsonlPath: jsonlPath,
+            loader: () =>
+              loadMergedChatFlowForDelta({
+                entryJsonlPath: jsonlPath,
+                entrySessionId: sessionId,
+                closure,
+              }),
+          });
+          await processChatFlowDelta(sessionId, chatFlow);
+        } catch (err) {
+          console.warn(
+            "[deltaEngine] main-jsonl change handler failed:",
+            err,
+          );
+        }
+      })();
+    });
   }
   // ccHook router needs `registry.isHookHttpPathEnabled()` for the
   // live HTTP-path gate (PATCH /preferences flips registry's flag,

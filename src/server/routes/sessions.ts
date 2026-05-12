@@ -31,6 +31,7 @@ import {
   getStashedState,
   setStashedState,
 } from "@/server/services/chatFlowCache";
+import { resetSession as resetDeltaSession } from "@/server/services/chatFlowDeltaEngine";
 import { getPendingPermission } from "@/server/services/pendingPermissionTracker";
 import { findForkClosure, type ClosureMember } from "@/server/services/forkTree";
 // Read paths use the with-trash locator so a session that was soft-
@@ -268,7 +269,19 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
         const unsubscribe = subscribe(id, sub);
         stream.onAbort(() => {
           unsubscribe();
-          if (subscriberCount(id) === 0) unwatchSession(id);
+          if (subscriberCount(id) === 0) {
+            unwatchSession(id);
+            // v2.1 PR D1: drop the delta-engine snapshot too so a
+            // fresh reconnection re-emits initial state via the
+            // chatnode-added path (instead of comparing against a
+            // stale snapshot from a previous session that has since
+            // mutated). Snapshot is cheap to rebuild — first delta
+            // batch after reconnect emits one chatnode-added per
+            // node.
+            // 中: 最后一个 SSE 订阅者断开时清 delta 引擎快照，重连
+            // 后第一批 delta 把所有节点当 added 重发，避免对错快照。
+            resetDeltaSession(id);
+          }
         });
         await stream.writeSSE({
           event: "hello",

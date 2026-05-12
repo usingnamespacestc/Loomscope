@@ -119,6 +119,31 @@ export function sidecarSubagentsDir(jsonlPath: string): string {
 const THROTTLE_QUIET_MS = 80;
 const THROTTLE_MAX_WAIT_MS = 1000;
 
+/**
+ * EN (v2.1 PR D1): callback fired after a main-jsonl change has been
+ * processed (cache invalidated, `invalidate` SSE event broadcast).
+ * Used by the delta engine to load the fresh ChatFlow + diff +
+ * broadcast `delta` SSE events. Registered from app.ts at startup;
+ * runs fire-and-forget so it can't block the watcher pipeline.
+ *
+ * 中: 主 jsonl 文件变化处理完之后调的回调（cache 已 invalidate +
+ * SSE invalidate 已 broadcast）。给 delta 引擎用来加载新解析的
+ * ChatFlow + diff + 推 SSE delta 事件。fire-and-forget，不阻塞 watcher。
+ */
+type MainJsonlChangeHandler = (
+  sessionId: string,
+  jsonlPath: string,
+  reason: "change" | "add" | "unlink",
+) => void;
+
+let mainJsonlChangeHandler: MainJsonlChangeHandler | null = null;
+
+export function setMainJsonlChangeHandler(
+  handler: MainJsonlChangeHandler | null,
+): void {
+  mainJsonlChangeHandler = handler;
+}
+
 interface ThrottleState {
   pendingTimer: NodeJS.Timeout | null;
   lastFireAt: number;
@@ -200,6 +225,16 @@ function handleEvent(
         event: "invalidate",
         data: { sessionId, kind: "main", reason, path: filePath },
       });
+      // v2.1 PR D1: parallel delta path. Handler is fire-and-forget;
+      // it loads the fresh ChatFlow + runs the diff engine and
+      // broadcasts `delta` SSE events alongside the `invalidate`
+      // already sent above. Until clients consume `delta` (PR D2)
+      // this is observable only on the SSE stream.
+      // 中: PR D1 并行 delta 通路。handler 异步装一遍新 ChatFlow，
+      // 跑 diff，推 `delta` SSE 事件。PR D2 之前 client 不消费。
+      if (mainJsonlChangeHandler) {
+        mainJsonlChangeHandler(sessionId, filePath, reason);
+      }
     }
     return;
   }
