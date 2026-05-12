@@ -2,8 +2,39 @@
 // "前端状态管理" so future v∞ work can drop SSE / hook handlers into
 // `LiveEventSlice` without rippling across the rest of the store.
 
-import type { ChatFlow } from "@/data/types";
+import type { ChatFlow, ChatNode, WorkflowSummary } from "@/data/types";
 import type { AgentMetadata } from "@/parse/sidecar";
+
+/**
+ * EN (v2.1 PR D2): client-side mirror of the server delta event types
+ * (defined in src/server/services/chatFlowDeltaEngine.ts). Same shapes,
+ * separate definition to avoid a server-module import from client code.
+ *
+ * 中: 服务端 ChatFlowDeltaEvent 的客户端镜像；shape 一样，独立定义
+ * 避免客户端代码从 server 模块拖代码。
+ */
+export type ChatFlowDeltaEvent =
+  | {
+      type: "chatnode-added";
+      seq: number;
+      chatNode: ChatNode;
+    }
+  | {
+      type: "chatnode-summary-updated";
+      seq: number;
+      chatNodeId: string;
+      summary: WorkflowSummary;
+    }
+  | {
+      type: "chatnode-removed";
+      seq: number;
+      chatNodeId: string;
+    }
+  | {
+      type: "checkpoint";
+      seq: number;
+      chatNodeCount: number;
+    };
 
 // ─── UI slice ────────────────────────────────────────────────────────────────
 
@@ -296,6 +327,17 @@ export interface SessionState {
   // 重启 / SSE 断开 → 5s 内自然无指示，不会卡在"running"永久状态。
   // 0 = 从未收到（刚 load，不显示 liveness）。
   lastInvalidateAt: number;
+  /** EN (v2.1 PR D2): last applied delta seq for this session. Set on
+   *  every successful `applyChatFlowDelta` call. Used by the gap
+   *  detector — if an incoming delta's seq != lastDeltaSeq + 1, we
+   *  dropped events and need a full refresh.
+   *  null = never received a delta (fresh load) → first delta seeds
+   *  the baseline without raising a gap.
+   *
+   *  中: 上一条已应用 delta 的 seq。null 表示从未收过 delta（fresh
+   *  load）；下一条直接当 baseline。gap 检测发现错位时强制 full refresh。
+   */
+  lastDeltaSeq: number | null;
 }
 
 export interface SessionSlice {
@@ -338,6 +380,16 @@ export interface SessionSlice {
    *  type because zustand needs every closure-captured action to be
    *  visible on the store. */
   _refreshSessionInner: (id: string) => Promise<void>;
+  /** EN (v2.1 PR D2): apply a freshly-arrived server delta to this
+   *  session's ChatFlow. Implements per-type reducers (chatnode-added /
+   *  chatnode-summary-updated / chatnode-removed / checkpoint) and
+   *  gap detection: if `delta.seq != lastDeltaSeq + 1`, schedules a
+   *  full `refreshSession` and bails (don't apply out-of-order).
+   *
+   *  中: 应用一条服务端推过来的 delta。包含 gap 检测——seq 错位会
+   *  退回 full refresh，避免乱序状态。
+   */
+  applyChatFlowDelta: (sessionId: string, delta: ChatFlowDeltaEvent) => void;
   // EN: bump lastInvalidateAt for `sessionId` to now. Called from the
   // SSE `invalidate` handler in App.tsx so liveness UI flips into
   // active state.

@@ -160,11 +160,46 @@ export default function App() {
               payload.agentId,
               payload.subdir ?? undefined,
             );
-        } else {
-          void useStore.getState().refreshSession(activeId);
         }
+        // v2.1 PR D2 cutover: main-jsonl `invalidate` no longer
+        // triggers a full refresh. Server's parallel `delta` channel
+        // (PR D1) carries the actual chatflow changes; the gap
+        // detector in applyChatFlowDelta + (PR D3's) drift hash
+        // ping are the safety nets. `invalidate` still fires as an
+        // activity signal (handled above by markSessionActivity)
+        // but we drop the heavy 16.8 MB-per-event refresh.
+        // 中: PR D2 切换。main invalidate 不再触发 full refresh，
+        // delta 通道接管。activity 信号还在（liveness 还活），但
+        // 16.8MB 重新拉取去掉了。
       } catch (err) {
         console.error("[loomscope] sse invalidate parse failed:", err);
+      }
+    });
+    // EN (v2.1 PR D2): `delta` SSE event — semantic chatflow diff
+    // pushed by the server-side delta engine (PR D1). Replaces the
+    // old `invalidate` → full GET path for main-jsonl changes.
+    //   - chatnode-added / chatnode-summary-updated / chatnode-removed
+    //     patch the in-memory ChatFlow directly
+    //   - checkpoint at end of each batch validates chatNodeCount
+    //   - per-session seq tracking detects gaps → falls back to full
+    //     refresh
+    // 中: server 推的语义 delta，applyChatFlowDelta 直接 patch；
+    // 监测 seq 缺号或 checkpoint count 不匹配时退回 refreshSession。
+    es.addEventListener("delta", (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          type: string;
+          seq: number;
+          [k: string]: unknown;
+        };
+        useStore.getState().applyChatFlowDelta(
+          activeId,
+          payload as Parameters<
+            ReturnType<typeof useStore.getState>["applyChatFlowDelta"]
+          >[1],
+        );
+      } catch (err) {
+        console.error("[loomscope] sse delta parse failed:", err);
       }
     });
     // v∞.0 PR 2: CC settings.json hook fires reach us via the

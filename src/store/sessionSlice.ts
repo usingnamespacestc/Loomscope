@@ -36,6 +36,7 @@ function blankSessionState(): SessionState {
     error: null,
     lastUpdated: 0,
     lastInvalidateAt: 0,
+    lastDeltaSeq: null,
   };
 }
 
@@ -331,6 +332,11 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         isLoading: false,
         error: null,
         lastUpdated: Date.now(),
+        // v2.1 PR D2: full load establishes a fresh baseline. Clear
+        // lastDeltaSeq so the first delta after this load doesn't
+        // get treated as a gap (it sets the new baseline).
+        // 中: 全量 load 后重置 lastDeltaSeq，让下一条 delta 重起 baseline。
+        lastDeltaSeq: null,
       });
       set({ sessions: updated });
     } catch (err) {
@@ -548,6 +554,11 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         isLoading: false,
         error: null,
         lastUpdated: Date.now(),
+        // v2.1 PR D2: a full refresh re-baselines delta tracking.
+        // Next incoming delta seeds lastDeltaSeq without raising a
+        // false-positive gap.
+        // 中: 全量 refresh 后重置 delta seq baseline。
+        lastDeltaSeq: null,
       });
       set({ sessions: updated });
     } catch (err) {
@@ -577,6 +588,130 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     } catch (err) {
       console.error("[loomscope] refreshSubAgent failed:", err);
     }
+  },
+
+  applyChatFlowDelta: (sessionId, delta) => {
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur || !cur.chatFlow) {
+      // EN: no baseline yet — full refresh first. Don't try to apply
+      // deltas to nothing. App.tsx's invalidate handler is supposed
+      // to drive the initial loadSession; this is a safety net for
+      // a delta arriving before that completes.
+      // 中: 没 baseline 不能 apply delta，让 refreshSession 拉一次。
+      void get().refreshSession(sessionId);
+      return;
+    }
+    // Gap detection. lastDeltaSeq null = first delta after a baseline
+    // load → accept any seq as the new baseline. Otherwise expect
+    // strict +1.
+    // 中: lastDeltaSeq null 表示刚 baseline，任何 seq 都直接当起点；
+    // 否则严格 +1。检测漏号触发 full refresh。
+    const expected =
+      cur.lastDeltaSeq == null ? delta.seq : cur.lastDeltaSeq + 1;
+    if (delta.seq !== expected) {
+      console.warn(
+        `[loomscope] delta seq gap on ${sessionId}: expected ${expected}, got ${delta.seq} — forcing full refresh`,
+      );
+      void get().refreshSession(sessionId);
+      return;
+    }
+    const updated = new Map(sessions);
+    let cf = cur.chatFlow;
+    let workflowCache = cur.workflowCache;
+    let foldedCompactIds = cur.foldedCompactIds;
+    switch (delta.type) {
+      case "chatnode-added": {
+        // EN: dedup — server sometimes re-sends an existing node
+        // (e.g. snapshot was cleared mid-stream and re-built). Treat
+        // duplicate as no-op vs append, matching add-or-replace.
+        // 中: 服务端偶尔重发已有节点，按 add-or-replace 处理。
+        const existsIdx = cf.chatNodes.findIndex((c) => c.id === delta.chatNode.id);
+        if (existsIdx >= 0) {
+          const arr = cf.chatNodes.slice();
+          arr[existsIdx] = delta.chatNode;
+          cf = { ...cf, chatNodes: arr };
+        } else {
+          cf = { ...cf, chatNodes: [...cf.chatNodes, delta.chatNode] };
+        }
+        // Default-fold new compact ChatNodes (mirrors refreshSession behaviour).
+        // 中: 新出现的 compact 默认折叠，跟 refresh 一致。
+        if (isCompactFoldHost(delta.chatNode) && !foldedCompactIds.has(delta.chatNode.id)) {
+          foldedCompactIds = new Set(foldedCompactIds);
+          foldedCompactIds.add(delta.chatNode.id);
+        }
+        break;
+      }
+      case "chatnode-summary-updated": {
+        const idx = cf.chatNodes.findIndex((c) => c.id === delta.chatNodeId);
+        if (idx < 0) {
+          // Updated node not in local — drift. Force refresh.
+          // 中: 更新的节点本地没有，漂了，强 refresh。
+          console.warn(
+            `[loomscope] delta summary-update for unknown ${delta.chatNodeId} — forcing refresh`,
+          );
+          void get().refreshSession(sessionId);
+          return;
+        }
+        const arr = cf.chatNodes.slice();
+        const oldNode = arr[idx];
+        arr[idx] = {
+          ...oldNode,
+          workflow: { ...oldNode.workflow, summary: delta.summary },
+        };
+        cf = { ...cf, chatNodes: arr };
+        // Mark workflow cache stale-while-revalidate (same pattern as
+        // refreshSession's mergedChatNodes branch). Lazy hooks refetch.
+        // 中: workflow.summary 变了 → 工作流 cache 标 stale，懒加载会重拉。
+        const cached = workflowCache.get(delta.chatNodeId);
+        if (cached?.status === "ready" && cached.workflow) {
+          const nextCache = new Map(workflowCache);
+          nextCache.set(delta.chatNodeId, { ...cached, staleSince: Date.now() });
+          workflowCache = nextCache;
+        }
+        break;
+      }
+      case "chatnode-removed": {
+        const next = cf.chatNodes.filter((c) => c.id !== delta.chatNodeId);
+        if (next.length === cf.chatNodes.length) {
+          // No-op — node wasn't there; ignore silently.
+          break;
+        }
+        cf = { ...cf, chatNodes: next };
+        if (foldedCompactIds.has(delta.chatNodeId)) {
+          foldedCompactIds = new Set(foldedCompactIds);
+          foldedCompactIds.delete(delta.chatNodeId);
+        }
+        if (workflowCache.has(delta.chatNodeId)) {
+          const nextCache = new Map(workflowCache);
+          nextCache.delete(delta.chatNodeId);
+          workflowCache = nextCache;
+        }
+        break;
+      }
+      case "checkpoint": {
+        // EN: end-of-batch sanity check. If local chatNode count
+        // doesn't match what server says it has, we missed events.
+        // 中: 一致性自检；count 对不上说明丢事件了，强 refresh。
+        if (cf.chatNodes.length !== delta.chatNodeCount) {
+          console.warn(
+            `[loomscope] checkpoint mismatch on ${sessionId}: server says ${delta.chatNodeCount}, local has ${cf.chatNodes.length} — forcing refresh`,
+          );
+          void get().refreshSession(sessionId);
+          return;
+        }
+        break;
+      }
+    }
+    updated.set(sessionId, {
+      ...cur,
+      chatFlow: cf,
+      workflowCache,
+      foldedCompactIds,
+      lastDeltaSeq: delta.seq,
+      lastUpdated: Date.now(),
+    });
+    set({ sessions: updated });
   },
 
   markSessionActivity: (sessionId) => {
