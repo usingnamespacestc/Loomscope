@@ -41,6 +41,10 @@
 
 import type { ChatFlow, ChatNode, WorkflowSummary } from "@/data/types";
 import { broadcast } from "@/server/services/sseHub";
+import {
+  chatNodeSig,
+  hashFromSigs,
+} from "@/utils/chatFlowSig";
 
 /**
  * EN: per-ChatNode signature used for diff. We deliberately keep this
@@ -59,6 +63,11 @@ interface ChatNodeSignature {
   parentChatNodeId: string | null;
   isCompactSummary: boolean;
   summarySig: string;
+  /** v2.1 PR D3: full chatNodeSig string (for drift hash). Same
+   *  string the client computes locally — matching hashes both
+   *  sides means no drift.
+   *  中: 完整 chatNodeSig，drift hash 用同一串。 */
+  fullSig: string;
 }
 
 interface SessionSnapshot {
@@ -112,6 +121,7 @@ function signatureOf(cn: ChatNode): ChatNodeSignature {
     parentChatNodeId: cn.parentChatNodeId,
     isCompactSummary: cn.isCompactSummary,
     summarySig: summarySig(cn),
+    fullSig: chatNodeSig(cn),
   };
 }
 
@@ -264,6 +274,40 @@ export function resetSession(sessionId: string): void {
  *  detection (PR D3) to broadcast periodic hashes. */
 export function getCurrentSeq(sessionId: string): number {
   return snapshots.get(sessionId)?.seq ?? 0;
+}
+
+/**
+ * EN (v2.1 PR D3): build a drift-ping payload from the current
+ * snapshot. Returns null when no snapshot exists (no chatflow has
+ * been processed for this session yet — drift loop should skip it).
+ *
+ * 中: 用当前 snapshot 算 drift ping 内容，没 snapshot 返回 null。
+ */
+export function buildDriftPing(sessionId: string): {
+  seq: number;
+  chatNodeCount: number;
+  hash: string;
+} | null {
+  const snap = snapshots.get(sessionId);
+  if (!snap) return null;
+  const sigs = Array.from(snap.byId.values(), (s) => s.fullSig);
+  return {
+    seq: snap.seq,
+    chatNodeCount: snap.byId.size,
+    hash: hashFromSigs(sigs),
+  };
+}
+
+/** Test-only — list active session ids. Used by drift broadcaster
+ *  tests + the periodic loop iteration helper. */
+export function _listActiveSessionsForTests(): string[] {
+  return Array.from(snapshots.keys());
+}
+
+/** v2.1 PR D3: enumerate sessions that have a snapshot (= eligible
+ *  for drift ping). Public for the drift-broadcaster timer. */
+export function listSessionsWithSnapshot(): string[] {
+  return Array.from(snapshots.keys());
 }
 
 /** Test-only — inspect snapshot directly. */

@@ -523,6 +523,9 @@ interface Preferences {
   /** v2.0.1 PR C: when on, registry auto-defers turn dispatch when
    *  Anthropic 5h utilization crosses 90%. Default off. */
   autoDeferOnRateLimit: boolean;
+  /** v2.1 PR D3: drift detection period in seconds. 0 = off,
+   *  positive value clamps to [1, 600]. Default 30s. */
+  driftDetectionSec: number;
 }
 
 const DEFAULT_PREFS: Preferences = {
@@ -531,6 +534,7 @@ const DEFAULT_PREFS: Preferences = {
   permissionMode: "default",
   respawnPerSend: true,
   autoDeferOnRateLimit: false,
+  driftDetectionSec: 30,
 };
 
 function usePreferences() {
@@ -562,6 +566,8 @@ function usePreferences() {
             typeof p.autoDeferOnRateLimit === "boolean"
               ? p.autoDeferOnRateLimit
               : false,
+          driftDetectionSec:
+            typeof p.driftDetectionSec === "number" ? p.driftDetectionSec : 30,
         });
       } catch (err) {
         if (!cancelled) {
@@ -607,6 +613,10 @@ function usePreferences() {
             typeof next.autoDeferOnRateLimit === "boolean"
               ? next.autoDeferOnRateLimit
               : cur.autoDeferOnRateLimit,
+          driftDetectionSec:
+            typeof next.driftDetectionSec === "number"
+              ? next.driftDetectionSec
+              : cur.driftDetectionSec,
         }));
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -843,6 +853,49 @@ function SessionRuntimePanel() {
         </p>
         <p className="mt-1 text-[10px] italic text-amber-700">
           {t("settings.runtime.auto_defer_subscriber_caveat")}
+        </p>
+      </section>
+
+      {/* v2.1 PR D3: drift detection period. 0 = disable; positive
+          value runs a server-wide timer that broadcasts a chatflow
+          hash, client compares + force-refresh on mismatch. */}
+      {/* 中: drift 检测周期；0 关。catch reducer / SSE 漏发的兜底。 */}
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.runtime.section_drift_detection")}
+        </h3>
+        <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
+          {t("settings.runtime.drift_detection_description")}
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            data-testid="settings-runtime-drift-sec"
+            min={0}
+            max={600}
+            value={prefs.driftDetectionSec}
+            onChange={(e) =>
+              setPrefs((p) => ({
+                ...p,
+                driftDetectionSec: Number(e.target.value) || 0,
+              }))
+            }
+            onBlur={() =>
+              void patch({ driftDetectionSec: prefs.driftDetectionSec })
+            }
+            disabled={saving}
+            className="w-20 rounded border border-gray-300 px-2 py-1 text-xs"
+          />
+          <span className="text-xs text-gray-600">
+            {t("settings.runtime.drift_unit_seconds")}
+          </span>
+        </div>
+        <p className="mt-1 text-[10px] italic text-gray-400">
+          {prefs.driftDetectionSec === 0
+            ? t("settings.runtime.drift_off_hint")
+            : t("settings.runtime.drift_on_hint", {
+                sec: prefs.driftDetectionSec,
+              })}
         </p>
       </section>
 

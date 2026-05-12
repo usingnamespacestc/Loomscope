@@ -166,6 +166,19 @@ export interface LoomscopePreferences {
    * resetsAt 到时自动恢复。仅 Claude.ai 订阅触发。default 关。
    */
   autoDeferOnRateLimit: boolean;
+  /**
+   * EN (v2.1 PR D3): drift detection period in seconds. 0 disables.
+   * Server periodically (every N sec) computes a deterministic hash
+   * of each active session's chatflow + broadcasts as a `drift-ping`
+   * SSE event. Clients compare against their local hash; mismatch
+   * forces a full refresh.
+   *
+   * Default 30s. Range [0, 600] — 0 = off; positive values clamp in.
+   *
+   * 中: drift 检测周期（秒）。0 关闭。每 N 秒 server 算 hash 推
+   * client，对不上就强制 refresh。默认 30s。
+   */
+  driftDetectionSec: number;
 }
 
 const DEFAULTS: LoomscopePreferences = {
@@ -177,6 +190,7 @@ const DEFAULTS: LoomscopePreferences = {
   enableHookSdkPath: true,
   interactiveMode: true,
   autoDeferOnRateLimit: false,
+  driftDetectionSec: 30,
 };
 
 const PERMISSION_MODE_VALUES: LoomscopePermissionMode[] = [
@@ -255,6 +269,11 @@ function normalize(raw: unknown): LoomscopePreferences {
     typeof autoDeferRaw === "boolean"
       ? autoDeferRaw
       : DEFAULTS.autoDeferOnRateLimit;
+  const driftRaw = r["driftDetectionSec"];
+  const driftDetectionSec =
+    typeof driftRaw === "number" && Number.isFinite(driftRaw)
+      ? clamp(Math.round(driftRaw), 0, 600)
+      : DEFAULTS.driftDetectionSec;
   return {
     idleTimeoutMin: idle,
     useApiKey,
@@ -264,6 +283,7 @@ function normalize(raw: unknown): LoomscopePreferences {
     enableHookSdkPath,
     interactiveMode,
     autoDeferOnRateLimit,
+    driftDetectionSec,
   };
 }
 

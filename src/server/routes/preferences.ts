@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 
+import { setDriftDetectionInterval } from "@/server/services/driftDetection";
 import {
   loadPreferences,
   savePreferences,
@@ -27,6 +28,7 @@ const patchSchema = z.object({
   enableHookSdkPath: z.boolean().optional(),
   interactiveMode: z.boolean().optional(),
   autoDeferOnRateLimit: z.boolean().optional(),
+  driftDetectionSec: z.number().optional(),
 });
 
 export interface PreferencesRouterOptions {
@@ -68,6 +70,13 @@ export function preferencesRouter(opts: PreferencesRouterOptions = {}) {
       if (patch.autoDeferOnRateLimit !== undefined) {
         opts.registry.setAutoDeferOnRateLimit(merged.autoDeferOnRateLimit);
       }
+    }
+    // v2.1 PR D3: drift interval lives outside the registry (it's a
+    // server-wide timer, not a per-session thing). Update directly
+    // here when the patch carried a new value.
+    // 中: drift 是 server 级定时器，不挂 registry；PATCH 直接动这里。
+    if (patch.driftDetectionSec !== undefined) {
+      setDriftDetectionInterval(merged.driftDetectionSec);
     }
     return c.json(merged);
   });

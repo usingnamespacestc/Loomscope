@@ -383,7 +383,12 @@
       "auto_defer_label": "撞 5h 90% 自动暂停 + 重置后自动恢复",
       "auto_defer_on_hint": "已启用：撞 90% 暂停 + 排队 + 自动恢复。banner 显示倒计时；可点 立即重试 强制恢复（Anthropic 真没恢复时会再次自动暂停）",
       "auto_defer_off_hint": "已禁用：行为同 Claude Code 原生——Anthropic 自己的警告 + 100% 时拒绝；你撞上配额自行处理",
-      "auto_defer_subscriber_caveat": "⚠ 仅 Claude.ai 订阅（Pro / Max）触发；API key 用户不会收到 rate_limit_event，此项无效"
+      "auto_defer_subscriber_caveat": "⚠ 仅 Claude.ai 订阅（Pro / Max）触发；API key 用户不会收到 rate_limit_event，此项无效",
+      "section_drift_detection": "Delta-SSE 漂移检测周期",
+      "drift_detection_description": "v2.1 Delta-SSE 用 server 推的语义事件保持客户端状态同步。理论上 client 跟 server 始终一致；但万一 reducer 有 bug / SSE 漏发，状态会静默漂移。这里设的周期是 server 多久算一次本地 chatflow hash + 推给客户端做对比；client 算出不一致会自动 refresh 强同步。设 0 完全关闭；正值钳到 [1, 600] 秒。",
+      "drift_unit_seconds": "秒（0=关闭）",
+      "drift_on_hint": "已启用：每 {{sec}} 秒一次 hash 对比。CPU/网络都可忽略，bug 兜底",
+      "drift_off_hint": "已禁用：不再做 hash 校验，纯靠 delta 序列保证一致性"
     },
     "hooks": {
       "loading": "加载中…",

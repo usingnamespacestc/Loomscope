@@ -36,6 +36,7 @@ import { workspacesRouter } from "@/server/routes/workspaces";
 import { initHookSseForwarder } from "@/server/services/hookSseForwarder";
 import { getOrLoad as getOrLoadCachedChatFlow } from "@/server/services/chatFlowCache";
 import { processFresh as processChatFlowDelta } from "@/server/services/chatFlowDeltaEngine";
+import { setDriftDetectionInterval } from "@/server/services/driftDetection";
 import { findForkClosure } from "@/server/services/forkTree";
 import { locateSessionJsonl } from "@/server/services/locateJsonl";
 import { initPendingPermissionTracker } from "@/server/services/pendingPermissionTracker";
@@ -140,6 +141,11 @@ export function createApp(opts: AppOptions) {
       registry.setEnableHookHttpPath(p.enableHookHttpPath);
       registry.setEnableHookSdkPath(p.enableHookSdkPath);
       registry.setAutoDeferOnRateLimit(p.autoDeferOnRateLimit);
+      // v2.1 PR D3: start the drift-detection timer at the persisted
+      // period. PATCH /api/preferences switches it live without
+      // restart.
+      // 中: 启动 drift 周期定时器。PATCH 可热切。
+      setDriftDetectionInterval(p.driftDetectionSec);
     });
     // v2.0.1 PR B: rebuild any deferred-queue records persisted from
     // a prior server lifetime. Timer fires at original resetsAt; entry

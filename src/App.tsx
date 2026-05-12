@@ -32,6 +32,7 @@ import { TrashedSessionBanner } from "@/components/TrashedSessionBanner";
 import { Sidebar } from "@/components/Sidebar";
 import { useKeyboardNav } from "@/hooks/useKeyboardNav";
 import { useStore } from "@/store/index";
+import { chatFlowHash } from "@/utils/chatFlowSig";
 import {
   resolveDrillView,
   type DrillBreadcrumbItem,
@@ -200,6 +201,47 @@ export default function App() {
         );
       } catch (err) {
         console.error("[loomscope] sse delta parse failed:", err);
+      }
+    });
+    // EN (v2.1 PR D3): drift-ping. Server periodically emits its
+    // chatflow hash; client recomputes the same hash on local state
+    // and forces a refreshSession if they diverge. Backstop for
+    // reducer bugs that advance seq correctly but mutate state wrong.
+    //
+    // 中: drift 检测。客户端用同算法算本地 hash 跟 server 推的对，
+    // 不一致就强制 refresh。reducer 漏 case / 静默漂时兜底。
+    es.addEventListener("drift-ping", (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          sessionId: string;
+          seq: number;
+          chatNodeCount: number;
+          hash: string;
+        };
+        if (payload.sessionId !== activeId) return;
+        const s = useStore.getState().sessions.get(activeId);
+        if (!s?.chatFlow) return;
+        const localCount = s.chatFlow.chatNodes.length;
+        if (localCount !== payload.chatNodeCount) {
+          console.warn(
+            `[loomscope] drift detected on ${activeId}: server count ${payload.chatNodeCount} != local ${localCount}`,
+          );
+          void useStore.getState().refreshSession(activeId);
+          return;
+        }
+        // Lazy hash: only compute when count matches (most common path
+        // is "all good" so skip the hash compute when count already
+        // disagrees).
+        // 中: count 对得上才算 hash，常态省 CPU。
+        const localHash = chatFlowHash(s.chatFlow.chatNodes);
+        if (localHash !== payload.hash) {
+          console.warn(
+            `[loomscope] drift detected on ${activeId}: server hash ${payload.hash} != local ${localHash}`,
+          );
+          void useStore.getState().refreshSession(activeId);
+        }
+      } catch (err) {
+        console.error("[loomscope] sse drift-ping parse failed:", err);
       }
     });
     // v∞.0 PR 2: CC settings.json hook fires reach us via the

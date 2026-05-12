@@ -383,7 +383,12 @@
       "auto_defer_label": "Pause at 90% / resume after reset",
       "auto_defer_on_hint": "Enabled: pause at 90% + queue + auto-resume on reset. Banner shows countdown; '立即重试' button forces resume (will re-arm if Anthropic still rejects).",
       "auto_defer_off_hint": "Disabled: behaves like vanilla Claude Code — Anthropic's own progressive warnings + outright rejection at 100%. You handle quota yourself.",
-      "auto_defer_subscriber_caveat": "⚠ Only fires for Claude.ai subscribers (Pro / Max). API-key users never see rate_limit_event so this toggle has no effect."
+      "auto_defer_subscriber_caveat": "⚠ Only fires for Claude.ai subscribers (Pro / Max). API-key users never see rate_limit_event so this toggle has no effect.",
+      "section_drift_detection": "Delta-SSE drift detection period",
+      "drift_detection_description": "v2.1 Delta-SSE keeps the client in sync via semantic events pushed by the server. In theory client state always matches server; in practice a reducer bug or SSE drop can silently drift them apart. This period controls how often the server hashes the chatflow and broadcasts it for the client to verify; mismatch forces a full refresh. 0 disables; positive values clamp to [1, 600] seconds.",
+      "drift_unit_seconds": "seconds (0 = off)",
+      "drift_on_hint": "Enabled: hash check every {{sec}} seconds. CPU + network cost is negligible; safety net for drift bugs.",
+      "drift_off_hint": "Disabled: no hash verification — trust the delta sequence alone."
     },
     "hooks": {
       "loading": "Loading…",

@@ -338,6 +338,20 @@ describe("SettingsModal — 4-tab structure (v1.1)", () => {
     });
   });
 
+  it("v2.1 PR D3: Runtime tab shows the drift detection seconds input (default 30)", async () => {
+    render(<SettingsModal open={true} onClose={() => undefined} />);
+    fireEvent.click(screen.getByTestId("settings-tab-runtime"));
+    await waitFor(() => {
+      const input = screen.getByTestId(
+        "settings-runtime-drift-sec",
+      ) as HTMLInputElement;
+      expect(input).toBeTruthy();
+      // Default 30s — mock response doesn't set the field, falls back via DEFAULT_PREFS.
+      // 中: 默认 30s。
+      expect(Number(input.value)).toBe(30);
+    });
+  });
+
   it("Runtime tab shows Viewer/Interactive mode toggle and PATCHes interactiveMode", async () => {
     let lastPatchBody: Record<string, unknown> | null = null;
     vi.restoreAllMocks();
