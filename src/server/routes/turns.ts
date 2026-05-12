@@ -210,6 +210,34 @@ export function turnsRouter(opts: TurnsRouterOptions) {
     },
   );
 
+  // v2.0.1 PR B: Force-clear an active rate-limit deferral. The banner's
+  // "立即重试" button calls this. Server clears the gate and triggers
+  // maybeDispatch — if Anthropic still rejects (utilization not actually
+  // back), CC will emit another rate_limit_event and the gate re-arms.
+  // 中: 取消 deferral 强制恢复。Anthropic 真没恢复时 CC 会再 fire 事件 + 自动 re-arm。
+  app.post(
+    "/:id/deferral/clear",
+    zValidator("param", z.object({ id: z.string().regex(SESSION_ID_RE) })),
+    async (c) => {
+      const { id } = c.req.valid("param");
+      const cleared = await opts.registry.clearDeferral(id);
+      return c.json({ cleared });
+    },
+  );
+
+  // v2.0.1 PR B: read-only snapshot of the deferral state. SSE late-
+  // join path — when a browser tab opens after the event already
+  // fired, fetch this to render the banner without missing the SSE.
+  app.get(
+    "/:id/deferral",
+    zValidator("param", z.object({ id: z.string().regex(SESSION_ID_RE) })),
+    async (c) => {
+      const { id } = c.req.valid("param");
+      const state = opts.registry.getDeferralState(id);
+      return c.json(state ?? { deferralUntilEpoch: null, reason: null });
+    },
+  );
+
   return app;
 }
 

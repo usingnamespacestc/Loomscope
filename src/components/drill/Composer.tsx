@@ -45,6 +45,7 @@ import { useTranslation } from "react-i18next";
 import { postNewSession } from "@/api/newSession";
 import { postInterrupt, postTurn } from "@/api/turns";
 import { ConfirmBanner } from "@/components/ConfirmBanner";
+import { DeferralBanner } from "@/components/drill/DeferralBanner";
 import { findLatestLeafId } from "@/components/drill/pathUtils";
 import { useStore } from "@/store/index";
 import { getInflight } from "@/store/sdkChannelSlice";
@@ -1022,6 +1023,12 @@ export function Composer({
             </span>
           </div>
         )}
+        {/* v2.0.1 PR B: rate-limit deferral banner. Renders when the
+            session is in an active deferral (5h utilization >= 90%
+            with auto-defer setting on). Component self-gates on
+            store.deferralBySession + does its own countdown tick. */}
+        {/* 中: 5h 撞 90% 且开了自动暂停时显示；组件自己读 store + 倒计时。 */}
+        <DeferralBanner sessionId={sessionId} />
         {/* Pending count line was removed in PR 3 — full pending
             bubble UI now renders inline in ConversationView's path
             tail (showPendingQueue prop). */}

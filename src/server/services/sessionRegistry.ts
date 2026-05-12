@@ -31,6 +31,8 @@
 // 浏览器断开不影响。优先级队列对齐 CC 内部 now/next/later 语义。
 
 import { promises as fsp } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 import * as crypto from "node:crypto";
 
@@ -147,6 +149,33 @@ interface SessionEntry {
    *  PR B 用它判断是否要中断 + 冻结 queue。第一次事件到达前为 null。
    */
   lastRateLimit: SDKRateLimitInfo | null;
+  /** 2026-05-12 (v2.0.1 PR B): when set, `maybeDispatch` refuses to
+   *  pop from `pendingPrompts` until `Date.now() >= deferralUntilEpoch`.
+   *  Cleared by `clearDeferral` (timer fires, user clicks 立即重试,
+   *  or session closes). Stored in epoch ms.
+   *
+   *  中: 自动延迟到期时间戳（ms）。设了之后 maybeDispatch 不发新 turn。
+   */
+  deferralUntilEpoch: number | null;
+  /** 2026-05-12 (v2.0.1 PR B): why we deferred. Snapshot of the
+   *  triggering rate_limit_event for UI display. Null when not
+   *  deferred. */
+  deferralReason: DeferralReason | null;
+}
+
+/**
+ * EN (v2.0.1 PR B): snapshot of the rate_limit_event that triggered
+ * deferral. Used by the SSE broadcast + persistence file so the UI
+ * banner can show "5h 配额 90%, T-XhYm" without re-reading the
+ * underlying SDK event.
+ *
+ * 中: 触发 deferral 的事件快照。banner 拿这显示百分比/重置时间。
+ */
+export interface DeferralReason {
+  utilization: number;
+  rateLimitType: string;
+  surpassedThreshold?: number;
+  startedAt: number;
 }
 
 /**
@@ -405,6 +434,15 @@ export interface SessionRegistryOptions {
    *  install but only one matches libc. Resolved at startup in
    *  `app.ts` (see `resolveClaudePath`). */
   pathToClaudeCodeExecutable?: string;
+  /** v2.0.1 PR B: when true + a rate_limit_event with utilization >=
+   *  `autoDeferThreshold` (default 0.9) lands, registry calls
+   *  query.interrupt() on the in-flight turn and gates further
+   *  dispatches via `deferralUntilEpoch` until `resetsAt`. Live
+   *  update via `setAutoDeferOnRateLimit`. Default false. */
+  autoDeferOnRateLimit?: boolean;
+  /** Persistence root for deferral state (~/.loomscope by default).
+   *  Tests override to a temp dir to avoid touching the real home. */
+  deferralStateDir?: string;
 }
 
 /** v∞.3 PR1: a pending permission prompt awaiting browser response.
@@ -663,6 +701,242 @@ export class SessionRegistry {
     this.opts.useApiKey = useApiKey;
   }
 
+  /** v2.0.1 PR B: live-update the auto-defer-on-rate-limit toggle.
+   *  Takes effect on the NEXT rate_limit_event (or, if already in a
+   *  deferred state and the user flips this off, calling
+   *  `clearDeferral` separately is required — we don't auto-resume
+   *  on toggle off to avoid surprising the user with an immediate
+   *  send burst). Default false (opt-in). */
+  setAutoDeferOnRateLimit(enabled: boolean): void {
+    this.opts.autoDeferOnRateLimit = enabled;
+  }
+
+  /** v2.0.1 PR B: snapshot of an entry's current deferral state.
+   *  Returns null when the session isn't tracked or isn't deferred.
+   *  Used by SSE late-join replay so a browser tab opening mid-
+   *  deferral sees the banner immediately, and by tests. */
+  getDeferralState(sessionId: string): {
+    deferralUntilEpoch: number;
+    reason: DeferralReason;
+  } | null {
+    const e = this.entries.get(sessionId);
+    if (!e || e.deferralUntilEpoch == null || e.deferralReason == null) {
+      return null;
+    }
+    return {
+      deferralUntilEpoch: e.deferralUntilEpoch,
+      reason: e.deferralReason,
+    };
+  }
+
+  /** v2.0.1 PR B: force-clear a session's deferral (banner "立即重试"
+   *  button + auto-resume timer call this). Cancels the pending
+   *  setTimeout if any, clears the entry fields, broadcasts a
+   *  deferral-cleared SSE event, and triggers maybeDispatch in case
+   *  the user has queued prompts waiting. Persists the resulting
+   *  state. */
+  async clearDeferral(sessionId: string): Promise<boolean> {
+    const e = this.entries.get(sessionId);
+    if (!e || e.deferralUntilEpoch == null) return false;
+    const t = this.deferralTimers.get(sessionId);
+    if (t) {
+      clearTimeout(t);
+      this.deferralTimers.delete(sessionId);
+    }
+    e.deferralUntilEpoch = null;
+    e.deferralReason = null;
+    await this.persistDeferralState();
+    broadcast(sessionId, {
+      event: "sdk-deferral",
+      data: { sessionId, deferralUntilEpoch: null, reason: null },
+    });
+    // Fire-and-forget dispatch — if pending prompts accumulated
+    // during deferral, they'll go out now.
+    void this.maybeDispatch(e);
+    return true;
+  }
+
+  /** v2.0.1 PR B: trigger deferral for a session. Called from
+   *  handleSdkFrame's rate_limit_event branch when:
+   *    1. `opts.autoDeferOnRateLimit` is true
+   *    2. `info.status` is 'allowed_warning' or 'rejected'
+   *    3. `info.utilization >= 0.9`
+   *    4. `info.rateLimitType === 'five_hour'` (scope decision —
+   *       7d added in a follow-up)
+   *    5. `info.resetsAt` is present (without it we can't schedule)
+   *
+   *  Actions: interrupt the running turn, gate maybeDispatch, set
+   *  the timer, persist, broadcast.
+   *
+   *  Idempotent — re-firing for an already-deferred entry just
+   *  refreshes resetsAt + reason in case the window slid.
+   */
+  private async triggerDeferral(
+    entry: SessionEntry,
+    info: SDKRateLimitInfo,
+  ): Promise<void> {
+    if (info.resetsAt == null) return;
+    if (info.utilization == null) return;
+    const untilEpoch = info.resetsAt * 1000;
+    const now = Date.now();
+    // Clamp to a sane minimum (1s in the future) so a near-past
+    // resetsAt doesn't fire the timer in the past.
+    // 中: resetsAt 已过期或时钟偏差时，最少等 1s 再恢复。
+    const deferralUntilEpoch = Math.max(untilEpoch, now + 1000);
+    entry.deferralUntilEpoch = deferralUntilEpoch;
+    entry.deferralReason = {
+      utilization: info.utilization,
+      rateLimitType: info.rateLimitType ?? "five_hour",
+      surpassedThreshold: info.surpassedThreshold,
+      startedAt: now,
+    };
+    // Interrupt the in-flight turn if any. Best-effort; some Query
+    // implementations may throw if there's no current run.
+    // 中: 中断进行中的 turn——已经发的请求 server-side 可能仍计费。
+    if (entry.state === "running" && entry.query) {
+      try {
+        await entry.query.interrupt();
+      } catch (err) {
+        console.warn(
+          "[sessionRegistry] interrupt() during deferral threw:",
+          err,
+        );
+      }
+    }
+    // Replace any existing timer for this session (re-fire case).
+    const existing = this.deferralTimers.get(entry.sessionId);
+    if (existing) clearTimeout(existing);
+    const t = setTimeout(() => {
+      this.deferralTimers.delete(entry.sessionId);
+      void this.clearDeferral(entry.sessionId);
+    }, deferralUntilEpoch - now);
+    if (typeof t.unref === "function") t.unref();
+    this.deferralTimers.set(entry.sessionId, t);
+    await this.persistDeferralState();
+    broadcast(entry.sessionId, {
+      event: "sdk-deferral",
+      data: {
+        sessionId: entry.sessionId,
+        deferralUntilEpoch,
+        reason: entry.deferralReason,
+      },
+    });
+  }
+
+  /** v2.0.1 PR B: write the current deferral state of all entries to
+   *  `~/.loomscope/deferred-queue.json` so server restart can rebuild
+   *  the timers. Only entries with active deferrals are written; the
+   *  file is overwritten atomically on every change. */
+  private async persistDeferralState(): Promise<void> {
+    const records: Array<{
+      sessionId: string;
+      deferralUntilEpoch: number;
+      reason: DeferralReason;
+    }> = [];
+    for (const [sid, e] of this.entries) {
+      if (e.deferralUntilEpoch != null && e.deferralReason != null) {
+        records.push({
+          sessionId: sid,
+          deferralUntilEpoch: e.deferralUntilEpoch,
+          reason: e.deferralReason,
+        });
+      }
+    }
+    const dir = this.opts.deferralStateDir ?? path.join(os.homedir(), ".loomscope");
+    const file = path.join(dir, "deferred-queue.json");
+    try {
+      await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
+      const tmp = `${file}.tmp.${process.pid}.${Date.now()}`;
+      await fsp.writeFile(tmp, JSON.stringify(records, null, 2) + "\n", "utf8");
+      await fsp.rename(tmp, file);
+    } catch (err) {
+      console.warn(
+        "[sessionRegistry] persistDeferralState failed:",
+        err,
+      );
+    }
+  }
+
+  /** v2.0.1 PR B: read persisted deferral records at startup. Called
+   *  by `app.ts` after constructing the registry so timers get
+   *  rebuilt for sessions deferred across a server restart. Records
+   *  whose resetsAt is already past are immediately cleared (the
+   *  resume action is a maybeDispatch — but since the entry isn't
+   *  spawned yet on startup, it's a no-op; clearing on the lazy
+   *  spawn side handles it). */
+  async restoreDeferralStateFromDisk(): Promise<void> {
+    const dir = this.opts.deferralStateDir ?? path.join(os.homedir(), ".loomscope");
+    const file = path.join(dir, "deferred-queue.json");
+    try {
+      const txt = await fsp.readFile(file, "utf8");
+      const records = JSON.parse(txt) as Array<{
+        sessionId: string;
+        deferralUntilEpoch: number;
+        reason: DeferralReason;
+      }>;
+      if (!Array.isArray(records)) return;
+      const now = Date.now();
+      this.pendingDeferralRecords = new Map();
+      for (const r of records) {
+        if (r.deferralUntilEpoch <= now) continue;
+        this.pendingDeferralRecords.set(r.sessionId, r);
+        // Pre-schedule the timer even though entry isn't spawned yet.
+        // When the entry spawns, attachPendingDeferral() picks it up.
+        const t = setTimeout(() => {
+          this.pendingDeferralRecords?.delete(r.sessionId);
+          void this.clearDeferral(r.sessionId);
+        }, r.deferralUntilEpoch - now);
+        if (typeof t.unref === "function") t.unref();
+        this.deferralTimers.set(r.sessionId, t);
+      }
+    } catch {
+      /* file missing / parse error / etc — defer nothing */
+    }
+  }
+
+  /** v2.0.1 PR B: timer + pre-spawn deferral state. Populated by
+   *  triggerDeferral; cleared by clearDeferral. Across-restart
+   *  records sit in `pendingDeferralRecords` until the entry spawns
+   *  and attachPendingDeferral hydrates them onto the entry. */
+  private deferralTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private pendingDeferralRecords?: Map<
+    string,
+    {
+      sessionId: string;
+      deferralUntilEpoch: number;
+      reason: DeferralReason;
+    }
+  >;
+
+  /** v2.0.1 PR B: when a session spawns (lazy on first activity) and
+   *  there's a persisted deferral record waiting for it, hydrate the
+   *  entry's fields so the gate kicks in. Called from spawn paths. */
+  private attachPendingDeferral(entry: SessionEntry): void {
+    const rec = this.pendingDeferralRecords?.get(entry.sessionId);
+    if (!rec) return;
+    this.pendingDeferralRecords?.delete(entry.sessionId);
+    if (rec.deferralUntilEpoch <= Date.now()) {
+      // Already expired — clean up the timer slot we registered at
+      // startup, just in case.
+      const t = this.deferralTimers.get(entry.sessionId);
+      if (t) {
+        clearTimeout(t);
+        this.deferralTimers.delete(entry.sessionId);
+      }
+      return;
+    }
+    entry.deferralUntilEpoch = rec.deferralUntilEpoch;
+    entry.deferralReason = rec.reason;
+    broadcast(entry.sessionId, {
+      event: "sdk-deferral",
+      data: {
+        sessionId: entry.sessionId,
+        deferralUntilEpoch: rec.deferralUntilEpoch,
+        reason: rec.reason,
+      },
+    });
+  }
+
   /** Live-update the permission mode preference. Same NEXT-spawn
    *  caveat as `setUseApiKey` — the SDK options snapshot at spawn
    *  time, so flipping this only affects sessions spawned after
@@ -899,6 +1173,8 @@ export class SessionRegistry {
       hasServedTurn: false,
       forceRespawnReason: null,
       lastRateLimit: null,
+      deferralUntilEpoch: null,
+      deferralReason: null,
     };
 
     // Start the Query with the AsyncIterable input form so we can
@@ -1023,6 +1299,11 @@ export class SessionRegistry {
     });
     entry.query = query;
     this.entries.set(sessionId, entry);
+    // v2.0.1 PR B: if a persisted deferral record was waiting for
+    // this session (server restart mid-deferral), hydrate it onto
+    // the entry so maybeDispatch's gate kicks in immediately.
+    // 中: 跨重启的 deferral 记录在这里 attach 到 entry，让 gate 立即生效。
+    this.attachPendingDeferral(entry);
 
     // Snapshot the jsonl size at spawn time as the staleness baseline.
     // This is what `respawnPerSend=false` mode compares against on
@@ -1200,8 +1481,12 @@ export class SessionRegistry {
       hasServedTurn: false,
       forceRespawnReason: null,
       lastRateLimit: null,
+      deferralUntilEpoch: null,
+      deferralReason: null,
     };
     this.entries.set(sid, entry);
+    // v2.0.1 PR B: see spawn() for rationale.
+    this.attachPendingDeferral(entry);
 
     // Process the first frame the same way driveQueryMessages would.
     await this.handleSdkFrame(entry, firstMsg);
@@ -1406,6 +1691,29 @@ export class SessionRegistry {
           event: "sdk-rate-limit",
           data: snapshot,
         });
+        // v2.0.1 PR B: auto-defer trigger. Gate: setting on +
+        // status is warning/rejected + utilization >= 0.9 + scope
+        // is five_hour (7d added in a follow-up). The triggerDeferral
+        // method interrupts the in-flight turn + sets the gate +
+        // persists + schedules the resume timer.
+        // 中: 撞 90% 五小时阈值 + 设置开启 → 启动 deferral：
+        // 中断进行中 turn + 拦截后续 dispatch + 排队 resetsAt 恢复。
+        if (
+          this.opts.autoDeferOnRateLimit === true &&
+          (snapshot.status === "allowed_warning" || snapshot.status === "rejected") &&
+          (snapshot.utilization ?? 0) >= 0.9 &&
+          snapshot.rateLimitType === "five_hour"
+        ) {
+          void this.triggerDeferral(entry, snapshot);
+        } else if (snapshot.status === "allowed") {
+          // Reset/relief event — if we were deferred and the window
+          // came back, clear the gate proactively rather than wait
+          // for the timer (which may also fire later, no-op then).
+          // 中: 限额已恢复 → 提前清除 deferral，不等定时器。
+          if (entry.deferralUntilEpoch != null) {
+            void this.clearDeferral(entry.sessionId);
+          }
+        }
       }
       return;
     }
@@ -1439,6 +1747,16 @@ export class SessionRegistry {
     if (entry.state === "running") return;
     if (entry.pendingPrompts.length === 0) return;
     if (!entry.pumpController) return;
+    // v2.0.1 PR B: rate-limit deferral gate. When 90%+ warning fired
+    // and we're inside the cool-down, refuse to dispatch new turns.
+    // The pending queue accumulates and shows in the banner — the
+    // resume timer (or user clicking "立即重试") clears the gate and
+    // re-enters this path via maybeDispatch.
+    // 中: 撞阈值后 cool-down 内拒发新 turn。Queue 累积，等定时器或
+    // 用户手动 resume 才放行。
+    if (entry.deferralUntilEpoch != null && Date.now() < entry.deferralUntilEpoch) {
+      return;
+    }
 
     // Dual-writer race mitigation: before we drive the next turn,
     // decide whether the existing Query is fresh enough to trust.

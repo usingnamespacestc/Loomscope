@@ -428,6 +428,12 @@
       "snippet_label": "settings.json hooks 段（合并到 ~/.claude/settings.json）",
       "copy": "📋 复制",
       "copied": "✓ 已复制"
+    },
+    "deferral": {
+      "window_5h": "5h 配额",
+      "resets_in": "重置剩余",
+      "retry_now": "立即重试",
+      "retry_now_tooltip": "强制恢复发送。如果 Anthropic 仍拒绝，会再次进入暂停。"
     }
   }
 }

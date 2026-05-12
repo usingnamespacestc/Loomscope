@@ -132,7 +132,13 @@ export function createApp(opts: AppOptions) {
       registry.setRespawnPerSend(p.respawnPerSend);
       registry.setEnableHookHttpPath(p.enableHookHttpPath);
       registry.setEnableHookSdkPath(p.enableHookSdkPath);
+      registry.setAutoDeferOnRateLimit(p.autoDeferOnRateLimit);
     });
+    // v2.0.1 PR B: rebuild any deferred-queue records persisted from
+    // a prior server lifetime. Timer fires at original resetsAt; entry
+    // hydration attaches state when the session next spawns.
+    // 中: 跨重启 restore deferral 记录 + 重新挂 setTimeout。
+    void registry.restoreDeferralStateFromDisk();
   }
   // ccHook router needs `registry.isHookHttpPathEnabled()` for the
   // live HTTP-path gate (PATCH /preferences flips registry's flag,

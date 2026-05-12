@@ -342,6 +342,34 @@ export default function App() {
       }
     });
 
+    // EN (v2.0.1 PR B): deferral state transitions. Server emits this
+    // when the auto-defer engine arms (90% warning + setting on) or
+    // disarms (timer fires / user clicks 立即重试 / rate-limit
+    // cleared event). Banner above composer renders based on this.
+    //
+    // 中: deferral 状态切换。server 在 arm/disarm 时 emit；banner 用。
+    es.addEventListener("sdk-deferral", (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          sessionId: string;
+          deferralUntilEpoch: number | null;
+          reason: {
+            utilization: number;
+            rateLimitType: string;
+            surpassedThreshold?: number;
+            startedAt: number;
+          } | null;
+        };
+        if (payload.sessionId !== activeId) return;
+        useStore.getState().applyDeferralEvent(activeId, {
+          deferralUntilEpoch: payload.deferralUntilEpoch,
+          reason: payload.reason,
+        });
+      } catch {
+        /* ignore */
+      }
+    });
+
     // sdk-respawn-notice: emitted by SessionRegistry's race-
     // mitigation path before close+respawn. Composer renders a brief
     // banner (see docs/dual-writer-race-mitigation.md) so the user

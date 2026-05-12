@@ -142,6 +142,30 @@ export interface LoomscopePreferences {
    * points must check it before rendering.
    */
   interactiveMode: boolean;
+  /**
+   * EN (v2.0.1 PR B): when true, on Anthropic rate-limit warning
+   * (utilization >= autoDeferThreshold, e.g. 90%), Loomscope:
+   *   1. Calls `query.interrupt()` on the running turn (if any).
+   *   2. Holds the entry's `deferralUntilEpoch` so `maybeDispatch`
+   *      refuses to dispatch new turns from `pendingPrompts` until
+   *      the rate-limit window resets.
+   *   3. Schedules a `setTimeout` at `resetsAt` to auto-resume the
+   *      gated queue (or restores it on lifespan startup from
+   *      `~/.loomscope/deferred-queue.json` if the server restarted
+   *      meanwhile).
+   *
+   * Gated upstream: rate-limit events only fire for Claude.ai
+   * subscription users (Pro / Max). API-key auth never trips this.
+   *
+   * Default: `false` (opt-in). Users on Max-x5 with heavy multi-
+   * session workloads benefit most; light users may prefer to keep
+   * burning through limits + getting Anthropic's own rejection
+   * messages.
+   *
+   * 中: 撞 90% 阈值时自动中断当前 turn + 冻结后续 dispatch，
+   * resetsAt 到时自动恢复。仅 Claude.ai 订阅触发。default 关。
+   */
+  autoDeferOnRateLimit: boolean;
 }
 
 const DEFAULTS: LoomscopePreferences = {
@@ -152,6 +176,7 @@ const DEFAULTS: LoomscopePreferences = {
   enableHookHttpPath: true,
   enableHookSdkPath: true,
   interactiveMode: true,
+  autoDeferOnRateLimit: false,
 };
 
 const PERMISSION_MODE_VALUES: LoomscopePermissionMode[] = [
@@ -225,6 +250,11 @@ function normalize(raw: unknown): LoomscopePreferences {
     typeof interactiveModeRaw === "boolean"
       ? interactiveModeRaw
       : DEFAULTS.interactiveMode;
+  const autoDeferRaw = r["autoDeferOnRateLimit"];
+  const autoDeferOnRateLimit =
+    typeof autoDeferRaw === "boolean"
+      ? autoDeferRaw
+      : DEFAULTS.autoDeferOnRateLimit;
   return {
     idleTimeoutMin: idle,
     useApiKey,
@@ -233,6 +263,7 @@ function normalize(raw: unknown): LoomscopePreferences {
     enableHookHttpPath,
     enableHookSdkPath,
     interactiveMode,
+    autoDeferOnRateLimit,
   };
 }
 

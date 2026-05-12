@@ -830,6 +830,243 @@ describe("SessionRegistry", () => {
       expect(captured.length).toBe(1);
     });
   });
+
+  describe("v2.0.1 PR B — rate-limit auto-defer", () => {
+    function emitRateLimitEvent(
+      fake: FakeQuery,
+      info: {
+        status: "allowed" | "allowed_warning" | "rejected";
+        resetsAt?: number;
+        utilization?: number;
+        rateLimitType?: string;
+        surpassedThreshold?: number;
+      },
+    ): void {
+      fake.emit({ type: "rate_limit_event", rate_limit_info: info });
+    }
+
+    it("90% five_hour warning interrupts in-flight turn + gates next dispatch", async () => {
+      const { factory, spawned } = makeFactory();
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+        respawnPerSend: false,
+        autoDeferOnRateLimit: true,
+        deferralStateDir: "/tmp/loomscope-defer-test-1",
+      });
+      await reg.enqueueTurn(SID, CWD, {
+        text: "running",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      const q = spawned[0];
+      q.emitInit(SID);
+      await flush();
+      const resetsAt = Math.floor(Date.now() / 1000) + 60; // 60s from now
+      emitRateLimitEvent(q, {
+        status: "allowed_warning",
+        utilization: 0.9,
+        resetsAt,
+        rateLimitType: "five_hour",
+        surpassedThreshold: 0.9,
+      });
+      await flush();
+      expect(q.interruptCalls).toBe(1);
+      // Deferral state should be set + getDeferralState returns it.
+      // 中: 应该已经记录 deferral 状态。
+      const state = reg.getDeferralState(SID);
+      expect(state).not.toBeNull();
+      expect(state!.deferralUntilEpoch).toBeGreaterThan(Date.now());
+      expect(state!.reason.utilization).toBe(0.9);
+      expect(state!.reason.rateLimitType).toBe("five_hour");
+      // New turns get queued but maybeDispatch refuses to dispatch
+      // (no second spawn fires).
+      // 中: 撞阈值后再 enqueue 不应该触发新 spawn。
+      await reg.enqueueTurn(SID, CWD, {
+        text: "blocked",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      expect(spawned.length).toBe(1);
+    });
+
+    it("does NOT defer when setting is off", async () => {
+      const { factory, spawned } = makeFactory();
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+        respawnPerSend: false,
+        autoDeferOnRateLimit: false, // <— off
+        deferralStateDir: "/tmp/loomscope-defer-test-2",
+      });
+      await reg.enqueueTurn(SID, CWD, {
+        text: "running",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      const q = spawned[0];
+      q.emitInit(SID);
+      await flush();
+      emitRateLimitEvent(q, {
+        status: "allowed_warning",
+        utilization: 0.9,
+        resetsAt: Math.floor(Date.now() / 1000) + 60,
+        rateLimitType: "five_hour",
+      });
+      await flush();
+      expect(q.interruptCalls).toBe(0);
+      expect(reg.getDeferralState(SID)).toBeNull();
+    });
+
+    it("does NOT defer below the 90% threshold (75% warning passes through)", async () => {
+      const { factory, spawned } = makeFactory();
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+        respawnPerSend: false,
+        autoDeferOnRateLimit: true,
+        deferralStateDir: "/tmp/loomscope-defer-test-3",
+      });
+      await reg.enqueueTurn(SID, CWD, {
+        text: "running",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      const q = spawned[0];
+      q.emitInit(SID);
+      await flush();
+      emitRateLimitEvent(q, {
+        status: "allowed_warning",
+        utilization: 0.75,
+        resetsAt: Math.floor(Date.now() / 1000) + 60,
+        rateLimitType: "five_hour",
+      });
+      await flush();
+      // 75% is just a warning, not the auto-defer threshold.
+      expect(q.interruptCalls).toBe(0);
+      expect(reg.getDeferralState(SID)).toBeNull();
+    });
+
+    it("does NOT defer for seven_day window (scope decision)", async () => {
+      const { factory, spawned } = makeFactory();
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+        respawnPerSend: false,
+        autoDeferOnRateLimit: true,
+        deferralStateDir: "/tmp/loomscope-defer-test-4",
+      });
+      await reg.enqueueTurn(SID, CWD, {
+        text: "running",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      const q = spawned[0];
+      q.emitInit(SID);
+      await flush();
+      emitRateLimitEvent(q, {
+        status: "allowed_warning",
+        utilization: 0.95,
+        resetsAt: Math.floor(Date.now() / 1000) + 86400,
+        rateLimitType: "seven_day",
+      });
+      await flush();
+      expect(reg.getDeferralState(SID)).toBeNull();
+    });
+
+    it("clearDeferral force-resumes dispatch", async () => {
+      const { factory, spawned } = makeFactory();
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+        respawnPerSend: false,
+        autoDeferOnRateLimit: true,
+        deferralStateDir: "/tmp/loomscope-defer-test-5",
+      });
+      await reg.enqueueTurn(SID, CWD, {
+        text: "first",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      const q = spawned[0];
+      q.emitInit(SID);
+      await flush();
+      emitRateLimitEvent(q, {
+        status: "allowed_warning",
+        utilization: 0.9,
+        resetsAt: Math.floor(Date.now() / 1000) + 3600,
+        rateLimitType: "five_hour",
+      });
+      await flush();
+      // Resolve the first turn so the gate's the only thing blocking.
+      // 中: 让第一个 turn 结束，确保剩下的只有 deferral 在 block。
+      q.emitResult();
+      await flush();
+      // Now queue a second turn — should be gated.
+      await reg.enqueueTurn(SID, CWD, {
+        text: "queued",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      // Clear the deferral — second turn dispatches.
+      // 中: 清 deferral 后应该 dispatch 之前的 queue。
+      const cleared = await reg.clearDeferral(SID);
+      expect(cleared).toBe(true);
+      expect(reg.getDeferralState(SID)).toBeNull();
+    });
+
+    it("allowed status event clears an active deferral early", async () => {
+      const { factory, spawned } = makeFactory();
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "bypassPermissions",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+        respawnPerSend: false,
+        autoDeferOnRateLimit: true,
+        deferralStateDir: "/tmp/loomscope-defer-test-6",
+      });
+      await reg.enqueueTurn(SID, CWD, {
+        text: "first",
+        images: [],
+        priority: "next",
+      });
+      await flush();
+      const q = spawned[0];
+      q.emitInit(SID);
+      await flush();
+      emitRateLimitEvent(q, {
+        status: "allowed_warning",
+        utilization: 0.9,
+        resetsAt: Math.floor(Date.now() / 1000) + 3600,
+        rateLimitType: "five_hour",
+      });
+      await flush();
+      expect(reg.getDeferralState(SID)).not.toBeNull();
+      // Window reset signal arrives.
+      // 中: 配额恢复事件 — 应该提前解除 deferral。
+      emitRateLimitEvent(q, { status: "allowed" });
+      await flush();
+      expect(reg.getDeferralState(SID)).toBeNull();
+    });
+  });
 });
 
 // Yields once to let pending microtasks (in the async pump driver

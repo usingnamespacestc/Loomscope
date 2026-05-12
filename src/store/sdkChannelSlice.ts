@@ -55,6 +55,24 @@ export interface SdkRateLimitInfo {
   receivedAt: number;
 }
 
+/**
+ * EN (v2.0.1 PR B): rate-limit deferral state per session. When
+ * `deferralUntilEpoch != null && Date.now() < deferralUntilEpoch`,
+ * the auto-defer banner shows above the composer. Server emits
+ * `sdk-deferral` SSE events for trigger / clear transitions.
+ *
+ * 中: 每 session 的 deferral 状态。banner 据此显示+倒计时。
+ */
+export interface SdkDeferralState {
+  deferralUntilEpoch: number | null;
+  reason: {
+    utilization: number;
+    rateLimitType: string;
+    surpassedThreshold?: number;
+    startedAt: number;
+  } | null;
+}
+
 export interface SdkInflight {
   state: SdkSessionState;
   currentRun: { promptItemId: string; startedAt: number } | null;
@@ -119,6 +137,18 @@ export interface SdkChannelSlice {
    * 中: 收到 rate_limit_event SSE 后 set 进去；总是覆盖（最新即权威）。
    */
   applyRateLimitEvent: (sessionId: string, info: SdkRateLimitInfo) => void;
+
+  /**
+   * EN (v2.0.1 PR B): per-session deferral state map. Banner reads
+   * here to show "等 reset T-XhYm" cooldown.
+   *
+   * 中: 每 session 的 deferral 状态，banner 用。
+   */
+  deferralBySession: Map<string, SdkDeferralState>;
+
+  /** Apply an `sdk-deferral` SSE payload. Null reason+epoch clears.
+   *  中: 收到 `sdk-deferral` 时调；null 表示解除。 */
+  applyDeferralEvent: (sessionId: string, state: SdkDeferralState) => void;
 }
 
 export const createSdkChannelSlice: StateCreator<
@@ -129,6 +159,7 @@ export const createSdkChannelSlice: StateCreator<
 > = (set, get) => ({
   inflightBySession: new Map(),
   rateLimitBySession: new Map(),
+  deferralBySession: new Map(),
 
   applySdkQueueState: (sessionId, payload) => {
     const cur = get().inflightBySession.get(sessionId) ?? EMPTY_INFLIGHT;
@@ -180,14 +211,17 @@ export const createSdkChannelSlice: StateCreator<
     }
     // Genuine close (idle eviction, shutdown, abnormal subprocess
     // exit) — drop the entry entirely so no stale state lingers.
-    // PR A: also drop the rate-limit snapshot — a fresh spawn will
-    // re-emit on its own threshold crossing if applicable.
-    // 中: 真正关 session 时 rate-limit 缓存也清；下次 spawn 自己会再触发。
+    // PR A/B: drop rate-limit + deferral snapshots. Fresh spawn re-
+    // emits rate-limit on its own threshold crossing; server-side
+    // deferral persistence handles cross-restart hydration.
+    // 中: 关 session 时 rate-limit + deferral 缓存都清。
     const m = new Map(get().inflightBySession);
     m.delete(sessionId);
     const r = new Map(get().rateLimitBySession);
     r.delete(sessionId);
-    set({ inflightBySession: m, rateLimitBySession: r });
+    const d = new Map(get().deferralBySession);
+    d.delete(sessionId);
+    set({ inflightBySession: m, rateLimitBySession: r, deferralBySession: d });
   },
 
   setSdkError: (sessionId, message) => {
@@ -212,6 +246,18 @@ export const createSdkChannelSlice: StateCreator<
     const m = new Map(get().rateLimitBySession);
     m.set(sessionId, info);
     set({ rateLimitBySession: m });
+  },
+
+  applyDeferralEvent: (sessionId, state) => {
+    const m = new Map(get().deferralBySession);
+    // Treat "fully null" as clear → drop the entry to keep the map small.
+    // 中: 双 null 视为清除，删 map 项保持 lean。
+    if (state.deferralUntilEpoch == null && state.reason == null) {
+      m.delete(sessionId);
+    } else {
+      m.set(sessionId, state);
+    }
+    set({ deferralBySession: m });
   },
 });
 

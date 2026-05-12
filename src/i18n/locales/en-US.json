@@ -428,6 +428,12 @@
       "snippet_label": "settings.json hooks block (merge into ~/.claude/settings.json)",
       "copy": "📋 Copy",
       "copied": "✓ Copied"
+    },
+    "deferral": {
+      "window_5h": "5h quota",
+      "resets_in": "resets in",
+      "retry_now": "retry now",
+      "retry_now_tooltip": "Force-resume sending. If Anthropic still rejects, deferral re-arms."
     }
   }
 }
