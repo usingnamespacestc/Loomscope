@@ -31,10 +31,13 @@ import {
   useSessionLiveness,
 } from "@/store/livenessHooks";
 import { deleteQueueItem } from "@/api/turns";
+import { Lightbox, type LightboxContent } from "@/components/Lightbox";
 import { LazyMarkdownView } from "@/components/MarkdownView";
 import {
+  extractBlocks,
   extractText,
   packStartIdx,
+  type UserBlock,
 } from "@/components/drill/conversationHelpers";
 import {
   findLatestLeafInSubtree,
@@ -843,6 +846,159 @@ function PendingBubble({
 // command preview as the assistant text — keeps the conversation
 // readable without cluttering with implementation noise.
 //
+// EN (v2.0.1): per-block renderer for multimodal user content.
+// Iterates extractBlocks output in order, picking the right widget
+// per kind:
+//   - text  → <LazyMarkdownView> (markdown formatting preserved)
+//   - image → <img> thumbnail clamped to max-h-64; click opens
+//             Lightbox at full resolution.
+//   - file  → chip with icon + filename + media-type. If the file
+//             is `text/*` AND we have base64 data, click opens
+//             Lightbox in text mode (decoded preview). Non-text or
+//             missing data files are non-interactive chips for now.
+//   - unknown → small "[block: <type>]" debug chip. Visible-not-
+//             swallowed: when CC adds a new block kind we'll spot
+//             it in the UI without code changes.
+// All blocks render inside the parent bubble's prose container so
+// they share the blue-message background.
+//
+// 中: 多模态用户内容的逐块渲染器。按顺序遍历 extractBlocks 结果，
+// 按 kind 选 widget：text 用 markdown；image 是缩略图，点开
+// Lightbox 看大图；file 是 chip，文本类型可点开 Lightbox 看正文；
+// unknown 显示 `[block: <type>]` 调试 chip——CC schema 升级出新
+// block 类型时不会被静默吞。
+function UserContentBlocks({
+  blocks,
+  onOpenLightbox,
+}: {
+  blocks: ReadonlyArray<UserBlock>;
+  onOpenLightbox: (c: LightboxContent) => void;
+}) {
+  return (
+    <>
+      {blocks.map((block, i) => {
+        if (block.kind === "text") {
+          return (
+            <div key={i} data-block-index={i} data-block-kind="text">
+              <LazyMarkdownView>{block.text}</LazyMarkdownView>
+            </div>
+          );
+        }
+        if (block.kind === "image") {
+          const src = `data:${block.mediaType};base64,${block.data}`;
+          return (
+            <button
+              key={i}
+              type="button"
+              data-block-index={i}
+              data-block-kind="image"
+              data-testid="user-image-block"
+              className="my-1 block cursor-zoom-in rounded overflow-hidden border border-blue-400 bg-blue-400/20 p-0"
+              onClick={(e) => {
+                // EN: don't propagate to bubble click (= chatnode select).
+                // 中: 阻止冒泡，避免点图片同时触发气泡选中。
+                e.stopPropagation();
+                onOpenLightbox({ kind: "image", src });
+              }}
+              title="点击查看大图"
+            >
+              <img
+                src={src}
+                alt=""
+                className="block max-h-64 max-w-full"
+              />
+            </button>
+          );
+        }
+        if (block.kind === "file") {
+          const isText = block.mediaType.startsWith("text/");
+          const canPreview = isText && !!block.data;
+          const label =
+            block.filename ??
+            block.mediaType ??
+            "attachment";
+          const chip = (
+            <div className="my-1 inline-flex items-center gap-1.5 rounded border border-blue-300 bg-blue-400/20 px-2 py-1 text-[12px]">
+              <span>📎</span>
+              <span className="font-mono break-all">{label}</span>
+              {!canPreview && (
+                <span className="text-[10px] text-blue-100/80">
+                  {block.mediaType}
+                </span>
+              )}
+            </div>
+          );
+          if (canPreview) {
+            return (
+              <button
+                key={i}
+                type="button"
+                data-block-index={i}
+                data-block-kind="file"
+                data-testid="user-file-block"
+                className="block cursor-pointer text-left p-0"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  // EN: decode base64 → utf-8 text. atob handles base64;
+                  // TextDecoder handles utf-8 round trip from the byte
+                  // array so non-ASCII filenames/content render correctly.
+                  // Bad/non-utf8 bytes degrade gracefully (decoder
+                  // substitutes the unicode replacement char).
+                  // 中: base64 → utf-8 文本。TextDecoder 兼容非 ASCII；
+                  // 解码失败用替换字符兜底，不抛错。
+                  let text = "";
+                  try {
+                    const binary = atob(block.data ?? "");
+                    const bytes = new Uint8Array(binary.length);
+                    for (let j = 0; j < binary.length; j += 1) {
+                      bytes[j] = binary.charCodeAt(j);
+                    }
+                    text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+                  } catch {
+                    text = "[failed to decode attachment]";
+                  }
+                  onOpenLightbox({
+                    kind: "text",
+                    text,
+                    filename: block.filename,
+                  });
+                }}
+                title="点击查看文件内容"
+              >
+                {chip}
+              </button>
+            );
+          }
+          return (
+            <div
+              key={i}
+              data-block-index={i}
+              data-block-kind="file"
+              data-testid="user-file-block"
+            >
+              {chip}
+            </div>
+          );
+        }
+        // unknown — surface visibly so schema drift doesn't silently
+        // swallow data.
+        // 中: 未知 type，显示出来防止 schema 漂移被静默吞。
+        return (
+          <div
+            key={i}
+            data-block-index={i}
+            data-block-kind="unknown"
+            data-testid="user-unknown-block"
+            className="my-1 text-[10px] text-blue-100/70 italic"
+          >
+            [block: {block.type}]
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 // Wrapped in React.memo (export below) so DrillPanel resize-drag
 // (60 fps store updates) doesn't force every visible bubble's
 // MarkdownView to re-parse. With stable parent callbacks
@@ -885,6 +1041,27 @@ function MessageBubbleImpl({
   disableAutoFetch?: boolean;
 }) {
   const userText = useMemo(() => extractText(chatNode.userMessage.content), [chatNode]);
+  // EN (v2.0.1): multimodal user content. extractBlocks returns the
+  // full ordered block list (text + image + future file) so the
+  // bubble can render images inline in the order the user sent them.
+  // `userText` is preserved for copy / token estimation.
+  // 中: 多模态。extractBlocks 拿到完整有序 block 列表（文/图/未来
+  // 文件），气泡按发送顺序内联渲染；userText 给复制按钮 + 估算用。
+  const userBlocks = useMemo(
+    () => extractBlocks(chatNode.userMessage.content),
+    [chatNode],
+  );
+  const hasUserContent = userBlocks.length > 0;
+  // EN: bubble-local lightbox state. Single instance per bubble is
+  // fine — only one image (or future file preview) is open at a time
+  // per user click. Lightbox portal-renders so layering isn't an
+  // issue. Local-state keeps Lightbox decoupled from the global
+  // store; if a second site (canvas hover preview etc.) wants the
+  // same UI, we can hoist into a context later.
+  // 中: 气泡本地 lightbox 状态。一次只开一个图/文件预览，本地
+  // useState 够用；Lightbox 用 portal，不会跟 bubble 层级打架。
+  // 未来如果别处也要用同一套，再抽到 context。
+  const [lightbox, setLightbox] = useState<LightboxContent | null>(null);
   // v0.10 lazy ChatFlow B5: full assistant markdown lives on
   // workflow.nodes which the lite endpoint strips. ConversationView
   // owns the staggered fetch sequencing for the visible slice (passes
@@ -1079,11 +1256,15 @@ function MessageBubbleImpl({
         isRunning ? "loomscope-running-pulse" : "",
       ].join(" ")}
     >
-      {userText && (
+      {hasUserContent && (
         <div className="mb-2 flex items-end justify-end gap-2">
-          {/* "复制" sits to the LEFT of the bubble, bottom-aligned. */}
+          {/* "复制" sits to the LEFT of the bubble, bottom-aligned.
+              Copy still operates on text-only (extractText), images
+              and files are skipped — putting base64 on the clipboard
+              would be useless to the user. */}
+          {/* 中: 复制按钮只复制文字部分（base64 复制到剪贴板没意义）。 */}
           <CopyButton
-            text={userText}
+            text={userText ?? ""}
             role="user"
             chatNodeId={chatNode.id}
             tone="light"
@@ -1099,11 +1280,17 @@ function MessageBubbleImpl({
               its preferred width follows the bubble's max-content. */}
           <div className="max-w-[calc(100%-3rem)]">
             <div className="prose prose-sm prose-invert max-w-none rounded-2xl bg-blue-500 px-3 py-2 text-[13px] text-white break-words">
-              <LazyMarkdownView>{userText}</LazyMarkdownView>
+              <UserContentBlocks
+                blocks={userBlocks}
+                onOpenLightbox={setLightbox}
+              />
             </div>
           </div>
         </div>
       )}
+      {/* Lightbox portal — renders to body when content != null. */}
+      {/* 中: lightbox 通过 portal 挂 body，content=null 关闭。 */}
+      <Lightbox content={lightbox} onClose={() => setLightbox(null)} />
       {/* v0.9.1 round 2: render EVERY assistant round (each
           llm_call.text) + the tool calls each round invoked (Claude
           Desktop-style collapsible pills). Tools indent under their

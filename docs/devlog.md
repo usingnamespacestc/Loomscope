@@ -6,6 +6,61 @@
 
 ---
 
+## 2026-05-12 — v2.0.1：用户消息多模态渲染（图片内联 + Lightbox + 文件 chip）
+
+作者在用 rc.2 soak 期间发了张图片，发现对话面板里**根本没显示**——只有 `📎 1` 的计数 chip。开了个 mini-task 把多模态用户消息渲染补完。
+
+### Gap diagnose
+
+```
+ChatNodeBubble:887  → userText = extractText(content)
+extractText        → 只抽 type:"text" block，image / document / 未知 type 一律跳过
+```
+
+数据其实完整存在：CC 把 image block 原样写进 jsonl（`{type:"image", source:{type:"base64", media_type, data}}`），parser `InnerImageBlock` 用 `[key:string]:unknown` passthrough 保留全部字段。**问题只在渲染层**——把 image block 喂给 `extractText` 它直接跳过。零新数据流需求。
+
+### 设计决策
+
+选项 B（**按 block 原顺序内联渲染**）vs A（图统一在文字下方）。作者选 B，理由："忠实回放"是 Loomscope 的产品定位，发送顺序应该被保留。
+
+同时考虑：
+1. **多图同发** — flex 顺序排列即可，每图独占一行。
+2. **未来文本文件** — 当前 CC 已经支持 `{type:"document", source:{...}}` 块。预先把 `kind:"file"` 走通，text/* media-type 自动可点击预览。
+3. **未知 block type** — 显式 `[block: <type>]` chip。CC schema 升级出新 block 时不会被静默吞，让作者一眼能看到 schema 漂移。
+
+### 实现
+
+- `src/components/Lightbox.tsx` — 新组件。Portal-mount 到 body；点空白/Esc/✕ 关闭；image 模式 = 自适应大图；text 模式 = 等宽预格式滚动框。**全应用通用**——未来 canvas hover preview、attachment 大图、文件原文都复用这一个。
+- `extractBlocks(content)` in `conversationHelpers.ts` — 把 polymorphic content 收敛到 `UserBlock[]`：`text | image | file | unknown`。`extractText` 保留给复制按钮 + token 估算用（base64 复制到剪贴板没意义）。
+- `<UserContentBlocks>` 私有组件 in `ConversationView.tsx` — 按 block 顺序遍历：text 走 `LazyMarkdownView`；image 走 `<button><img max-h-64/></button>` + `cursor-zoom-in`；file 走 chip，`text/*` + 有 data 时可点击解码 base64 走 text Lightbox；unknown 走调试 chip。
+- 每个 bubble 自己持有 `useState<LightboxContent|null>`。Portal 处理层级，不会跨气泡冲突。
+
+### 测试覆盖
+
+`conversationHelpers.test.ts`（新文件，13 cases）：
+- `extractText` 4 cases（兼容 string/array/混合/纯图）
+- `extractBlocks` 9 cases（string/empty/有序混合/多图/默认 media_type/document+filename/file/未知 type/空文本块/malformed entries）
+
+`ConversationView.test.tsx`（+4 cases）：
+- text+image+text 顺序渲染
+- 点击 image 打开 Lightbox 验证 src + 点 backdrop 关闭
+- 多图按顺序渲染
+- text/plain 文件 chip 显示 filename + 点击打开 text Lightbox 含解码后内容
+
+940 tests 全绿（foldProjection 256MB 那个老 flake 在 isolation 跑过）。
+
+### 没做的事（明确放回 backlog）
+
+- **PendingBubble 图片预览**：当前 store 里 pending 状态只有 `imageCount: number`，base64 在 server-side queue 里。要在 pending 阶段显示需要把 base64 通过 `sdk-queue-state` SSE 推过来。1-2 秒过渡态显示 `📎 N` 占位可接受，跳过。
+- **Lightbox 键盘左右切换**（多图时）：当前只支持 Esc 关闭。多图想"翻页查看"再说。
+- **大文件 / 二进制下载**：当前非 `text/*` 文件只显示 chip 不可点击。需要时加 "下载" 按钮。
+
+### 经验
+
+**渲染层 bug 比信号链 bug 好 debug 100 倍**：rc.2 几个 bug 都是 SSE-throttle-state-machine 链路问题，要 empirical probe + 多信号 OR 才能定位；这次是纯渲染层 gap，10 分钟 grep + 看 helper 函数就钉死了 root cause。设计阶段保留可观察的中间层（独立 helper + 独立组件）是高 ROI 投资。
+
+---
+
 ## 2026-05-11 — v2.0.0-rc.2：live-observation pipeline 四个 bug 串修
 
 rc.1 在 05-10 晚 ship 给作者自己 soak。当晚试用就把"实时观察"这条故事线撞穿了四个独立 bug，全部跟 SSE / chokidar / 状态机相关。当天连发 4 个 fix commit + cut rc.2。

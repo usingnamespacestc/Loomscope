@@ -39,6 +39,91 @@ export function extractText(content: unknown): string | null {
   return null;
 }
 
+// EN: Multimodal user-content normaliser. CC's `userMessage.content`
+// is polymorphic — a bare string for legacy turns, or an array of
+// Anthropic-style blocks (text / image / document / future kinds) for
+// any multimodal turn. The conversation bubble needs to render these
+// inline IN ORDER (text → image → text → image), not just yank out
+// the text portion. `extractText` (above) is preserved for the
+// copy-to-clipboard button + token estimator, which only care about
+// the textual portion. This function returns a typed, ordered list
+// the renderer can switch on without re-implementing the schema
+// sniffing logic per call site.
+//
+// Schema sniffing tolerates malformed blocks: unknown `type` strings
+// land in a `unknown` variant so we surface them visibly rather than
+// silently swallow data we didn't expect (catches CC schema drift
+// during upgrades). Image / file blocks read both `source.media_type`
+// and `media_type` (loose form seen in some CC versions) and gracefully
+// degrade to "application/octet-stream" when missing.
+//
+// 中: 多模态用户内容标准化器。CC 的 userMessage.content 可能是裸
+// string（老格式）或 Anthropic 风格的 block 数组（多模态）。气泡
+// 需要按 block 原顺序内联渲染（文 图 文 图 文），不能只抽文本。
+// extractText 留给复制按钮 + token 估算（只关心文字）；本函数返回
+// 有类型的有序数组，渲染层直接 switch 即可，避免多处重复嗅探。
+// 未知 type 落入 `unknown` 变体，让用户能看到（CC schema 漂移时
+// 不会被静默吞掉）。
+export type UserBlock =
+  | { kind: "text"; text: string }
+  | { kind: "image"; mediaType: string; data: string }
+  | {
+      kind: "file";
+      mediaType: string;
+      data?: string;
+      filename?: string;
+    }
+  | { kind: "unknown"; type: string };
+
+export function extractBlocks(content: unknown): UserBlock[] {
+  if (typeof content === "string") {
+    return content.length > 0 ? [{ kind: "text", text: content }] : [];
+  }
+  if (!Array.isArray(content)) return [];
+  const out: UserBlock[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as Record<string, unknown>;
+    const t = typeof b.type === "string" ? b.type : null;
+    if (t === "text" && typeof b.text === "string") {
+      if (b.text.length > 0) out.push({ kind: "text", text: b.text });
+      continue;
+    }
+    if (t === "image") {
+      const src = (b.source as Record<string, unknown> | undefined) ?? {};
+      const mediaType =
+        typeof src.media_type === "string"
+          ? src.media_type
+          : typeof b.media_type === "string"
+            ? (b.media_type as string)
+            : "image/png";
+      const data = typeof src.data === "string" ? src.data : "";
+      if (data.length > 0) out.push({ kind: "image", mediaType, data });
+      continue;
+    }
+    if (t === "document" || t === "file") {
+      const src = (b.source as Record<string, unknown> | undefined) ?? {};
+      const mediaType =
+        typeof src.media_type === "string"
+          ? src.media_type
+          : typeof b.media_type === "string"
+            ? (b.media_type as string)
+            : "application/octet-stream";
+      const data = typeof src.data === "string" ? src.data : undefined;
+      const filename =
+        typeof b.filename === "string"
+          ? b.filename
+          : typeof b.name === "string"
+            ? (b.name as string)
+            : undefined;
+      out.push({ kind: "file", mediaType, data, filename });
+      continue;
+    }
+    if (t) out.push({ kind: "unknown", type: t });
+  }
+  return out;
+}
+
 // Return EVERY non-empty llm_call.text from a workflow, in DAG-array
 // order (= turn order, since the parser appends nodes as they appear
 // in the JSONL stream). One ChatNode often contains multiple

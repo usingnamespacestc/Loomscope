@@ -519,6 +519,96 @@ describe("ConversationView — content rendering", () => {
     expect(screen.getByText("user prompt")).toBeTruthy();
   });
 
+  it("v2.0.1: image blocks in user message render as inline thumbnails", () => {
+    // Test fixture: user message with text + image + text mixed.
+    // The bubble should render the image as a clickable thumbnail in
+    // the original block order, sitting between the two text blocks.
+    // 中: 测试 user message 含 text+image+text 时按顺序内联渲染。
+    const node = cn("a", null, "", "ack");
+    node.userMessage.content = [
+      { type: "text", text: "see this" },
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "AAAA" },
+      },
+      { type: "text", text: "what do you think?" },
+    ] as unknown as string;
+    const cf = flow([node]);
+    seed(cf, "a");
+    render(<ConversationView sessionId={SID} chatFlow={cf} />);
+    const imgBlock = screen.getByTestId("user-image-block");
+    expect(imgBlock).toBeTruthy();
+    const img = imgBlock.querySelector("img");
+    expect(img?.getAttribute("src")).toBe("data:image/png;base64,AAAA");
+    expect(screen.getByText("see this")).toBeTruthy();
+    expect(screen.getByText("what do you think?")).toBeTruthy();
+  });
+
+  it("v2.0.1: clicking image thumbnail opens Lightbox overlay", () => {
+    const node = cn("a", null, "", "ack");
+    node.userMessage.content = [
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/jpeg", data: "ZZ" },
+      },
+    ] as unknown as string;
+    const cf = flow([node]);
+    seed(cf, "a");
+    render(<ConversationView sessionId={SID} chatFlow={cf} />);
+    expect(screen.queryByTestId("lightbox-overlay")).toBeNull();
+    fireEvent.click(screen.getByTestId("user-image-block"));
+    const overlay = screen.getByTestId("lightbox-overlay");
+    expect(overlay).toBeTruthy();
+    // Image src matches the source data URL.
+    // 中: 大图 src 跟 data URL 对得上。
+    const big = overlay.querySelector("img");
+    expect(big?.getAttribute("src")).toBe("data:image/jpeg;base64,ZZ");
+    // Click the overlay backdrop closes.
+    fireEvent.click(overlay);
+    expect(screen.queryByTestId("lightbox-overlay")).toBeNull();
+  });
+
+  it("v2.0.1: multiple images render in order", () => {
+    const node = cn("a", null, "", "ack");
+    node.userMessage.content = [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "P1" } },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "P2" } },
+    ] as unknown as string;
+    const cf = flow([node]);
+    seed(cf, "a");
+    render(<ConversationView sessionId={SID} chatFlow={cf} />);
+    const blocks = screen.getAllByTestId("user-image-block");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].querySelector("img")?.getAttribute("src")).toBe(
+      "data:image/png;base64,P1",
+    );
+    expect(blocks[1].querySelector("img")?.getAttribute("src")).toBe(
+      "data:image/png;base64,P2",
+    );
+  });
+
+  it("v2.0.1: text file block renders as chip + opens text Lightbox on click", () => {
+    // base64("hello") = "aGVsbG8="
+    // 中: base64("hello") = "aGVsbG8="
+    const node = cn("a", null, "", "ack");
+    node.userMessage.content = [
+      {
+        type: "document",
+        source: { type: "base64", media_type: "text/plain", data: "aGVsbG8=" },
+        filename: "note.txt",
+      },
+    ] as unknown as string;
+    const cf = flow([node]);
+    seed(cf, "a");
+    render(<ConversationView sessionId={SID} chatFlow={cf} />);
+    const chip = screen.getByTestId("user-file-block");
+    expect(chip.textContent).toContain("note.txt");
+    fireEvent.click(chip);
+    const overlay = screen.getByTestId("lightbox-overlay");
+    expect(overlay.textContent).toContain("hello");
+    expect(overlay.textContent).toContain("note.txt");
+  });
+
   it("v1.5: MessageMeta surfaces model + ↑↓ token splits when last llm_call has usage", () => {
     // Pre-v1.5 this was a single "8 tok" combined number; v1.5 splits
     // into ↑ input + ↓ output (read from summary when present, falls
