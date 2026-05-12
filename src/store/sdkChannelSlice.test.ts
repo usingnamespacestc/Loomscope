@@ -148,3 +148,60 @@ describe("sdkChannelSlice — respawn notice", () => {
     expect(useStore.getState().inflightBySession.has(SID_A)).toBe(false);
   });
 });
+
+describe("sdkChannelSlice — rate-limit events (v2.0.1 PR A)", () => {
+  beforeEach(() => {
+    useStore.setState({ rateLimitBySession: new Map() }, false);
+  });
+
+  it("applyRateLimitEvent writes per-session rate-limit info", () => {
+    useStore.getState().applyRateLimitEvent(SID_A, {
+      status: "allowed_warning",
+      utilization: 0.9,
+      resetsAt: 1700000000,
+      rateLimitType: "five_hour",
+      surpassedThreshold: 0.9,
+      receivedAt: 1699000000,
+    });
+    const info = useStore.getState().rateLimitBySession.get(SID_A);
+    expect(info?.status).toBe("allowed_warning");
+    expect(info?.utilization).toBe(0.9);
+    expect(info?.rateLimitType).toBe("five_hour");
+    // Other sessions stay empty.
+    // 中: 别的 session 不受影响。
+    expect(useStore.getState().rateLimitBySession.get(SID_B)).toBeUndefined();
+  });
+
+  it("applyRateLimitEvent overwrites prior info — latest is authoritative", () => {
+    useStore.getState().applyRateLimitEvent(SID_A, {
+      status: "allowed_warning",
+      utilization: 0.9,
+      receivedAt: 1,
+    });
+    useStore.getState().applyRateLimitEvent(SID_A, {
+      status: "allowed",
+      receivedAt: 2,
+    });
+    expect(useStore.getState().rateLimitBySession.get(SID_A)?.status).toBe(
+      "allowed",
+    );
+  });
+
+  it("clearSdkSession (no respawn notice) drops both inflight + rate-limit entries", () => {
+    useStore.getState().applySdkQueueState(SID_A, {
+      state: "running",
+      currentRun: { promptItemId: "x", startedAt: 0 },
+      pendingPrompts: [],
+    });
+    useStore.getState().applyRateLimitEvent(SID_A, {
+      status: "rejected",
+      utilization: 1,
+      receivedAt: 1,
+    });
+    useStore.getState().clearSdkSession(SID_A);
+    expect(useStore.getState().inflightBySession.has(SID_A)).toBe(false);
+    // Rate-limit snapshot also dropped — fresh spawn re-emits on its own.
+    // 中: rate-limit 缓存也清；下次 spawn 自然会再触发。
+    expect(useStore.getState().rateLimitBySession.has(SID_A)).toBe(false);
+  });
+});

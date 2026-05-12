@@ -33,6 +33,28 @@ export interface SdkPendingPrompt {
 
 export type RespawnReason = "per-send" | "staleness-detected";
 
+/**
+ * EN (v2.0.1 PR A): client mirror of the server's SDKRateLimitInfo.
+ * Same shape as the SDK + server type — kept here to avoid pulling
+ * server imports into the client store. Populated by `sdk-rate-limit`
+ * SSE events; PR B's banner reads it.
+ *
+ * 中: 服务端 SDKRateLimitInfo 的客户端镜像。SSE 事件填，PR B banner 读。
+ */
+export interface SdkRateLimitInfo {
+  status: "allowed" | "allowed_warning" | "rejected";
+  resetsAt?: number;
+  rateLimitType?:
+    | "five_hour"
+    | "seven_day"
+    | "seven_day_opus"
+    | "seven_day_sonnet"
+    | "overage";
+  utilization?: number;
+  surpassedThreshold?: number;
+  receivedAt: number;
+}
+
 export interface SdkInflight {
   state: SdkSessionState;
   currentRun: { promptItemId: string; startedAt: number } | null;
@@ -60,6 +82,14 @@ const EMPTY_INFLIGHT: SdkInflight = {
 
 export interface SdkChannelSlice {
   inflightBySession: Map<string, SdkInflight>;
+  /**
+   * EN (v2.0.1 PR A): latest rate_limit_event per session. CC emits
+   * these on threshold crossings (75% / 90% / 100% / reset). PR B's
+   * auto-defer banner reads here; PR B engine on server reacts.
+   *
+   * 中: 每 session 最近一次 rate_limit_event 快照。Banner 读这。
+   */
+  rateLimitBySession: Map<string, SdkRateLimitInfo>;
 
   // Reducers fed by App.tsx SSE handlers.
   applySdkQueueState: (
@@ -81,6 +111,14 @@ export interface SdkChannelSlice {
     sessionId: string,
     notice: { startedAt: number; reason: RespawnReason } | null,
   ) => void;
+  /**
+   * EN (v2.0.1 PR A): apply a freshly-arrived rate_limit_event into
+   * the cache. Always overwrites — the latest event by definition
+   * supersedes prior state (CC dedupes upstream via `isEqual`).
+   *
+   * 中: 收到 rate_limit_event SSE 后 set 进去；总是覆盖（最新即权威）。
+   */
+  applyRateLimitEvent: (sessionId: string, info: SdkRateLimitInfo) => void;
 }
 
 export const createSdkChannelSlice: StateCreator<
@@ -90,6 +128,7 @@ export const createSdkChannelSlice: StateCreator<
   SdkChannelSlice
 > = (set, get) => ({
   inflightBySession: new Map(),
+  rateLimitBySession: new Map(),
 
   applySdkQueueState: (sessionId, payload) => {
     const cur = get().inflightBySession.get(sessionId) ?? EMPTY_INFLIGHT;
@@ -141,9 +180,14 @@ export const createSdkChannelSlice: StateCreator<
     }
     // Genuine close (idle eviction, shutdown, abnormal subprocess
     // exit) — drop the entry entirely so no stale state lingers.
+    // PR A: also drop the rate-limit snapshot — a fresh spawn will
+    // re-emit on its own threshold crossing if applicable.
+    // 中: 真正关 session 时 rate-limit 缓存也清；下次 spawn 自己会再触发。
     const m = new Map(get().inflightBySession);
     m.delete(sessionId);
-    set({ inflightBySession: m });
+    const r = new Map(get().rateLimitBySession);
+    r.delete(sessionId);
+    set({ inflightBySession: m, rateLimitBySession: r });
   },
 
   setSdkError: (sessionId, message) => {
@@ -162,6 +206,12 @@ export const createSdkChannelSlice: StateCreator<
     const m = new Map(get().inflightBySession);
     m.set(sessionId, { ...(cur ?? EMPTY_INFLIGHT), respawnNotice: notice });
     set({ inflightBySession: m });
+  },
+
+  applyRateLimitEvent: (sessionId, info) => {
+    const m = new Map(get().rateLimitBySession);
+    m.set(sessionId, info);
+    set({ rateLimitBySession: m });
   },
 });
 

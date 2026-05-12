@@ -135,6 +135,45 @@ interface SessionEntry {
    *  不论模式。respawnPreservingQueue 替换 entry 时 flag 自然清零。
    *  详细背景见 docs/devlog.md 2026-05-11 entry #3。*/
   forceRespawnReason: string | null;
+  /** 2026-05-12 (v2.0.1 PR A): latest SDKRateLimitInfo observed for
+   *  this entry. CC emits `rate_limit_event` SDK messages on
+   *  threshold crossings (CC's built-in EARLY_WARNING_CONFIGS fire
+   *  at 75% and 90% utilization; rejected at 100%). Stored here so
+   *  PR B's auto-defer engine can interrupt the current turn + freeze
+   *  the pending queue when utilization >= the configured threshold.
+   *  Null until the first event lands.
+   *
+   *  中: 最近一次 SDK rate_limit_event 的快照。CC 内置 75%/90% 触发，
+   *  PR B 用它判断是否要中断 + 冻结 queue。第一次事件到达前为 null。
+   */
+  lastRateLimit: SDKRateLimitInfo | null;
+}
+
+/**
+ * EN (v2.0.1 PR A): mirror of the SDK's SDKRateLimitInfo shape. We
+ * keep our own local copy rather than importing the SDK type because
+ * the SDK type's `rateLimitType` includes 'seven_day_opus' /
+ * 'seven_day_sonnet' / 'overage' variants we don't currently need
+ * to discriminate. This shape is forward-compatible (everything is
+ * optional bar `status`).
+ *
+ * 中: SDK SDKRateLimitInfo 的本地镜像。除 status 外都 optional。
+ */
+export interface SDKRateLimitInfo {
+  status: "allowed" | "allowed_warning" | "rejected";
+  resetsAt?: number;
+  rateLimitType?:
+    | "five_hour"
+    | "seven_day"
+    | "seven_day_opus"
+    | "seven_day_sonnet"
+    | "overage";
+  utilization?: number;
+  surpassedThreshold?: number;
+  /** Loomscope-side: server wall-clock when this event landed.
+   *  Used by the banner to show "T-XhYm" reset countdown.
+   *  中: 服务器收到事件的时间戳，用于 banner 倒计时。*/
+  receivedAt: number;
 }
 
 /**
@@ -859,6 +898,7 @@ export class SessionRegistry {
       lastActivityAt: Date.now(),
       hasServedTurn: false,
       forceRespawnReason: null,
+      lastRateLimit: null,
     };
 
     // Start the Query with the AsyncIterable input form so we can
@@ -1159,6 +1199,7 @@ export class SessionRegistry {
       lastActivityAt: Date.now(),
       hasServedTurn: false,
       forceRespawnReason: null,
+      lastRateLimit: null,
     };
     this.entries.set(sid, entry);
 
@@ -1324,6 +1365,51 @@ export class SessionRegistry {
     // `result`. Other frames update lastActivityAt to defer idle.
     entry.lastActivityAt = Date.now();
     const m = msg as { type?: string; subtype?: string };
+
+    // EN (v2.0.1 PR A): rate_limit_event — SDK emits on Claude.ai
+    // subscriber threshold crossings (75%, 90%, 100%, reset). Cache
+    // the latest snapshot on the entry + broadcast a dedicated SSE
+    // event so the client doesn't have to filter sdk-message frames.
+    // PR B's auto-defer engine subscribes to this entry-level field
+    // to decide whether to interrupt + freeze the pending queue.
+    //
+    // Note: gated upstream by `shouldProcessRateLimits(isClaudeAISubscriber())`
+    // in CC source, so API-key auth users never see this event. For
+    // subscribers (Pro / Max / Max-x5), CC's built-in
+    // EARLY_WARNING_CONFIGS fire at utilization 0.75 / 0.9.
+    //
+    // 中: rate_limit_event 来自 SDK，仅 Claude.ai 订阅用户（Pro/Max）
+    // 触发；阈值 75%/90%/100%/reset。缓存到 entry + 单发 SSE 事件，
+    // PR B 据此决定是否中断 + 冻结队列。API-key 用户走不到这条事件。
+    if (m.type === "rate_limit_event") {
+      const evt = msg as {
+        rate_limit_info?: {
+          status?: string;
+          resetsAt?: number;
+          rateLimitType?: string;
+          utilization?: number;
+          surpassedThreshold?: number;
+        };
+      };
+      const info = evt.rate_limit_info;
+      if (info && info.status) {
+        const snapshot: SDKRateLimitInfo = {
+          status: info.status as SDKRateLimitInfo["status"],
+          resetsAt: info.resetsAt,
+          rateLimitType: info.rateLimitType as SDKRateLimitInfo["rateLimitType"],
+          utilization: info.utilization,
+          surpassedThreshold: info.surpassedThreshold,
+          receivedAt: Date.now(),
+        };
+        entry.lastRateLimit = snapshot;
+        broadcast(entry.sessionId, {
+          event: "sdk-rate-limit",
+          data: snapshot,
+        });
+      }
+      return;
+    }
+
     if (m.type === "system" && m.subtype === "init") {
       if (entry.state !== "running" && entry.currentRun) {
         entry.state = "running";

@@ -300,9 +300,43 @@ export default function App() {
         };
         useStore.getState().markSessionActivity(activeId);
         useStore.getState().setRespawnNotice(activeId, null);
-        // Future: route specific message types to UI (e.g. surface
-        // SDKRateLimitEvent.retryAt for the auto-retry timer).
-        void payload; // silence unused-var until we route specific types
+        // v2.0.1 PR A: rate_limit_event now routed via dedicated
+        // `sdk-rate-limit` SSE event below — this comment marks the
+        // spot where the older "TODO route specific types" intent
+        // was finally honored.
+        // 中: rate_limit_event 走专用 `sdk-rate-limit` 事件了，下面 handler。
+        void payload; // other types still flow through here as opaque
+      } catch {
+        /* ignore */
+      }
+    });
+
+    // EN (v2.0.1 PR A): dedicated rate-limit SSE event. Server emits
+    // a parallel `sdk-rate-limit` whenever it sees an SDK
+    // `rate_limit_event` frame (threshold crossings only — CC's
+    // built-in EARLY_WARNING_CONFIGS fire at 75% / 90% utilization,
+    // plus `rejected` at 100% and an `allowed` clear-event when the
+    // window resets). API-key auth users never see these events;
+    // they're gated upstream by `shouldProcessRateLimits(isClaudeAISubscriber())`.
+    //
+    // 中: 服务端见到 SDK rate_limit_event 时单发的事件。仅 Claude.ai
+    // 订阅用户（Pro / Max / Max-x5）会触发；CC 内置阈值 75%/90%/100%。
+    es.addEventListener("sdk-rate-limit", (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          status: "allowed" | "allowed_warning" | "rejected";
+          resetsAt?: number;
+          rateLimitType?:
+            | "five_hour"
+            | "seven_day"
+            | "seven_day_opus"
+            | "seven_day_sonnet"
+            | "overage";
+          utilization?: number;
+          surpassedThreshold?: number;
+          receivedAt: number;
+        };
+        useStore.getState().applyRateLimitEvent(activeId, payload);
       } catch {
         /* ignore */
       }
