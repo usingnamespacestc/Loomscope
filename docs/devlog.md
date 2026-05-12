@@ -6,6 +6,86 @@
 
 ---
 
+## 2026-05-13 — v2.1 Delta-SSE 大改 ship（#184，D1+D2+D3+D4 stretch 全完成）
+
+撞 120MB session 之后定的 v2.1 主任务。原本架构是 fs.watch → SSE `invalidate` → client `GET /api/sessions/<sid>` 拉 16.8MB lite payload → store diff-merge。1Hz 节流 × 4.2s 响应在大 session 下会一直落后一个周期。设计文档 `docs/v2.1-delta-sse-design.md` 写在前面，5 个决策点用户拍板后一次性按 D1→D2→D3→D4 顺序 ship 完。
+
+### 决策回放（来自设计文档 §6）
+
+| 决策 | 选择 |
+|---|---|
+| Delta 颗粒度 | **(C) 语义事件**：chatnode-added / chatnode-summary-updated / chatnode-removed / checkpoint |
+| Snapshot 范围 | **per-session**（server 一份，所有 SSE subscriber 共用） |
+| PR 顺序 | D1 server emitter → D2 client apply → D3 drift detection → D4 incremental parse |
+| D2 默认 | **ON**（作者一人 dev，不需要 soft launch 兜底） |
+| Drift 周期 | **30s default + 可配置 + 0=禁用** |
+
+### 4 个 PR breakdown
+
+**PR D1 `a225388` — server-side delta emitter (silent on client)**
+
+- 新文件 `src/server/services/chatFlowDeltaEngine.ts`：per-session `snapshots: Map<sid, { byId: Map<id, sig>, seq }>`。`processFresh(sid, fresh)` diff against snapshot → emit 语义事件 + broadcast SSE `delta` → 更新 snapshot。Per-session promise chain 串行化并发 fresh parse 防 race。
+- `summarySig` 把 WorkflowSummary 拼成 `|`-delimited string；diff 是单 ===。
+- `sessionWatcher` 新增 `setMainJsonlChangeHandler` callback；fire-and-forget after `invalidateSession` + `invalidate` broadcast。
+- `app.ts` 注册 handler：findForkClosure → getOrLoadCachedChatFlow（用同一 LRU 不双解析）→ processFresh。
+- `loadMergedChatFlow` 从 `sessions.ts` 提到 `mergedChatFlowLoader.ts` 独立模块，delta 路径跟 GET 路由共享 loader。
+- SSE 最后 subscriber 断开 → `resetDeltaSession`，重连后第一批 delta 把所有节点当 added 重发。
+- 10 个单测：first-batch full add / no-change checkpoint-only / add / summary-update / remove / chatNodeCount / seq monotonic / resetSession / per-session serialisation / cross-session independence。**Client 此时不消费 delta 事件**，只是把信号通好。
+
+**PR D2 `0fc3ad7` — client delta apply + main-invalidate cutover**
+
+- `SessionState.lastDeltaSeq: number | null`（null = fresh baseline 接受任意 seq；非 null 严格 +1）。
+- `applyChatFlowDelta(sid, delta)` action：
+  - **chatnode-added**: append or replace by id；compact 节点默认折叠
+  - **chatnode-summary-updated**: patch summary，workflowCache 标 stale-while-revalidate 让 lazy hook 重拉
+  - **chatnode-removed**: 删 chatNodes / foldedCompactIds / workflowCache
+  - **checkpoint**: chatNodeCount 跟本地比，不等 → refreshSession
+  - Gap detection: seq 错位 → refreshSession
+  - 未知 id update / 没 chatFlow yet → refreshSession（drift safety）
+- `loadSession` + `_refreshSessionInner` 后置 `lastDeltaSeq=null` baseline 重置。
+- App.tsx `delta` SSE 监听 + `invalidate kind:'main'` 不再触发 refreshSession（activity bump 还在）。
+- 11 个单测：baseline seeding / add / dedup / summary-update / unknown-id drift / remove / checkpoint match / mismatch / gap / strict +1 / no-chatFlow。
+
+**PR D3 `a558547` — drift detection + settings toggle**
+
+- 新文件 `src/utils/chatFlowSig.ts` shared FNV-1a 32-bit hash（service + client 同算法）：summarySig / chatNodeSig / chatFlowHash / hashFromSigs。**Sort before hash** 让 order independence 成立（server 按 delta-append 顺序，client 按 BFS/closure 顺序，hash 同）。
+- 新文件 `src/server/services/driftDetection.ts`：server-wide 单一 timer，遍历 `listSessionsWithSnapshot()` → `buildDriftPing(sid)` → broadcast SSE `drift-ping`。`setDriftDetectionInterval(0)` 停。Clamp [1, 600]。
+- `chatFlowDeltaEngine` snapshot 新增 `fullSig` 字段：避免 drift ping 时 re-stringify ChatNodes，直接 hash from cached sigs。
+- `LoomscopePreferences.driftDetectionSec`（default 30）+ PATCH `/api/preferences` 字段 + setting UI 在"会话运行" tab。
+- Client App.tsx `drift-ping` listener：先比 chatNodeCount（短路），count 对得上再算 hash；hash 不等 → refreshSession。
+- 12 个单测：6 chatFlowSig（算法正确性 + order independence）+ 5 driftDetection（tick / no-snapshot skip / interval bounds / hash stability）+ 1 SettingsModal toggle 渲染。
+
+**PR D4 stretch `commit-tbd` — incremental jsonl parse 扩展到 fork closure**
+
+- 已有 `parseJsonlFileIncremental` 仅覆盖 closure ≤ 1（单 jsonl）。多 jsonl fork closure 仍走全量 read。
+- 新 `readRecordsIncremental(path, prevState?)` exported from `src/parse/jsonl.ts` — 跟 `parseJsonlFileIncremental` 内部增量分支同套语义但只返 records，不 buildChatFlow（multi-jsonl merge 路径 buildChatFlow 跑在合并后整体，不需要 per-member）。
+- `mergedChatFlowLoader.ts` closure > 1 路径：维护 `closureMemberStash: Map<entrySid::memberSid, RecordsOnlyIncrementalState>`。每个成员调 `readRecordsIncremental` 用自己的 state；得到 records 后整体 dedup + buildChatFlow。
+- `clearClosureMemberStash(entrySid)` exposed；sessions.ts 路由 SSE 最后 unsubscribe 时一起清。
+- 3 个新单测覆盖 readRecordsIncremental（prevState undefined / 增量 tail / 文件 shrunk fallback）。
+
+### 收益
+
+| 场景 | 之前 | 之后 |
+|---|---|---|
+| 120MB session, 1 个 turn append | `GET /api/sessions/<sid>` 4.2s / 16.8MB | SSE `delta` 几 KB / <50ms |
+| 1Hz streaming 期间 client UI | 永远落后 1 个周期 | 实时跟上 |
+| reducer/race bug 导致 silent drift | 用户手动刷新才修 | drift-ping 30s 内自愈 |
+| fork closure > 1 + jsonl append | per-member 完整重读 | 仅 tail-read 增量 |
+
+997 vitest pass（955 → 997，新增 42 个 case）。foldProjection 256MB stress + chatFlowCache cacheHit 两个老 flake 在 isolation 跑过；与 v2.1 改动无关。
+
+### 风险 + 已知不完整
+
+- **Closure shape change**：fork closure 成员变化（新增 / 删除）时该 member 走 fallback 全量，其他成员仍增量。完美做法是检测 closure diff 并复用未变成员的 stash；目前实现是"成员不在 stash 就全量" — 够用。
+- **Server-side reparse cost still O(N)**：每次 chokidar fire server 仍跑 `buildChatFlow` 全量 N 条 records。要真 O(delta) 需要 buildChatFlow 也增量化，那是另一个 PR scope。
+- **Drift hash 不区分 workflow.nodes 内容**：只对 summary signature。如果 client lazy-fetch 的 workflow.nodes 跟 server 不一致，drift detector 看不出来。低风险（lazy fetch 都是按需 GET）。
+
+### 经验
+
+**"先信号通，再切换"是大改的安全模式**。D1 先把 server-side 信号管道修通但 client 不消费，可以用 devtools SSE 流肉眼验证 diff 算得对再切。D2 切 client 时风险已经降到很低。一次性把 server + client 都改的"big bang" 模式在这种规模下基本不可行。
+
+---
+
 ## 2026-05-13 — v2.0.1 (c)：5h 配额到 90% 自动暂停 + 重置后自动恢复（#185 重新定义）
 
 作者 soak rc.2 的同时把 #185 "5h + weekly progress bars" 这条 backlog 拿出来 triage。原本设想做连续平滑的进度条 — spike 后发现 SDK 在 headless 模式下**根本拿不到连续 utilization 数据**：

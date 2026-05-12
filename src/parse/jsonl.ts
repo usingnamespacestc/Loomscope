@@ -111,6 +111,113 @@ export async function parseJsonlFile(
   return { chatFlow, parseFailures };
 }
 
+/**
+ * EN (v2.1 PR D4 stretch): per-member incremental record-read state.
+ * Same shape as `IncrementalParseState` but without the chatFlow
+ * payload — multi-jsonl fork closure callers only want records[]
+ * for the merge step; they run buildChatFlow once on the dedup'd
+ * stream, not per-member.
+ *
+ * 中: fork closure 多 jsonl 增量读时每个成员的状态。和
+ * IncrementalParseState 同形但不带 chatFlow（merge 路径里 buildChatFlow
+ * 在合并后只跑一次，per-member 不需要 chatflow 结果）。
+ */
+export interface RecordsOnlyIncrementalState {
+  records: RawRecord[];
+  parseFailures: number;
+  byteSize: number;
+  mtimeMs: number;
+  pendingFragment: string;
+}
+
+/**
+ * EN (v2.1 PR D4 stretch): tail-read a jsonl using a previous state
+ * snapshot. Identical semantics to `parseJsonlFileIncremental`'s
+ * incremental branch but returns only records (no chatFlow build).
+ * Falls back to full read on shrunk/missing-state cases.
+ *
+ * 中: 增量只读 records，不 build chatFlow。多 jsonl merge 路径用。
+ */
+export async function readRecordsIncremental(
+  jsonlPath: string,
+  prevState: RecordsOnlyIncrementalState | undefined,
+): Promise<{
+  records: RawRecord[];
+  state: RecordsOnlyIncrementalState;
+  usedIncremental: boolean;
+}> {
+  const stat = await fs.promises.stat(jsonlPath);
+  const curSize = stat.size;
+  const curMtime = stat.mtimeMs;
+  const canIncremental = !!prevState && prevState.byteSize <= curSize;
+
+  if (!canIncremental) {
+    const { records, parseFailures } = await readRecordsFromFile(jsonlPath);
+    return {
+      records,
+      state: {
+        records,
+        parseFailures,
+        byteSize: curSize,
+        mtimeMs: curMtime,
+        pendingFragment: "",
+      },
+      usedIncremental: false,
+    };
+  }
+  const records = prevState!.records.slice();
+  let parseFailures = prevState!.parseFailures;
+  let pendingFragment = prevState!.pendingFragment;
+  if (prevState!.byteSize < curSize) {
+    try {
+      const stream = fs.createReadStream(jsonlPath, {
+        encoding: "utf8",
+        start: prevState!.byteSize,
+      });
+      for await (const chunk of stream) {
+        pendingFragment += chunk as string;
+        let nl = pendingFragment.indexOf("\n");
+        while (nl >= 0) {
+          const line = pendingFragment.slice(0, nl);
+          pendingFragment = pendingFragment.slice(nl + 1);
+          if (line) {
+            const r = parseLine(line);
+            if (r) records.push(r);
+            else parseFailures += 1;
+          }
+          nl = pendingFragment.indexOf("\n");
+        }
+      }
+    } catch {
+      // Read race / permission flap — full reparse rather than poison.
+      // 中: 读取过程中失败 → 退回全量，不污染 state。
+      const full = await readRecordsFromFile(jsonlPath);
+      return {
+        records: full.records,
+        state: {
+          records: full.records,
+          parseFailures: full.parseFailures,
+          byteSize: curSize,
+          mtimeMs: curMtime,
+          pendingFragment: "",
+        },
+        usedIncremental: false,
+      };
+    }
+  }
+  return {
+    records,
+    state: {
+      records,
+      parseFailures,
+      byteSize: curSize,
+      mtimeMs: curMtime,
+      pendingFragment,
+    },
+    usedIncremental: true,
+  };
+}
+
 // Internal helper: stream a jsonl and parse each line. Used by both
 // `parseJsonlFile` (full read) and `parseJsonlFileIncremental` (full
 // fallback path). Memory-friendly via readline — never buffers the

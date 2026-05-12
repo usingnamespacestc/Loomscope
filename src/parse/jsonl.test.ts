@@ -16,6 +16,7 @@ import {
   parseJsonlFile,
   parseJsonlFileIncremental,
   parseJsonlText,
+  readRecordsIncremental,
   type IncrementalParseState,
 } from "./jsonl";
 import {
@@ -1818,5 +1819,53 @@ describe("computeWorkflowSummary — hasInFlightWork stop_reason gate (#89)", ()
     // tool_use emitted but no tool_result yet — should still be in
     // flight even if (somehow) stopReason were terminal already.
     expect(trace("end_turn", false)).toBe(true);
+  });
+});
+
+describe("readRecordsIncremental (v2.1 PR D4 stretch)", () => {
+  let tmpDir: string;
+  let jsonlPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "loomscope-records-incr-"));
+    jsonlPath = path.join(tmpDir, "session.jsonl");
+  });
+  afterEach(async () => {
+    await fsp.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("prevState undefined → full read + populated state", async () => {
+    const initial = recordsToJsonl(buildSyntheticRecords().slice(0, 4));
+    await fsp.writeFile(jsonlPath, initial, "utf8");
+    const r = await readRecordsIncremental(jsonlPath, undefined);
+    expect(r.usedIncremental).toBe(false);
+    expect(r.records.length).toBeGreaterThan(0);
+    expect(r.state.byteSize).toBe(initial.length);
+  });
+
+  it("appended file → incremental tail-read produces same records as full read", async () => {
+    const all = buildSyntheticRecords();
+    const head = recordsToJsonl(all.slice(0, 5));
+    await fsp.writeFile(jsonlPath, head, "utf8");
+    const first = await readRecordsIncremental(jsonlPath, undefined);
+    const tail = recordsToJsonl(all.slice(5));
+    await fsp.appendFile(jsonlPath, tail, "utf8");
+    const second = await readRecordsIncremental(jsonlPath, first.state);
+    expect(second.usedIncremental).toBe(true);
+    // Same total record count as a fresh full read.
+    // 中: 增量 + 原 state ≡ 全量重读。
+    const fresh = await readRecordsIncremental(jsonlPath, undefined);
+    expect(second.records.length).toBe(fresh.records.length);
+  });
+
+  it("file shrunk → falls back to full read", async () => {
+    const all = recordsToJsonl(buildSyntheticRecords().slice(0, 6));
+    await fsp.writeFile(jsonlPath, all, "utf8");
+    const first = await readRecordsIncremental(jsonlPath, undefined);
+    // Truncate.
+    // 中: 文件被截断（重写）→ fallback 全量。
+    await fsp.writeFile(jsonlPath, recordsToJsonl(buildSyntheticRecords().slice(0, 2)), "utf8");
+    const second = await readRecordsIncremental(jsonlPath, first.state);
+    expect(second.usedIncremental).toBe(false);
   });
 });

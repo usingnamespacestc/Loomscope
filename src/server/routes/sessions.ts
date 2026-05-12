@@ -32,6 +32,7 @@ import {
   setStashedState,
 } from "@/server/services/chatFlowCache";
 import { resetSession as resetDeltaSession } from "@/server/services/chatFlowDeltaEngine";
+import { clearClosureMemberStash } from "@/server/services/mergedChatFlowLoader";
 import { getPendingPermission } from "@/server/services/pendingPermissionTracker";
 import { findForkClosure, type ClosureMember } from "@/server/services/forkTree";
 // Read paths use the with-trash locator so a session that was soft-
@@ -281,6 +282,11 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
             // 中: 最后一个 SSE 订阅者断开时清 delta 引擎快照，重连
             // 后第一批 delta 把所有节点当 added 重发，避免对错快照。
             resetDeltaSession(id);
+            // v2.1 PR D4: also clear closure member stash so the next
+            // reconnection's first merged-load goes through the full
+            // read path and rebuilds fresh state.
+            // 中: 同时清 closure member 增量 state 让重连后全量重建。
+            clearClosureMemberStash(id);
           }
         });
         await stream.writeSSE({
