@@ -377,7 +377,13 @@
       "idle_description": "After N minutes of inactivity, the server closes that session's SDK Query (kills the `claude` subprocess). The next action respawns; the prompt cache cold-starts.",
       "minutes": "minutes",
       "idle_range": "Range 5–240 minutes",
-      "idle_range_when_respawn_on": "Range 5–240 minutes. With respawn-per-send enabled this only bounds how long an idle-but-still-alive post-turn Query lingers — the next send respawns regardless."
+      "idle_range_when_respawn_on": "Range 5–240 minutes. With respawn-per-send enabled this only bounds how long an idle-but-still-alive post-turn Query lingers — the next send respawns regardless.",
+      "section_auto_defer": "Auto-defer on 5h quota 90%",
+      "auto_defer_description": "Claude.ai subscriptions have a rolling 5-hour quota. When enabled, Loomscope automatically interrupts the in-flight turn and freezes further sends at 90% utilization, then auto-resumes once the 5h window resets (including any messages you queue during the cooldown). Anthropic still bills the request that triggered the warning, but this stops the cascade of follow-up tool calls eating quota.",
+      "auto_defer_label": "Pause at 90% / resume after reset",
+      "auto_defer_on_hint": "Enabled: pause at 90% + queue + auto-resume on reset. Banner shows countdown; '立即重试' button forces resume (will re-arm if Anthropic still rejects).",
+      "auto_defer_off_hint": "Disabled: behaves like vanilla Claude Code — Anthropic's own progressive warnings + outright rejection at 100%. You handle quota yourself.",
+      "auto_defer_subscriber_caveat": "⚠ Only fires for Claude.ai subscribers (Pro / Max). API-key users never see rate_limit_event so this toggle has no effect."
     },
     "hooks": {
       "loading": "Loading…",

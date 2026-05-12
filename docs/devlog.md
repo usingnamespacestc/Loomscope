@@ -6,6 +6,64 @@
 
 ---
 
+## 2026-05-13 — v2.0.1 (c)：5h 配额到 90% 自动暂停 + 重置后自动恢复（#185 重新定义）
+
+作者 soak rc.2 的同时把 #185 "5h + weekly progress bars" 这条 backlog 拿出来 triage。原本设想做连续平滑的进度条 — spike 后发现 SDK 在 headless 模式下**根本拿不到连续 utilization 数据**：
+
+| 信号 | 可拿到吗 |
+|---|---|
+| SDK `getRawUtilization()` / `getRateLimits()` | ❌ 不存在 |
+| `Query.getContextUsage()` | ❌ 是 context window，不是 5h/7d |
+| `statusLine` 子进程接收 rate_limits JSON | ❌ 仅 TUI 模式调用，SDK headless 不 fire |
+| `/usage` / `/cost` / `/status` slash | ❌ Max 用户只返回静态文案，无 rate-limit 数字 |
+| `rate_limit_event` SDK message | ✓ **仅在跨阈值（75% / 90% / 100% / reset）时 fire** |
+
+CC 把 `rawUtilization` 严格锁在 TUI StatusLine 子进程通道；所有 print / stream-json / slash 路径都没暴露。这是 Anthropic 主动留的 API 边界，不是 bug。**连续平滑进度条做不出来**。
+
+作者的反提议改变了 #185 的形状：与其显示用量条，不如在**撞 90% 时自动暂停 + 重置后自动恢复**。需求一旦从"看用量"变成"撞前止血"，threshold-driven `rate_limit_event` 就够用了——我们只需要知道"这次撞到阈值"+ "什么时候恢复"两件事，CC 已经在 emit。
+
+### 实现拆 3 PR
+
+**PR A — SSE rate_limit_event 信号管道** (`4a0fdd8`)
+- `SessionEntry.lastRateLimit: SDKRateLimitInfo | null` 缓存最新事件
+- `handleSdkFrame` 捕获 `m.type === "rate_limit_event"`、单发 `sdk-rate-limit` SSE 事件
+- 客户端 `sdkChannelSlice.rateLimitBySession` Map + `applyRateLimitEvent` reducer + App.tsx SSE handler
+- 3 个 store reducer 单测（独立 set / 覆盖 / clearSdkSession 联动）。**纯信号管道无 UI**，PR B 才消费。
+
+**PR B — 自动 defer 引擎** (`0a157e0`)
+- `SessionRegistry.triggerDeferral(entry, info)`：撞 90% 五小时阈值时 `query.interrupt()` + 设 `entry.deferralUntilEpoch = resetsAt * 1000` + 持久化 `~/.loomscope/deferred-queue.json` + setTimeout 排 resetsAt
+- `maybeDispatch` 在 gate 期内 return early — pending queue 累积但不发新 turn
+- 自动解除路径：(a) timer fire；(b) `POST /:id/deferral/clear`（"立即重试"按钮）；(c) `rate_limit_event{status: 'allowed'}` 提前 relief
+- `restoreDeferralStateFromDisk()` + `attachPendingDeferral()` 让 server restart 期间也守得住 — lazy spawn 时把 entry 字段 hydrate 回来
+- `<DeferralBanner sessionId/>` 组件 + 1s tick 倒计时（T-XhYm 格式）+ rose 配色
+- 6 个 sessionRegistry deferral 单测（trigger / 阈值过滤 / 窗口过滤 / clearDeferral / allowed-event relief / setting off no-op）
+
+**PR C — Settings UI toggle + tests + devlog** (this commit)
+- `LoomscopePreferences.autoDeferOnRateLimit` 字段 default false
+- `setAutoDeferOnRateLimit` setter + PATCH /api/preferences 字段加白名单
+- 会话运行 tab 新 section：toggle + bilingual 描述 + ⚠ "仅 Claude.ai 订阅触发" 提示
+- SettingsModal 测试：toggle 默认 unchecked
+
+### 设计决策（跟用户对齐过）
+
+| 项 | 决定 | 理由 |
+|---|---|---|
+| 阈值 | 90% | CC 内置；95% 要额外轮询机制 |
+| 窗口 | 仅 5h | 7d 后续追加；先收敛 scope |
+| 默认 | 关 | 大多数用户更喜欢 Anthropic 原生 progressive warning + reject；开启是 Max-x5 重度多 session 用户的选项 |
+| 当前 in-flight turn | **interrupt** | 已发的请求 Anthropic 仍计费但能止住批量 tool_use 的连锁消耗 |
+| pending queue | 冻结（队列累积，dispatch 拒绝） | 用户继续发也会进队列，banner 显示 |
+| resetsAt 到 | 自动 dispatch | feature 核心价值，不自动等于残废 |
+| 关闭浏览器/server restart | server-side persistence + lifespan 恢复 | 跟 trash/orphan sweep 一个套路 |
+
+### 经验
+
+**"放弃做"vs"重新定义"是不同的判断**：spike 撞到 SDK 边界时，第一反应是 defer #185 或换成假数据条。作者反向问"用量条做不出来，那直接撞前止血呢"——把 feature 从"显示连续状态"重新定义为"反应跨阈值事件"，原本失败的需求变成 SDK 能力刚好覆盖的需求。**spike 失败也可能意味着 feature 形状不对**，不只是技术不行。
+
+957 vitest 全绿（957 = 951 + 6 deferral cases）。foldProjection 256MB stress 那个老 flake isolation 跑过。
+
+---
+
 ## 2026-05-12 — v2.0.1 (b)：`/compact` 卡片三件套（badge + 展开 + ctrl+o）
 
 紧接图片渲染 ship 后，作者顺手把早上 triage 列表里第一条收尾——`/compact` 卡片视觉的三个 sub-item。

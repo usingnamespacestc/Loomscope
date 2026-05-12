@@ -520,6 +520,9 @@ interface Preferences {
   useApiKey: boolean;
   permissionMode: PermissionMode;
   respawnPerSend: boolean;
+  /** v2.0.1 PR C: when on, registry auto-defers turn dispatch when
+   *  Anthropic 5h utilization crosses 90%. Default off. */
+  autoDeferOnRateLimit: boolean;
 }
 
 const DEFAULT_PREFS: Preferences = {
@@ -527,6 +530,7 @@ const DEFAULT_PREFS: Preferences = {
   useApiKey: false,
   permissionMode: "default",
   respawnPerSend: true,
+  autoDeferOnRateLimit: false,
 };
 
 function usePreferences() {
@@ -554,6 +558,10 @@ function usePreferences() {
             : "default",
           respawnPerSend:
             typeof p.respawnPerSend === "boolean" ? p.respawnPerSend : true,
+          autoDeferOnRateLimit:
+            typeof p.autoDeferOnRateLimit === "boolean"
+              ? p.autoDeferOnRateLimit
+              : false,
         });
       } catch (err) {
         if (!cancelled) {
@@ -595,6 +603,10 @@ function usePreferences() {
             typeof next.respawnPerSend === "boolean"
               ? next.respawnPerSend
               : cur.respawnPerSend,
+          autoDeferOnRateLimit:
+            typeof next.autoDeferOnRateLimit === "boolean"
+              ? next.autoDeferOnRateLimit
+              : cur.autoDeferOnRateLimit,
         }));
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -794,6 +806,43 @@ function SessionRuntimePanel() {
           {prefs.respawnPerSend
             ? t("settings.runtime.respawn_on_hint")
             : t("settings.runtime.respawn_off_hint")}
+        </p>
+      </section>
+
+      {/* v2.0.1 PR C: auto-defer on Anthropic 5h rate-limit. Setting
+          is opt-in (default off) because most users prefer Anthropic's
+          own progressive warning + reject experience; opt-in suits
+          heavy multi-session workloads on Max-x5 etc. */}
+      {/* 中: 自动暂停默认关——多 session 用户 + Max-x5 受益最大。 */}
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.runtime.section_auto_defer")}
+        </h3>
+        <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
+          {t("settings.runtime.auto_defer_description")}
+        </p>
+        <label className="flex cursor-pointer items-center gap-3">
+          <input
+            type="checkbox"
+            data-testid="settings-runtime-auto-defer"
+            checked={prefs.autoDeferOnRateLimit}
+            onChange={(e) =>
+              void patch({ autoDeferOnRateLimit: e.target.checked })
+            }
+            disabled={saving}
+            className="h-4 w-4 cursor-pointer"
+          />
+          <span className="text-xs text-gray-700">
+            {t("settings.runtime.auto_defer_label")}
+          </span>
+        </label>
+        <p className="mt-1 text-[10px] italic text-gray-400">
+          {prefs.autoDeferOnRateLimit
+            ? t("settings.runtime.auto_defer_on_hint")
+            : t("settings.runtime.auto_defer_off_hint")}
+        </p>
+        <p className="mt-1 text-[10px] italic text-amber-700">
+          {t("settings.runtime.auto_defer_subscriber_caveat")}
         </p>
       </section>
 

@@ -26,6 +26,7 @@ const patchSchema = z.object({
   enableHookHttpPath: z.boolean().optional(),
   enableHookSdkPath: z.boolean().optional(),
   interactiveMode: z.boolean().optional(),
+  autoDeferOnRateLimit: z.boolean().optional(),
 });
 
 export interface PreferencesRouterOptions {
@@ -63,6 +64,9 @@ export function preferencesRouter(opts: PreferencesRouterOptions = {}) {
       }
       if (patch.enableHookSdkPath !== undefined) {
         opts.registry.setEnableHookSdkPath(merged.enableHookSdkPath);
+      }
+      if (patch.autoDeferOnRateLimit !== undefined) {
+        opts.registry.setAutoDeferOnRateLimit(merged.autoDeferOnRateLimit);
       }
     }
     return c.json(merged);

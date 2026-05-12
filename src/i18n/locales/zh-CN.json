@@ -377,7 +377,13 @@
       "idle_description": "用户停止操作 N 分钟后，server 会 close 该 session 的 SDK Query（杀 claude subprocess）。下次操作会重新 spawn，缓存会冷启动。",
       "minutes": "分钟",
       "idle_range": "范围 5–240 分钟",
-      "idle_range_when_respawn_on": "范围 5–240 分钟。当前模式下作用是给「post-turn 残留 Query」一个清理上限——下次 send 反正会重启，闲置回收只决定「不操作时多久把那条幽灵 Query 也回收掉」"
+      "idle_range_when_respawn_on": "范围 5–240 分钟。当前模式下作用是给「post-turn 残留 Query」一个清理上限——下次 send 反正会重启，闲置回收只决定「不操作时多久把那条幽灵 Query 也回收掉」",
+      "section_auto_defer": "5h 配额到 90% 自动暂停",
+      "auto_defer_description": "Anthropic 订阅有 5 小时滚动配额。开启后撞 90% 时 Loomscope 自动中断进行中的 turn + 冻结后续 send，等 5h 配额重置后自动恢复（包括你在等待期间发的新消息也排队等待）。中断已经发出去的请求 Anthropic 仍会计费，但能止住「撞上就一直撞」的连锁消耗。",
+      "auto_defer_label": "撞 5h 90% 自动暂停 + 重置后自动恢复",
+      "auto_defer_on_hint": "已启用：撞 90% 暂停 + 排队 + 自动恢复。banner 显示倒计时；可点 立即重试 强制恢复（Anthropic 真没恢复时会再次自动暂停）",
+      "auto_defer_off_hint": "已禁用：行为同 Claude Code 原生——Anthropic 自己的警告 + 100% 时拒绝；你撞上配额自行处理",
+      "auto_defer_subscriber_caveat": "⚠ 仅 Claude.ai 订阅（Pro / Max）触发；API key 用户不会收到 rate_limit_event，此项无效"
     },
     "hooks": {
       "loading": "加载中…",

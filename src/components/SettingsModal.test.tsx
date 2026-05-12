@@ -324,6 +324,20 @@ describe("SettingsModal — 4-tab structure (v1.1)", () => {
     });
   });
 
+  it("v2.0.1 PR C: Runtime tab shows the auto-defer toggle (off by default)", async () => {
+    render(<SettingsModal open={true} onClose={() => undefined} />);
+    fireEvent.click(screen.getByTestId("settings-tab-runtime"));
+    await waitFor(() => {
+      const cb = screen.getByTestId(
+        "settings-runtime-auto-defer",
+      ) as HTMLInputElement;
+      expect(cb).toBeTruthy();
+      // 默认关 — mock response doesn't set the field, so falls back to false.
+      // 中: 默认关。
+      expect(cb.checked).toBe(false);
+    });
+  });
+
   it("Runtime tab shows Viewer/Interactive mode toggle and PATCHes interactiveMode", async () => {
     let lastPatchBody: Record<string, unknown> | null = null;
     vi.restoreAllMocks();
