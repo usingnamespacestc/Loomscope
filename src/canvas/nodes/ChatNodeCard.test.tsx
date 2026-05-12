@@ -381,3 +381,124 @@ describe("ChatNodeCard — inner-compact chip (PR 2.4 hybrid)", () => {
     expect(screen.queryByTestId("chat-node-p-normal-inner-compact")).toBeNull();
   });
 });
+
+describe("ChatNodeCard — slash branch /compact distinction + expand (v2.0.1)", () => {
+  function slashProps(
+    name: string,
+    stdout: string,
+    id = "slash-1",
+  ): unknown {
+    const cn: ChatNode = {
+      kind: "chat",
+      id,
+      parentChatNodeId: null,
+      rootUserUuid: `u-${id}`,
+      userMessage: { uuid: `u-${id}`, content: name, attachments: [] },
+      workflow: { nodes: [], edges: [] },
+      trigger: "user",
+      isCompactSummary: false,
+      meta: {},
+      slashCommand: { name, stdout },
+    };
+    return {
+      id,
+      type: "chatNode",
+      data: {
+        chatNode: cn,
+        userPreview: "",
+        assistantPreview: "",
+        toolCount: 0,
+        llmCount: 0,
+        totalThinkingChars: 0,
+        isCompactSummary: false,
+        fileTouchCount: 0,
+        childCount: 0,
+        contextTokens: 0,
+        maxContextTokens: 200_000,
+        slashCommand: cn.slashCommand,
+        hasIncomingEdge: false,
+        hasOutgoingEdge: false,
+      },
+      selected: false,
+      dragging: false,
+      isConnectable: false,
+      zIndex: 0,
+      selectable: true,
+      deletable: true,
+      draggable: false,
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      width: 200,
+      height: 100,
+      sourcePosition: undefined,
+      targetPosition: undefined,
+      dragHandle: undefined,
+      parentId: undefined,
+    };
+  }
+
+  it("/compact uses the ⊞ badge (mirrors compact summary card)", () => {
+    render(
+      withRF(
+        <ChatNodeCard
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          {...(slashProps("/compact", "Compacted (ctrl+o to see full summary)") as any)}
+        />,
+      ),
+    );
+    const badge = screen.getByTestId("slash-badge-compact");
+    expect(badge.textContent).toContain("⊞");
+    expect(badge.textContent).toContain("/compact");
+    expect(screen.queryByTestId("slash-badge-generic")).toBeNull();
+  });
+
+  it("generic slash (/model etc.) keeps the ⚡ badge", () => {
+    render(
+      withRF(
+        <ChatNodeCard
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          {...(slashProps("/model", "model set to sonnet") as any)}
+        />,
+      ),
+    );
+    const badge = screen.getByTestId("slash-badge-generic");
+    expect(badge.textContent).toContain("⚡");
+    expect(badge.textContent).toContain("/model");
+    expect(screen.queryByTestId("slash-badge-compact")).toBeNull();
+  });
+
+  it("short stdout does NOT show the expand toggle", () => {
+    // 短输出（< 320 chars, < 4 换行）不显示展开/收起按钮，减少视觉噪音。
+    render(
+      withRF(
+        <ChatNodeCard
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          {...(slashProps("/model", "model set to sonnet-4.6") as any)}
+        />,
+      ),
+    );
+    expect(screen.queryByTestId("slash-stdout-toggle")).toBeNull();
+  });
+
+  it("long stdout (>4 newlines) shows ▸ 展开 toggle that flips state", async () => {
+    const long = Array.from({ length: 8 }, (_, i) => `line ${i}`).join("\n");
+    render(
+      withRF(
+        <ChatNodeCard
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          {...(slashProps("/compact", `Compacted\n${long}`) as any)}
+        />,
+      ),
+    );
+    const toggle = screen.getByTestId("slash-stdout-toggle");
+    expect(toggle.textContent).toContain("展开");
+    const pre = screen.getByTestId("slash-stdout");
+    expect(pre.getAttribute("data-expanded")).toBe("false");
+    // Click expand.
+    // 中: 点开展开。
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.click(toggle);
+    expect(pre.getAttribute("data-expanded")).toBe("true");
+    expect(toggle.textContent).toContain("收起");
+  });
+});

@@ -191,4 +191,42 @@ describe("useKeyboardNav", () => {
     expect(useStore.getState().activeSessionId).toBeNull();
     // Doesn't throw.
   });
+
+  it("v2.0.1: Ctrl+O switches drillPanelTab to 'detail' when ChatNode focused", () => {
+    seed(linear(), "b");
+    // Seed a different tab so we can observe the switch.
+    // 中: 先把 tab 设到别处，验证 Ctrl+O 真的切了过去。
+    useStore.getState().setDrillPanelTab("conversation");
+    render(<Harness />);
+    fireEvent.keyDown(window, { key: "o", ctrlKey: true });
+    expect(useStore.getState().drillPanelTab).toBe("detail");
+  });
+
+  it("v2.0.1: Cmd+O (Mac) also works", () => {
+    seed(linear(), "b");
+    useStore.getState().setDrillPanelTab("conversation");
+    render(<Harness />);
+    fireEvent.keyDown(window, { key: "o", metaKey: true });
+    expect(useStore.getState().drillPanelTab).toBe("detail");
+  });
+
+  it("v2.0.1: Ctrl+O no-ops when no ChatNode is selected", () => {
+    seed(linear(), null);
+    useStore.getState().setDrillPanelTab("conversation");
+    render(<Harness />);
+    fireEvent.keyDown(window, { key: "o", ctrlKey: true });
+    // Tab unchanged — refuses to switch when there's nothing to inspect.
+    // 中: 没选中节点时不切，避免空 Detail 面板让用户困惑。
+    expect(useStore.getState().drillPanelTab).toBe("conversation");
+  });
+
+  it("v2.0.1: Ctrl+Shift+O does NOT trigger (only plain Ctrl/Cmd+O)", () => {
+    seed(linear(), "b");
+    useStore.getState().setDrillPanelTab("conversation");
+    render(<Harness />);
+    fireEvent.keyDown(window, { key: "o", ctrlKey: true, shiftKey: true });
+    // Reserved for future / browser shortcuts.
+    // 中: 留给浏览器/未来用，本 hook 不抢。
+    expect(useStore.getState().drillPanelTab).toBe("conversation");
+  });
 });

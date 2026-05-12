@@ -6,6 +6,32 @@
 
 ---
 
+## 2026-05-12 — v2.0.1 (b)：`/compact` 卡片三件套（badge + 展开 + ctrl+o）
+
+紧接图片渲染 ship 后，作者顺手把早上 triage 列表里第一条收尾——`/compact` 卡片视觉的三个 sub-item。
+
+### 现状
+
+代码里 ChatNodeCard 有三个 kind：`slash`（紫色 ⚡）、`compact`（dashed teal/purple/rose）、`normal`。作者看到的截图里那张 `/compact` 卡其实走的是 **slash 分支**（`/compact` 是 slash command），不是 compact summary 分支。
+
+### 三个 sub-item
+
+1. **`/compact` 跟其他 slash 视觉区分**：保留紫色 chrome（避免给每个特殊 slash 单建 kind 的复杂度），只把 badge 从 `⚡ /compact` 换成 `⊞ /compact`——⊞ 跟 compact summary 卡的 badge 一致，视觉上立刻能认出"这条是压缩动作"。其他 slash（`/model`/`/clear` 等）保留 ⚡。
+2. **stdout 展开**：原本 `line-clamp-4` 硬切，CC 的 `/compact` stdout 实际有 PreCompact + Compacted + PostCompact 三行 hook 输出，4 行 clamp 把 PostCompact 切掉。改成默认 line-clamp-4 + 内容长度超阈值（>320 chars 或 >3 换行）时显示 `▸ 展开 / ▾ 收起`，click stopPropagation 防止顺带触发卡片选中（canvas 重新 pan）。
+3. **`ctrl+o` 真的有用**：原方案是 strip 掉 stdout 里 `(ctrl+o to see full summary)` 这段误导提示——作者反提议**让 ctrl+o 真的工作**。`useKeyboardNav.ts` 加 Cmd/Ctrl+O 拦截（必须 placed **在通用 modifier-skip 之前**，否则会被吞）：focused ChatNode 时 `setDrillPanelTab("detail")` 切到右侧 Detail tab。ChatNodeDetail 早就有完整的 Slash command 段（max-h-64 滚动 pre），现在 ctrl+o 直接跳过去——CC 的 hint 不用篡改就成了真的能用。
+
+### 实现要点
+
+- `useKeyboardNav.ts` 改 Cmd/Ctrl+O 拦截放在 modifier-skip 之前；shift 组合排除掉留给浏览器。
+- `ChatNodeCard.tsx` 加 `useState<boolean>(false)` 给 expand；slash badge 按 name 切 icon；toggle 按钮 stopPropagation 防止冒泡选中。
+- 测试：4 个 useKeyboardNav 新 case（Ctrl+O / Cmd+O / 无选中 no-op / Ctrl+Shift+O no-op）+ 4 个 ChatNodeCard 新 case（/compact ⊞ badge / 其他 slash ⚡ badge / 短输出不显示 toggle / 长输出 toggle 翻转 data-expanded）。948 全绿。
+
+### 经验
+
+**"修 bug" vs "兑现 hint"是两套思路**：原本我打算把 CC 的 ctrl+o 提示 strip 掉（"它不适用"），作者反建议让它真的生效。后者代码量差不多，但用户心智更连续——他们看 CC 文档/视频知道 ctrl+o 是干嘛的，Loomscope 不打断这个知识迁移。**强保留原始 stdout、再补足 Loomscope-侧能力**比"过滤掉不适用部分"是更好的默认。
+
+---
+
 ## 2026-05-12 — v2.0.1：用户消息多模态渲染（图片内联 + Lightbox + 文件 chip）
 
 作者在用 rc.2 soak 期间发了张图片，发现对话面板里**根本没显示**——只有 `📎 1` 的计数 chip。开了个 mini-task 把多模态用户消息渲染补完。

@@ -14,6 +14,7 @@
 
 import { Handle, Position } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useFoldAnchor } from "@/canvas/FoldAnchorContext";
@@ -75,6 +76,17 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
     : compact
       ? "compact"
       : "normal";
+  // EN (v2.0.1): per-card expand state for slash stdout. Was a
+  // fixed line-clamp-4; CC's /compact stdout includes PreCompact +
+  // PostCompact hook lines that exceed 4 lines and got cut off. Now
+  // collapsed by default (still line-clamp-4), click → full. Local
+  // useState because: the card is per-instance, expand state is a
+  // bubble-level UI preference not worth global persistence, and
+  // React Flow handles dynamic card height without explicit relayout.
+  // 中: 每卡 expand 状态。原本固定 line-clamp-4 会切掉 PreCompact/
+  // PostCompact 之类长输出；现在默认收起，点击全展开。useState 即
+  // 可——展开是 UI 偏好，不值得全局持久；React Flow 自处理高度变化。
+  const [stdoutExpanded, setStdoutExpanded] = useState(false);
   const compactPal =
     kind === "compact" ? compactPalette(cn.compactMetadata?.trigger) : null;
 
@@ -194,8 +206,22 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
           into this same row. */}
       {kind === "slash" && slash && (
         <div className="flex items-center gap-1 mb-1.5 flex-wrap">
-          <span className="inline-flex items-center gap-0.5 rounded bg-violet-200/80 px-1 py-0.5 text-[10px] font-semibold text-violet-900">
-            ⚡ {slash.name}
+          {/* EN (v2.0.1): differentiate /compact from generic slash. */}
+          {/* /compact triggers context compression — the ⊞ icon mirrors */}
+          {/* the compact summary card's badge so it's instantly */}
+          {/* recognizable as a compression action even before reading */}
+          {/* the name. Other slash commands keep the ⚡ lightning. */}
+          {/* 中: /compact 用 ⊞ 跟 compact summary 卡呼应（视觉一致）， */}
+          {/* 其他 slash 保留 ⚡ 闪电图标。 */}
+          <span
+            className="inline-flex items-center gap-0.5 rounded bg-violet-200/80 px-1 py-0.5 text-[10px] font-semibold text-violet-900"
+            data-testid={
+              slash.name === "/compact"
+                ? "slash-badge-compact"
+                : "slash-badge-generic"
+            }
+          >
+            {slash.name === "/compact" ? "⊞" : "⚡"} {slash.name}
             {slash.args ? ` ${slash.args}` : ""}
           </span>
         </div>
@@ -278,9 +304,39 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
       {kind === "slash" && slash && slash.stdout && (
         <div className="mb-1.5">
           <div className="text-[10px] text-gray-500 mb-0.5">输出</div>
-          <pre className="text-[11px] text-gray-900 break-words whitespace-pre-wrap font-mono line-clamp-4 m-0">
+          <pre
+            className={`text-[11px] text-gray-900 break-words whitespace-pre-wrap font-mono m-0 ${stdoutExpanded ? "" : "line-clamp-4"}`}
+            data-testid="slash-stdout"
+            data-expanded={stdoutExpanded ? "true" : "false"}
+          >
             {slash.stdout}
           </pre>
+          {/* EN: Only show the toggle when content is actually likely
+              to overflow 4 lines. ~80 chars per card-width line ×
+              4 lines = 320 chars; below that we don't bother showing
+              the toggle. Newline count > 4 is the other obvious
+              overflow signal. */}
+          {/* 中: 只有内容可能超 4 行（>320 字符或换行 >4 次）才显示
+              展开/收起按钮，短输出不加视觉噪音。 */}
+          {(slash.stdout.length > 320 ||
+            (slash.stdout.match(/\n/g)?.length ?? 0) > 3) && (
+            <button
+              type="button"
+              data-testid="slash-stdout-toggle"
+              className="mt-0.5 text-[10px] text-violet-600 hover:text-violet-800 hover:underline cursor-pointer"
+              onClick={(e) => {
+                // EN: stop propagation so the click doesn't bubble to
+                // the card's select handler (= re-pan canvas). The
+                // expand toggle should be local to the card.
+                // 中: 阻止冒泡，避免触发 ChatNode 选中导致 canvas 重新
+                // 平移；展开/收起只是卡内操作。
+                e.stopPropagation();
+                setStdoutExpanded((v) => !v);
+              }}
+            >
+              {stdoutExpanded ? "▾ 收起" : "▸ 展开"}
+            </button>
+          )}
         </div>
       )}
       {kind === "compact" && (

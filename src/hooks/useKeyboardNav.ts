@@ -35,15 +35,46 @@ export function useKeyboardNav(): void {
       ) {
         return;
       }
-      // Don't interfere with modifier-key combos (browser shortcuts).
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-
       const s = useStore.getState();
       const sid = s.activeSessionId;
       if (!sid) return;
       const sess = s.sessions.get(sid);
       const chatFlow = sess?.chatFlow ?? null;
       if (!chatFlow) return;
+
+      // EN (v2.0.1): Ctrl/Cmd+O honors CC's own "ctrl+o to see full
+      // summary" hint that ships in /compact slash stdout — CC writes
+      // it assuming TUI context but in Loomscope it's misleading
+      // unless we wire the equivalent. Here we flip the right-side
+      // drill panel to the Detail tab, where ChatNodeDetail's "Slash
+      // command" section renders the full stdout in a scrollable pre
+      // (max-h-64). Works for any focused ChatNode, not just slash —
+      // the Detail tab is the natural "more info" surface.
+      //
+      // Intercepted BEFORE the generic modifier-skip guard so it
+      // doesn't get swallowed. Browser's native Cmd/Ctrl+O (open
+      // file) is suppressed via preventDefault — acceptable cost
+      // since the slash hint explicitly points users to this key.
+      //
+      // 中: 兑现 CC `/compact` 输出里那句 "ctrl+o to see full summary"。
+      // CC 写时假设 TUI 上下文，浏览器里默认无效——这里劫持
+      // Cmd/Ctrl+O，切右侧 panel 到 Detail tab，让 ChatNodeDetail
+      // 的 "Slash command" 段（含完整 stdout 的 max-h-64 滚动 pre）
+      // 露出。这样原 hint 不用改写也是真的有用了。
+      // 任何 focused ChatNode 都走同一条——Detail tab 本来就是
+      // "查看详情"的入口。需要先于通用 modifier-skip 拦截，否则会
+      // 被吞。preventDefault 抑制浏览器原生"打开文件"，是可接受的
+      // 代价（slash hint 已经把这个键钉死了）。
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o" && !e.altKey && !e.shiftKey) {
+        if (sess?.selectedNodeId) {
+          e.preventDefault();
+          s.setDrillPanelTab("detail");
+        }
+        return;
+      }
+
+      // Don't interfere with modifier-key combos (browser shortcuts).
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       // For nav purposes the "scope" is the top-level chatFlow; in
       // sub-chatflow drill we let user esc out first to navigate the
