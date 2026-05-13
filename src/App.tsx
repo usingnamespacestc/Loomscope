@@ -510,34 +510,56 @@ export default function App() {
       // Belt-and-suspenders: some browsers fire onopen before the
       // hello frame arrives; mark open on either signal.
       useStore.getState().setLiveStatus("session", "open");
-      // EN (v2.1 PR D5 revised 2026-05-13): hello = EventSource
-      // (re)connect success signal. On reconnect, server's delta
-      // snapshot has been reset (see sessions.ts unsubscribe path)
-      // and it will re-emit ALL ChatNodes as `chatnode-added` on the
-      // next chokidar fire. We reset `lastDeltaSeq` to null so those
-      // re-emitted deltas are accepted as the new baseline instead
-      // of gap-detecting.
+      // EN (v2.1 PR D5 revised again 2026-05-14): hello = EventSource
+      // (re)connect success signal.
       //
-      // No refreshSession call — the re-emitted chatnode-added events
-      // (with dedup-by-id in the reducer) will reconcile any state
-      // missed during the disconnect. Avoids the 4-second-GET refresh
-      // round-trip on every reconnect blip.
+      // History: an earlier revision (D5 final, commit 58b1fd2)
+      // stopped resetting the server-side delta snapshot on SSE
+      // unsubscribe, because 650+ chatnode-added re-emits on every
+      // reconnect blip flooded the client reducer and stalled the UI.
+      // That kept the snapshot warm but broke a previous assumption
+      // this handler made: "reconnect → server re-emits → reducer's
+      // id-dedup heals stale client state for free." With persistent
+      // snapshots that re-emit no longer happens, so state missed
+      // during the disconnect (e.g. chatnode-added arriving while the
+      // SSE was reconnecting after a tsx-watch restart) is gone
+      // forever from the delta stream. Drift-ping eventually catches
+      // it (30 s), but drift's refresh path can fail silently (502 on
+      // proxy timeout, etc.), and the user sees stale assistant text
+      // or missing ChatNodes until a hard reload.
       //
-      // Initial mount also fires hello; resetting null→null is a
-      // no-op, so this is safe to run unconditionally.
+      // Fix: on reconnect (not initial mount), kick a full refresh.
+      // refreshSession is dedup'd, so a concurrent in-flight refresh
+      // collapses; cost is one extra 4 s GET per reconnect — far
+      // better than missing data. Initial mount is detected by
+      // `chatFlow == null` (loadSession hasn't yet populated the
+      // session); we skip the refresh because loadSession is already
+      // about to do equivalent work.
       //
-      // 中: hello = (重)连接成功。server snapshot 已重置（见
-      // sessions.ts unsubscribe），所有 ChatNode 会重新 emit 当
-      // added，我们 reset lastDeltaSeq=null 让那批新 seq 直接 baseline。
-      // 不发 refresh——dedup-by-id 的 reducer 会让 added 流自然 reconcile
-      // disconnect 期间漏的节点，省 4s GET 往返。初次挂载 null→null
-      // 无 op，统一处理。
+      // We still reset lastDeltaSeq=null so any deltas arriving
+      // before refresh completes seed a fresh baseline rather than
+      // gap-detecting against the pre-disconnect seq.
+      //
+      // 中: hello = (重)连接成功。D5 final 之后 server 不再 reset
+      // snapshot，因此 disconnect 期间漏掉的 chatnode-added 不会重
+      // 发——只能靠主动 refresh 补。初挂载（chatFlow==null）跳过，
+      // loadSession 已经在做了；重连时强制 refresh 修补 stale。
       const sessions = useStore.getState().sessions;
       const cur = sessions.get(activeId);
-      if (cur && cur.lastDeltaSeq != null) {
-        const next = new Map(sessions);
-        next.set(activeId, { ...cur, lastDeltaSeq: null });
-        useStore.setState({ sessions: next });
+      if (cur) {
+        if (cur.lastDeltaSeq != null) {
+          const next = new Map(sessions);
+          next.set(activeId, { ...cur, lastDeltaSeq: null });
+          useStore.setState({ sessions: next });
+        }
+        // Reconnect path — chatFlow already loaded means SSE just
+        // came back from a disconnect (initial mount is chatFlow=null
+        // because loadSession hasn't populated yet).
+        // 中: cur.chatFlow 已存在说明是重连，初次 mount 时 chatFlow=null
+        // 由 loadSession 兜底，这里就不要重复发 refresh。
+        if (cur.chatFlow) {
+          void useStore.getState().refreshSession(activeId);
+        }
       }
     });
     es.addEventListener("ping", () => {
