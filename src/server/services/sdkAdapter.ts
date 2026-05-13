@@ -29,6 +29,52 @@ import type {
 
 export type { Options, Query, SDKUserMessage };
 
+// EN (2026-05-14, prep for 2026-06-15 Agent SDK quota separation):
+// Anthropic is splitting Agent SDK usage from interactive subscription
+// quota on 2026-06-15 (Pro $20 / Max-5x $100 / Max-20x $200 monthly
+// credit, exhausts to hard-stop unless extra-usage enabled). Loomscope
+// spawns CC via `@anthropic-ai/claude-agent-sdk` which marks every
+// child with `CLAUDE_CODE_ENTRYPOINT=sdk-ts` — that header goes into
+// `x-anthropic-billing-header: cc_entrypoint=sdk-ts;` so Anthropic
+// routes the call to SDK credit billing.
+//
+// The CC binary respects a pre-set CLAUDE_CODE_ENTRYPOINT env var
+// (skips the SDK library's "sdk-ts" overwrite — see CC source
+// `src/main.tsx:519`). If we set it on the Loomscope server's
+// process.env BEFORE the SDK library spawns CC, the child inherits
+// our value and reports that to Anthropic instead.
+//
+// Phase 2-A experiment knob: `LOOMSCOPE_CC_ENTRYPOINT_OVERRIDE`
+// shell-rc env var. Set it to "cli" to make every Loomscope-driven
+// spawn report `cc_entrypoint=cli`. Whether Anthropic's server then
+// routes to subscription quota is empirical — TBD on 2026-06-15.
+// See `docs/handoff-sdk-credit-2026-06-15.md` for the full plan.
+//
+// Default unset → behavior identical to today (SDK library writes
+// "sdk-ts"). Single-line opt-in keeps the experiment cheap to try.
+//
+// 中: 2026-06-15 Agent SDK 分账。SDK library 默认把 cc_entrypoint 写
+// 成 sdk-ts，进 SDK credit 池。CC binary 尊重已 set 的 ENV var —— 我
+// 们在 server 进程启动时 overlay 一下，child 继承，header 就报指定值。
+// LOOMSCOPE_CC_ENTRYPOINT_OVERRIDE shell 环境开关；默认空 = 旧行为。
+// 完整 plan 在 docs/handoff-sdk-credit-2026-06-15.md。
+const _entrypointOverride =
+  typeof process !== "undefined"
+    ? process.env.LOOMSCOPE_CC_ENTRYPOINT_OVERRIDE
+    : undefined;
+if (_entrypointOverride && _entrypointOverride.trim() !== "") {
+  // Set BEFORE any sdkQuery() call — SDK library checks
+  // `if (!env.CLAUDE_CODE_ENTRYPOINT)` before writing its own value.
+  // Persists for the server lifetime; child spawns inherit via
+  // process.env in node:child_process.
+  // 中: 模块加载时即写入；SDK library 之后 spawn 子进程时继承。
+  process.env.CLAUDE_CODE_ENTRYPOINT = _entrypointOverride.trim();
+  // eslint-disable-next-line no-console
+  console.log(
+    `[sdkAdapter] CLAUDE_CODE_ENTRYPOINT overridden to "${process.env.CLAUDE_CODE_ENTRYPOINT}" via LOOMSCOPE_CC_ENTRYPOINT_OVERRIDE — Anthropic billing will see this value. See docs/handoff-sdk-credit-2026-06-15.md.`,
+  );
+}
+
 /**
  * Function shape accepted by SessionRegistry. Production wiring
  * passes `realSdkQuery`; tests pass a mock returning a controllable
