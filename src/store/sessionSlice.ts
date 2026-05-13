@@ -1,7 +1,7 @@
 import type { StateCreator } from "zustand";
 
 import type { ChatFlow, ChatNode, DelegateNode, WorkFlow } from "@/data/types";
-import { isToolResultRecord } from "@/parse/raw-record";
+import { blocksOf, isToolResultRecord } from "@/parse/raw-record";
 import type { AgentMetadata } from "@/parse/sidecar";
 import type {
   DrillFrame,
@@ -38,6 +38,7 @@ function blankSessionState(): SessionState {
     lastUpdated: 0,
     lastInvalidateAt: 0,
     lastDeltaSeq: null,
+    rawAppliedRecordUuids: new Set<string>(),
   };
 }
 
@@ -730,95 +731,183 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     set({ sessions: updated });
   },
 
-  // v2.2 PR E1: raw-record fast path. Server broadcasts a `raw-records`
-  // SSE event with newly-appended jsonl records as soon as chokidar
-  // sees the write — well before buildChatFlow finishes (~1.5-2s on
-  // 650-ChatNode sessions). We spawn a placeholder ChatNode keyed on
-  // the record's promptId so the UI updates immediately; the
-  // subsequent ground-truth `delta` event (chatnode-added with the
-  // SAME promptId) replaces the placeholder in-place via the existing
-  // dedup in applyChatFlowDelta.
+  // v2.2 PR E1+E2: raw-record fast path. Server broadcasts a
+  // `raw-records` SSE event with newly-appended jsonl records as
+  // soon as chokidar sees the write — well before buildChatFlow
+  // finishes (~1.5-6s on 650-ChatNode sessions). This reducer
+  // absorbs records optimistically:
   //
-  // MVP scope: only user records get placeholders. tool_result /
-  // assistant / system records are skipped — they'd require
-  // mutating an existing ChatNode's workflow, which is more
-  // structural and not worth the complexity vs. the ~1s wait for
-  // ground-truth.
+  //   • user record (PR E1): spawn a placeholder ChatNode keyed on
+  //     record.promptId. Subsequent ground-truth `delta` with the
+  //     same id replaces in-place.
   //
-  // 中: raw-record 快速通道。chokidar 一看到 jsonl append 就广播；
-  // 我们用 record.promptId 当 id 造占位 ChatNode，1-2s 后 delta 到
-  // 时通过同 id 替换。MVP 只处理 user record。
+  //   • assistant record (PR E2): find the host ChatNode by
+  //     promptId, extract text blocks from message.content, and
+  //     append the text to assistantText / refresh assistantPreview.
+  //     This makes long agent replies stream in visibly during the
+  //     5-6s buildChatFlow window instead of all appearing at once.
+  //
+  // Idempotency: rawAppliedRecordUuids tracks every uuid we've
+  // absorbed; chokidar double-fires and out-of-order replays are
+  // dropped via Set membership. Ground-truth delta replaces the
+  // ChatNode wholesale and naturally overwrites any drift.
+  //
+  // Skipped types in this fast path: tool_result / system /
+  // sidechain / meta / compactSummary records. Their UI effect on
+  // the canvas summary card is marginal, and getting them right
+  // requires mutating workflow.nodes which we leave to the
+  // ground-truth delta.
+  //
+  // 中: raw-record 快速通道。user 记录造占位 ChatNode（PR E1）；
+  // assistant 记录把 text 追加到宿主 ChatNode 的 assistantText 让
+  // 回复在 6s buildChatFlow 窗口里流式可见（PR E2）。幂等性通过
+  // rawAppliedRecordUuids 防 chokidar 重复触发。tool_result /
+  // system / sidechain / meta / compactSummary 跳过——靠 ground-
+  // truth delta 兜底。
   applyRawRecord: (sessionId, record) => {
     const sessions = get().sessions;
     const cur = sessions.get(sessionId);
     if (!cur || !cur.chatFlow) return;
-    // Filters — see the docblock on SessionSlice.applyRawRecord for
-    // why each is excluded.
-    // 中: 过滤；理由见 types.ts 上的文档注释。
-    if (record.type !== "user") return;
-    if (!record.promptId) return;
     if (!record.uuid) return;
     if (record.isMeta) return;
     if (record.isSidechain) return;
     if (record.isCompactSummary) return;
-    if (isToolResultRecord(record)) return;
-    // Already have a ChatNode with this promptId — either the
-    // ground-truth delta beat us, or a previous raw-record already
-    // placed a placeholder. Do nothing.
-    // 中: 同 promptId 已存在则跳过——可能 delta 先到了，或前一条
-    // raw-record 已经放过占位。
-    const existing = cur.chatFlow.chatNodes.find((c) => c.id === record.promptId);
-    if (existing) return;
-    const placeholder: ChatNode = {
-      kind: "chat",
-      id: record.promptId,
-      parentChatNodeId: null,
-      rootUserUuid: record.uuid,
-      userMessage: {
-        uuid: record.uuid,
-        content: record.message?.content ?? "",
-        timestamp: record.timestamp,
-        attachments: [],
-      },
-      workflow: {
-        nodes: [],
-        edges: [],
-        // hasInFlightWork=true so the running spinner shows; the
-        // ground-truth delta updates the summary with real numbers.
-        // 中: hasInFlightWork=true 让旋转动画立刻出现，ground-truth
-        // 会用真实数据覆盖。
-        summary: {
-          assistantPreview: "",
-          assistantText: [],
-          llmCount: 0,
-          hasInFlightWork: true,
-          chainCount: 0,
-          toolCount: 0,
-          totalThinkingChars: 0,
-          contextTokens: 0,
-          maxContextTokens: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          durationMs: null,
-          toolUseFilePaths: [],
+    if (cur.rawAppliedRecordUuids.has(record.uuid)) return;
+
+    if (record.type === "user") {
+      if (!record.promptId) return;
+      if (isToolResultRecord(record)) return;
+      const existing = cur.chatFlow.chatNodes.find(
+        (c) => c.id === record.promptId,
+      );
+      if (existing) {
+        // ChatNode already present (ground-truth beat us, or a
+        // sibling raw-record built a placeholder); still mark uuid
+        // applied so we don't try again.
+        // 中: 节点已存在仍标记 uuid 已应用，避免后续重复尝试。
+        const nextUuids = new Set(cur.rawAppliedRecordUuids);
+        nextUuids.add(record.uuid);
+        const updated = new Map(sessions);
+        updated.set(sessionId, { ...cur, rawAppliedRecordUuids: nextUuids });
+        set({ sessions: updated });
+        return;
+      }
+      const placeholder: ChatNode = {
+        kind: "chat",
+        id: record.promptId,
+        parentChatNodeId: null,
+        rootUserUuid: record.uuid,
+        userMessage: {
+          uuid: record.uuid,
+          content: record.message?.content ?? "",
+          timestamp: record.timestamp,
+          attachments: [],
         },
-      },
-      trigger: "user",
-      isCompactSummary: false,
-      meta: {},
-      timestamp: record.timestamp,
-    };
-    const cf: ChatFlow = {
-      ...cur.chatFlow,
-      chatNodes: [...cur.chatFlow.chatNodes, placeholder],
-    };
-    const updated = new Map(sessions);
-    updated.set(sessionId, {
-      ...cur,
-      chatFlow: cf,
-      lastUpdated: Date.now(),
-    });
-    set({ sessions: updated });
+        workflow: {
+          nodes: [],
+          edges: [],
+          summary: {
+            assistantPreview: "",
+            assistantText: [],
+            llmCount: 0,
+            hasInFlightWork: true,
+            chainCount: 0,
+            toolCount: 0,
+            totalThinkingChars: 0,
+            contextTokens: 0,
+            maxContextTokens: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: null,
+            toolUseFilePaths: [],
+          },
+        },
+        trigger: "user",
+        isCompactSummary: false,
+        meta: {},
+        timestamp: record.timestamp,
+      };
+      const cf: ChatFlow = {
+        ...cur.chatFlow,
+        chatNodes: [...cur.chatFlow.chatNodes, placeholder],
+      };
+      const nextUuids = new Set(cur.rawAppliedRecordUuids);
+      nextUuids.add(record.uuid);
+      const updated = new Map(sessions);
+      updated.set(sessionId, {
+        ...cur,
+        chatFlow: cf,
+        rawAppliedRecordUuids: nextUuids,
+        lastUpdated: Date.now(),
+      });
+      set({ sessions: updated });
+      return;
+    }
+
+    if (record.type === "assistant") {
+      // PR E2: stream assistant text into the host ChatNode's summary.
+      // 中: 把 assistant text 增量并入宿主 ChatNode 的 summary。
+      if (!record.promptId) return;
+      const blocks = blocksOf(record);
+      const text = blocks
+        .filter((b): b is { type: "text"; text: string } =>
+          (b as { type?: string }).type === "text" &&
+          typeof (b as { text?: unknown }).text === "string",
+        )
+        .map((b) => b.text)
+        .join("");
+      if (!text.trim()) return;
+      const idx = cur.chatFlow.chatNodes.findIndex(
+        (c) => c.id === record.promptId,
+      );
+      if (idx < 0) return; // no host — wait for ground-truth
+      const host = cur.chatFlow.chatNodes[idx];
+      const oldSummary = host.workflow.summary;
+      const oldText = oldSummary?.assistantText ?? [];
+      const newAssistantText = [...oldText, text];
+      const newSummary = {
+        ...oldSummary,
+        assistantPreview: text.slice(0, 240),
+        assistantText: newAssistantText,
+        llmCount: (oldSummary?.llmCount ?? 0) + 1,
+        hasInFlightWork: true,
+        // Fields we leave to ground-truth — keep their last-known
+        // values rather than guessing.
+        // 中: 这些字段交给 ground-truth；保留旧值不瞎猜。
+        chainCount: oldSummary?.chainCount ?? 1,
+        toolCount: oldSummary?.toolCount ?? 0,
+        totalThinkingChars: oldSummary?.totalThinkingChars ?? 0,
+        contextTokens: oldSummary?.contextTokens ?? 0,
+        maxContextTokens: oldSummary?.maxContextTokens ?? 0,
+        inputTokens: oldSummary?.inputTokens ?? 0,
+        outputTokens: oldSummary?.outputTokens ?? 0,
+        durationMs: oldSummary?.durationMs ?? null,
+        toolUseFilePaths: oldSummary?.toolUseFilePaths ?? [],
+        lastModel:
+          (record.message?.model as string | undefined) ?? oldSummary?.lastModel,
+      };
+      const updatedNode: ChatNode = {
+        ...host,
+        workflow: { ...host.workflow, summary: newSummary },
+      };
+      const arr = cur.chatFlow.chatNodes.slice();
+      arr[idx] = updatedNode;
+      const cf: ChatFlow = { ...cur.chatFlow, chatNodes: arr };
+      const nextUuids = new Set(cur.rawAppliedRecordUuids);
+      nextUuids.add(record.uuid);
+      const updated = new Map(sessions);
+      updated.set(sessionId, {
+        ...cur,
+        chatFlow: cf,
+        rawAppliedRecordUuids: nextUuids,
+        lastUpdated: Date.now(),
+      });
+      set({ sessions: updated });
+      return;
+    }
+
+    // All other record types: no-op in MVP.
+    // 中: 其他类型 MVP 暂不处理。
   },
 
   markSessionActivity: (sessionId) => {

@@ -339,6 +339,22 @@ export interface SessionState {
    *  load）；下一条直接当 baseline。gap 检测发现错位时强制 full refresh。
    */
   lastDeltaSeq: number | null;
+  /** EN (v2.2 PR E2): UUIDs of jsonl records already absorbed via the
+   *  raw-record fast path. Idempotency guard so chokidar double-fires
+   *  or out-of-order replay don't double-apply assistant text to a
+   *  ChatNode's `assistantText`. The set grows linearly with the
+   *  session's record count (~10k entries on a long session, ~200KB
+   *  in memory — negligible). Cleared by `loadSession` / session
+   *  remove; never auto-pruned mid-session because ground-truth
+   *  delta replaces ChatNode wholesale anyway, so stale Set entries
+   *  cost nothing.
+   *
+   *  中: 已通过 raw-record 通道吸收的 record uuid 集合。防止
+   *  chokidar 重复或乱序 replay 把 assistant text append 两遍。
+   *  session 加载 / 删除时清空；不做中段 prune 因为 ground-truth
+   *  delta 会原地替换 ChatNode，旧 uuid 留着无害。
+   */
+  rawAppliedRecordUuids: Set<string>;
 }
 
 export interface SessionSlice {

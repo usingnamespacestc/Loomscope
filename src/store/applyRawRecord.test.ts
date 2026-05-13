@@ -83,6 +83,7 @@ function seed(chatFlow: ChatFlow | null): void {
       lastUpdated: 0,
       lastInvalidateAt: 0,
       lastDeltaSeq: null,
+      rawAppliedRecordUuids: new Set<string>(),
     });
     return { sessions, activeSessionId: SID };
   });
@@ -172,6 +173,107 @@ describe("applyRawRecord", () => {
     seed(null);
     useStore.getState().applyRawRecord(SID, userRec());
     expect(useStore.getState().sessions.get(SID)?.chatFlow).toBeNull();
+  });
+
+  it("assistant record appends streaming text to host ChatNode", () => {
+    seed(flow([cn("p1")]));
+    useStore.getState().applyRawRecord(SID, {
+      type: "assistant",
+      uuid: "a-1",
+      promptId: "p1",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world" }],
+        model: "claude-opus-4-7",
+      },
+    });
+    const host = useStore.getState().sessions.get(SID)?.chatFlow?.chatNodes[0];
+    expect(host?.workflow.summary?.assistantText).toEqual(["Hello world"]);
+    expect(host?.workflow.summary?.assistantPreview).toBe("Hello world");
+    expect(host?.workflow.summary?.llmCount).toBe(1);
+    expect(host?.workflow.summary?.lastModel).toBe("claude-opus-4-7");
+  });
+
+  it("multiple assistant records on same promptId stack in assistantText", () => {
+    seed(flow([cn("p1")]));
+    useStore.getState().applyRawRecord(SID, {
+      type: "assistant",
+      uuid: "a-1",
+      promptId: "p1",
+      message: { role: "assistant", content: [{ type: "text", text: "round 1" }] },
+    });
+    useStore.getState().applyRawRecord(SID, {
+      type: "assistant",
+      uuid: "a-2",
+      promptId: "p1",
+      message: { role: "assistant", content: [{ type: "text", text: "round 2" }] },
+    });
+    const host = useStore.getState().sessions.get(SID)?.chatFlow?.chatNodes[0];
+    expect(host?.workflow.summary?.assistantText).toEqual(["round 1", "round 2"]);
+    expect(host?.workflow.summary?.assistantPreview).toBe("round 2");
+    expect(host?.workflow.summary?.llmCount).toBe(2);
+  });
+
+  it("assistant record is idempotent — re-applying same uuid is a no-op", () => {
+    seed(flow([cn("p1")]));
+    const rec: RawRecord = {
+      type: "assistant",
+      uuid: "a-1",
+      promptId: "p1",
+      message: { role: "assistant", content: [{ type: "text", text: "hi" }] },
+    };
+    useStore.getState().applyRawRecord(SID, rec);
+    useStore.getState().applyRawRecord(SID, rec);
+    const host = useStore.getState().sessions.get(SID)?.chatFlow?.chatNodes[0];
+    expect(host?.workflow.summary?.assistantText).toEqual(["hi"]);
+    expect(host?.workflow.summary?.llmCount).toBe(1);
+  });
+
+  it("assistant record with empty / whitespace-only text is skipped", () => {
+    seed(flow([cn("p1")]));
+    useStore.getState().applyRawRecord(SID, {
+      type: "assistant",
+      uuid: "a-1",
+      promptId: "p1",
+      message: { role: "assistant", content: [{ type: "text", text: "   " }] },
+    });
+    // Pure tool_use rounds also have no text — same skip.
+    useStore.getState().applyRawRecord(SID, {
+      type: "assistant",
+      uuid: "a-2",
+      promptId: "p1",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "t1", name: "Bash", input: { cmd: "ls" } },
+        ],
+      },
+    });
+    const host = useStore.getState().sessions.get(SID)?.chatFlow?.chatNodes[0];
+    expect(host?.workflow.summary?.assistantText ?? []).toEqual([]);
+    expect(host?.workflow.summary?.llmCount).toBe(0);
+  });
+
+  it("assistant record without a matching host ChatNode is dropped", () => {
+    seed(flow([cn("p1")]));
+    useStore.getState().applyRawRecord(SID, {
+      type: "assistant",
+      uuid: "a-1",
+      promptId: "no-such-prompt",
+      message: { role: "assistant", content: [{ type: "text", text: "lost" }] },
+    });
+    const cf = useStore.getState().sessions.get(SID)?.chatFlow;
+    expect(cf?.chatNodes).toHaveLength(1);
+    expect(cf?.chatNodes[0]?.workflow.summary?.assistantText ?? []).toEqual([]);
+  });
+
+  it("user record idempotency — re-applying same uuid does not duplicate", () => {
+    seed(flow([cn("a")]));
+    const rec: RawRecord = userRec({ promptId: "p2", uuid: "u2" });
+    useStore.getState().applyRawRecord(SID, rec);
+    useStore.getState().applyRawRecord(SID, rec);
+    const cf = useStore.getState().sessions.get(SID)?.chatFlow;
+    expect(cf?.chatNodes).toHaveLength(2); // a + p2 only
   });
 
   it("ground-truth delta replaces the placeholder via id match", () => {

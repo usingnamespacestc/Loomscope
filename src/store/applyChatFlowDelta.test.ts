@@ -76,6 +76,7 @@ function seed(chatFlow: ChatFlow, lastDeltaSeq: number | null = null): void {
       lastUpdated: 0,
       lastInvalidateAt: 0,
       lastDeltaSeq,
+      rawAppliedRecordUuids: new Set<string>(),
     });
     return { sessions, activeSessionId: SID };
   });
