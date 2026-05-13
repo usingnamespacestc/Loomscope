@@ -20,6 +20,7 @@ import {
   type HookEnvelope,
   type HookEventName,
 } from "@/server/services/hookEventBus";
+import { _setPreferencesPathForTests } from "@/server/services/preferences";
 
 let tmpRoot: string;
 let app: ReturnType<typeof createApp>;
@@ -31,6 +32,13 @@ const WRONG_SECRET = "b".repeat(64);
 beforeEach(async () => {
   tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "loomscope-ccHook-"));
   _setCacheRootForTests(path.join(tmpRoot, "disk-cache"));
+  // EN (2026-05-14): isolate the preferences path to a temp file —
+  // earlier this test's PATCH /api/preferences leaked
+  // `enableInteractivePermissions: true` into the real
+  // ~/.loomscope/preferences.json, accidentally turning the gate on
+  // for the developer. Mirrors the v1.1 test-isolation fix #158.
+  // 中: 把 preferences 路径重定向到 tmp，避免污染真实文件。
+  _setPreferencesPathForTests(path.join(tmpRoot, "preferences.json"));
   _resetHookBusForTests();
   app = createApp({
     rootDir: tmpRoot,
@@ -42,6 +50,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   _setCacheRootForTests(null);
+  _setPreferencesPathForTests(null);
   _resetHookBusForTests();
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
