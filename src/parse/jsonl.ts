@@ -786,6 +786,61 @@ export function buildChatFlow(
     if (wid) cn.triggerSource = { workNodeId: wid };
   }
 
+  // EN (2026-05-13 revised): re-anchor `meta.awaySummary` to the
+  // ChatNode that PRECEDED the gap (= "this turn's closing summary
+  // generated on resumption"), not the new turn after the gap.
+  //
+  // Reason: visually the recap belongs to the turn whose context it
+  // summarises, not the turn that consumes it. Mirrors Agentloom's
+  // chatBrief stacking pattern (each node "owns" its outgoing brief).
+  //
+  // Implementation note (idempotency): we recompute the target
+  // mapping fresh from `records` on every buildChatFlow call rather
+  // than reading the just-built chatNodes' meta. This is critical
+  // for the M2 bucket-reuse path — reused chatNode objects retain
+  // mutations from prior calls, so iterating `chatNodes` to figure
+  // out who "currently has" the awaySummary would compound across
+  // rebuilds (each rebuild would move the awaySummary up another
+  // generation). Scanning records once is O(records) and always
+  // produces the same mapping given the same input.
+  //
+  // 中: 重新挂 meta.awaySummary 到 gap 前的节点。idempotency 关键：
+  // 从 records 重新扫描计算目标映射，避免 M2 reuse 复用对象时反复
+  // mutate 累积偏移。
+  const awayByTargetId = new Map<string, ChatNodeMeta["awaySummary"]>();
+  for (const r of records) {
+    if (
+      r.type !== "system" ||
+      r.subtype !== "away_summary" ||
+      !r.uuid ||
+      !r.parentUuid
+    ) {
+      continue;
+    }
+    // The away_summary record's parentUuid points at the last record
+    // of the PREVIOUS ChatNode (= the turn that ran before the gap).
+    // resolvePromptId resolves any record uuid → ChatNode id.
+    // 中: away_summary 的 parent record 属于 gap 前那个 ChatNode；
+    // resolvePromptId 解析任意 uuid → ChatNode id。
+    const targetChatNodeId = resolvePromptId(r.parentUuid);
+    if (!targetChatNodeId) continue;
+    awayByTargetId.set(targetChatNodeId, {
+      uuid: r.uuid,
+      content: typeof r.content === "string" ? r.content : "",
+      timestamp: r.timestamp,
+    });
+  }
+  for (const cn of chatNodes) {
+    const next = awayByTargetId.get(cn.id);
+    // Always overwrite — fresh map is authoritative. Reused objects
+    // from M2 cache may have stale awaySummary; we replace it with
+    // the correct value (or undefined if no longer applicable).
+    // 中: 永远以 fresh map 为准，覆盖 reused 对象的旧值。
+    if (cn.meta.awaySummary !== next) {
+      cn.meta = { ...cn.meta, awaySummary: next };
+    }
+  }
+
   return {
     id: sessionId ?? "",
     mainJsonlPath,
@@ -949,10 +1004,14 @@ function buildChatNode(
   );
 
   // Determine trigger by walking the user record's parentUuid back across
-  // system records (away_summary, scheduled_task_fire, turn_duration).
+  // system records (away_summary, scheduled_task_fire). The away_summary
+  // attachment itself moved to a records-scan in the post-process below
+  // (see "re-anchor meta.awaySummary" comment in buildChatFlow). This
+  // walk only contributes the trigger flip + scheduledFireUuid.
+  // 中: 用回溯 parentUuid 探测 scheduled 触发。away_summary 的归属
+  // 改由 buildChatFlow 末尾的 records-scan 处理。
   let trigger: ChatNode["trigger"] = "user";
   let scheduledFireUuid: string | undefined;
-  let awaySummaryAttached: ChatNodeMeta["awaySummary"] | undefined;
 
   let cursor: string | null = rootUser.parentUuid ?? null;
   let hops = 0;
@@ -964,14 +1023,9 @@ function buildChatNode(
       scheduledFireUuid = ancestor.uuid;
       cursor = ancestor.parentUuid;
     } else if (ancestor.type === "system" && ancestor.subtype === "away_summary") {
-      const rec = awaySummaryByUuid.get(ancestor.uuid);
-      if (rec) {
-        awaySummaryAttached = {
-          uuid: ancestor.uuid,
-          content: typeof rec.content === "string" ? rec.content : "",
-          timestamp: rec.timestamp,
-        };
-      }
+      // Continue walking past — only relevant for the trigger flip
+      // (in case a scheduled_task_fire sits behind the away_summary).
+      // 中: 越过 away_summary 继续找 scheduled_task_fire。
       cursor = ancestor.parentUuid;
     } else {
       break;
@@ -1007,7 +1061,11 @@ function buildChatNode(
   const commits = detectGitCommits({ workflow, cwdByToolUseUuid });
 
   const meta: ChatNodeMeta = {
-    awaySummary: awaySummaryAttached,
+    // awaySummary gets populated by the records-scan post-process in
+    // buildChatFlow (see "re-anchor meta.awaySummary" block). Left
+    // undefined here.
+    // 中: awaySummary 在 buildChatFlow 末尾通过 records-scan 写入。
+    awaySummary: undefined,
     scheduledFireUuid,
     fileHistorySnapshots:
       fileHistorySnapshots && fileHistorySnapshots.length

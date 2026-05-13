@@ -171,19 +171,31 @@ export function layoutChatFlow(
       height: FOLD_NODE_HEIGHT,
     });
   }
-  // v1.2 R5: synthetic awaySummary nodes upstream of any visible
-  // ChatNode that has `meta.awaySummary` populated. Same dagre
-  // mechanism as chatFold (setNode + setEdge) so they participate in
-  // rank computation; chronologically reads "this summary covered
-  // the gap before the host turn". Skipped when the host is hidden
-  // by a fold projection (the chatFold absorbs that whole range).
+  // EN (2026-05-13): synthetic awaySummary nodes are now positioned
+  // DIRECTLY ABOVE their host ChatNode (Agentloom chatBrief pattern)
+  // rather than upstream / dagre-rank-managed. They're treated as
+  // "decorative annotations" — no dagre node, no edge — and placed
+  // manually after dagre lays out the real ChatNodes.
+  //
+  // 中: 合成 awaySummary 节点改为放在 host 节点正上方（Agentloom
+  // chatBrief 风格），不再参与 dagre 排版，也不连边。dagre 跑完
+  // 真 ChatNode 后再手动按 host 位置算上方偏移。
+  //
+  // Semantic note: thanks to the parser change in 2026-05-13, the
+  // awaySummary now lives on the ChatNode that PRECEDED the gap
+  // (= "the turn that ended this session and got recapped on
+  // resumption"), not the new turn after the gap. So visually the
+  // badge appears above the LAST turn of the previous "session
+  // segment" — reads as a closing summary for that segment.
   const awayHostIds = new Set<string>();
   for (const cn of chatFlow.chatNodes) {
     if (projection.hidden.has(cn.id)) continue;
     if (!cn.meta?.awaySummary?.content) continue;
-    const synId = awaySummaryIdFor(cn.id);
-    g.setNode(synId, { width: NODE_WIDTH, height: AWAY_SUMMARY_NODE_HEIGHT });
     awayHostIds.add(cn.id);
+    // Intentionally NOT calling g.setNode / g.setEdge here — the
+    // synthetic node sits outside dagre's layout. See the awayRfs
+    // build pass below.
+    // 中: 故意不挂 dagre 节点 / 边——纯装饰，dagre 不知道它。
   }
 
   const edges: RFEdge[] = [];
@@ -272,21 +284,16 @@ export function layoutChatFlow(
   // populated by parser/jsonl.ts and consumed by computeCompactRange
   // for fold projection — only the visual edge path is gone.
 
-  // v1.2 R5: dagre edges + emitted RFEdges for synthetic awaySummary
-  // anchor links. These read as "the away gap that produced this
-  // summary preceded the host turn". Dashed amber rendering hints
-  // they're not real data flow.
+  // EN (2026-05-13): awaySummary synthetic nodes no longer emit edges
+  // — they're stacked above their host as a pure visual annotation
+  // (Agentloom chatBrief style). The dashed anchor edge introduced in
+  // v1.2 R5 was distracting + competed with the model-tooltip edges
+  // for hover focus.
+  // 中: 不再为 awaySummary 发边，纯装饰浮在 host 上方。
   for (const hostId of awayHostIds) {
-    const synId = awaySummaryIdFor(hostId);
-    g.setEdge(synId, hostId);
-    edges.push({
-      id: `e-${synId}->${hostId}`,
-      source: synId,
-      sourceHandle: "away-anchor",
-      target: hostId,
-      type: "awaySummary",
-      data: { kind: "awaySummary" },
-    });
+    // Intentionally empty — preserved as placeholder for future
+    // per-host annotation hooks (e.g. tooltip warmup).
+    void hostId;
   }
 
   dagre.layout(g);
@@ -359,16 +366,41 @@ export function layoutChatFlow(
     });
   }
 
-  // v1.2 R5: synthetic awaySummary RFNodes. Dagre laid them out
-  // upstream of their host (one rank to the left in LR), connected
-  // via a dashed anchor edge. Position picked off the dagre node
-  // record — same x/y arithmetic as chatFold.
+  // EN (2026-05-13): synthetic awaySummary RFNodes stacked directly
+  // ABOVE the host ChatNode (Agentloom chatBrief style). We look up
+  // the host's dagre-laid-out position and offset upward by the
+  // synthetic node's height + a small gap. Same X — they share a
+  // column with the host.
+  //
+  // Why outside dagre layout: dagre would treat the synthetic as a
+  // proper graph node and either (a) push it to its own rank
+  // (creating the upstream-left placement the user disliked) or (b)
+  // require us to bend layout to make it overlap a chatNode's column,
+  // which dagre doesn't natively support. Manual placement after the
+  // fact is cleaner.
+  //
+  // 中: awaySummary 卡直接放 host 节点正上方，同 X，向上偏移卡高 +
+  // gap。不参与 dagre 因为 dagre 会强行给它单独的 rank（= 用户抱怨
+  // 的上游左侧位置），手动 offset 干净。
+  // Gap between synthetic bottom and host top. NODE_HEIGHT (260) is a
+  // DAGRE LAYOUT HINT — actual ChatNodeCard auto-grows with content
+  // (many tool calls → taller card). Picking a generous gap so even
+  // a taller-than-hint host doesn't get overlapped by the synthetic
+  // bottom edge. 64px ≈ one extra row-height beyond hint.
+  // 中: 留 64px 安全间距。NODE_HEIGHT 只是 dagre hint，真卡可能更高，
+  // 间距小了易被下方实际卡片遮挡。
+  const AWAY_GAP_PX = 64;
   const awayRfs: LayoutAwaySummaryRFNode[] = [];
   for (const hostId of awayHostIds) {
     const synId = awaySummaryIdFor(hostId);
-    const pos = g.node(synId);
-    const x = (pos?.x ?? 0) - NODE_WIDTH / 2;
-    const y = (pos?.y ?? 0) - AWAY_SUMMARY_NODE_HEIGHT / 2;
+    const hostPos = g.node(hostId);
+    if (!hostPos) continue;
+    // hostPos is dagre center coordinates; convert to React Flow
+    // top-left then shift the synthetic upward by its height + gap.
+    // 中: dagre 的 pos 是中心坐标，转 React Flow 左上角后向上偏移。
+    const x = hostPos.x - NODE_WIDTH / 2;
+    const y =
+      hostPos.y - NODE_HEIGHT / 2 - AWAY_SUMMARY_NODE_HEIGHT - AWAY_GAP_PX;
     const host = chatFlow.chatNodes.find((c) => c.id === hostId);
     const meta = host?.meta?.awaySummary;
     if (!meta) continue;

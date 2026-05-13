@@ -486,25 +486,34 @@ export default function App() {
       // Belt-and-suspenders: some browsers fire onopen before the
       // hello frame arrives; mark open on either signal.
       useStore.getState().setLiveStatus("session", "open");
-      // v2.1 PR D5 (2026-05-13): hello = EventSource (re)connect
-      // success signal. ONLY on RECONNECT (lastDeltaSeq != null,
-      // meaning we had a state from prior connection), reset
-      // lastDeltaSeq + force refresh — server's seq may have
-      // restarted (if it was the last subscriber to drop) or
-      // marched forward (if other subscribers kept it advancing
-      // while we were disconnected). Either way our cached lastSeq
-      // is invalid. On initial mount lastDeltaSeq is null (just
-      // hydrated), so skip the wasted refresh — loadSession is
-      // doing that work in another effect.
+      // EN (v2.1 PR D5 revised 2026-05-13): hello = EventSource
+      // (re)connect success signal. On reconnect, server's delta
+      // snapshot has been reset (see sessions.ts unsubscribe path)
+      // and it will re-emit ALL ChatNodes as `chatnode-added` on the
+      // next chokidar fire. We reset `lastDeltaSeq` to null so those
+      // re-emitted deltas are accepted as the new baseline instead
+      // of gap-detecting.
       //
-      // 中: hello 是 EventSource (重)连接成功。仅在 reconnect 时
-      // （lastDeltaSeq != null, 说明之前已有 state）强制 refresh，
-      // 因为 server seq 可能已经重起 / 跑前。初次挂载时 lastDeltaSeq
-      // 是 null（loadSession 还没跑完或刚跑完），跳过这里的重复
-      // refresh。
-      const sess = useStore.getState().sessions.get(activeId);
-      if (sess?.lastDeltaSeq != null) {
-        void useStore.getState().refreshSession(activeId);
+      // No refreshSession call — the re-emitted chatnode-added events
+      // (with dedup-by-id in the reducer) will reconcile any state
+      // missed during the disconnect. Avoids the 4-second-GET refresh
+      // round-trip on every reconnect blip.
+      //
+      // Initial mount also fires hello; resetting null→null is a
+      // no-op, so this is safe to run unconditionally.
+      //
+      // 中: hello = (重)连接成功。server snapshot 已重置（见
+      // sessions.ts unsubscribe），所有 ChatNode 会重新 emit 当
+      // added，我们 reset lastDeltaSeq=null 让那批新 seq 直接 baseline。
+      // 不发 refresh——dedup-by-id 的 reducer 会让 added 流自然 reconcile
+      // disconnect 期间漏的节点，省 4s GET 往返。初次挂载 null→null
+      // 无 op，统一处理。
+      const sessions = useStore.getState().sessions;
+      const cur = sessions.get(activeId);
+      if (cur && cur.lastDeltaSeq != null) {
+        const next = new Map(sessions);
+        next.set(activeId, { ...cur, lastDeltaSeq: null });
+        useStore.setState({ sessions: next });
       }
     });
     es.addEventListener("ping", () => {

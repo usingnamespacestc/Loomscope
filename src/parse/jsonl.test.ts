@@ -964,11 +964,20 @@ describe("buildChatFlow / parseJsonlText (synthetic fixture)", () => {
     expect(cn4?.triggerSource?.workNodeId).toBe(fixtureUuids.tu_sw);
   });
 
-  it("attaches away_summary as the next ChatNode's brief", () => {
+  it("attaches away_summary as the PREVIOUS ChatNode's brief (2026-05-13)", () => {
+    // EN: the away_summary record CC emits between two turns is now
+    // anchored to the turn BEFORE the gap (= the new turn's parent
+    // ChatNode), not the new turn itself. The new turn (p5) has its
+    // slot cleared; the previous turn (p4) carries the recap as its
+    // "closing summary". See jsonl.ts re-anchor comment for rationale.
+    // 中: away_summary 现在挂在 gap 前那个节点（p4）而非新节点
+    // （p5）；p5 的 slot 清空。
     const cf = fixtureChatFlow();
+    const cn4 = cf.chatNodes.find((c) => c.id === "p4");
     const cn5 = cf.chatNodes.find((c) => c.id === "p5");
-    expect(cn5?.meta.awaySummary?.uuid).toBe(fixtureUuids.aw1);
-    expect(cn5?.meta.awaySummary?.content).toContain("Heads up");
+    expect(cn4?.meta.awaySummary?.uuid).toBe(fixtureUuids.aw1);
+    expect(cn4?.meta.awaySummary?.content).toContain("Heads up");
+    expect(cn5?.meta.awaySummary).toBeUndefined();
   });
 
   it("treats parentUuid=null mid-session users as multi-root ChatNodes", () => {

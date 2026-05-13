@@ -928,7 +928,12 @@ describe("layoutChatFlow — awaySummary synthetic nodes (v1.2 R5)", () => {
     ).toBe(0);
   });
 
-  it("emits a synthetic awaySummary node + dashed edge when host has meta.awaySummary", () => {
+  it("emits a synthetic awaySummary node (no edge) when host has meta.awaySummary (2026-05-13)", () => {
+    // EN: per 2026-05-13 rework, awaySummary cards are pure visual
+    // annotations stacked above their host. They no longer emit a
+    // dashed anchor edge — the visual layer alone carries the
+    // "this summary belongs to this turn" relationship.
+    // 中: 不再发 dashed 边，纯视觉粘在 host 上方。
     const host = makeChatNode({
       id: "p2",
       parentChatNodeId: "p1",
@@ -951,14 +956,15 @@ describe("layoutChatFlow — awaySummary synthetic nodes (v1.2 R5)", () => {
     expect(syn?.data.content).toContain("while away");
     expect(syn?.data.timestamp).toBe("2026-05-09T00:00:00.000Z");
 
+    // No edge should target the host from the synthetic node anymore.
+    // 中: 不再有从合成节点到 host 的边。
     const synEdge = edges.find(
       (e) => e.source === synId && e.target === "p2",
     );
-    expect(synEdge).toBeTruthy();
-    expect(synEdge?.type).toBe("awaySummary");
+    expect(synEdge).toBeUndefined();
   });
 
-  it("places the synthetic node upstream (smaller x) than its host on LR", () => {
+  it("places the synthetic node DIRECTLY ABOVE its host on LR (same x, smaller y) — 2026-05-13", () => {
     const cf = makeChatFlow([
       makeChatNode({
         id: "p1",
@@ -970,7 +976,10 @@ describe("layoutChatFlow — awaySummary synthetic nodes (v1.2 R5)", () => {
     const { nodes } = layoutChatFlow(cf);
     const host = nodes.find((n) => n.id === "p1")!;
     const syn = nodes.find((n) => n.id === "awaySummary-p1")!;
-    expect(syn.position.x).toBeLessThan(host.position.x);
+    // Same column (x), positioned above (smaller y).
+    // 中: 同列（X 相等），更高位（Y 更小）。
+    expect(syn.position.x).toBe(host.position.x);
+    expect(syn.position.y).toBeLessThan(host.position.y);
   });
 
   it("skips awaySummary injection when content is empty", () => {
