@@ -168,8 +168,18 @@ true` propagates through every code path. Three problems:
       the PTY — plain typed characters wouldn't trigger CC's paste
       branch.
    3. Then resume normal typing for the prompt body + simulate Enter.
-   4. Reap the temp file after the turn (TTL sweep + commit-time
-      delete; can't delete on submit because CC re-reads on resume).
+   4. Delete the temp file as soon as CC confirms attachment (e.g.
+      observing CC's image-cache mirror at
+      `~/.claude/image-cache/<sid>/`, or a generous post-submit
+      delay). **Loomscope's temp is read once** — the moment CC
+      submits the user message it embeds the image as a base64
+      block directly in the jsonl record's `message.content`
+      (see `messageQueueManager.ts:400` for the SDK API shape that
+      doubles as the jsonl shape). Loomscope's frontend renders
+      from that base64 (`ConversationView.tsx:888` builds a
+      `data:<mediaType>;base64,...` URL), and CC's own resume
+      replay re-loads from jsonl. The temp file has no readers
+      after step 3.
 
    Plus: bracketed-paste mode must be enabled in the PTY; some
    terminal emulators ship with it off by default. Multi-image
