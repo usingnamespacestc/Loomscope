@@ -14,6 +14,7 @@ import {
   _setSettingsPathForTests,
   addLoomscopeHooks,
   buildPasteableSnippet,
+  getConfiguredHookEventsSync,
   getHookStatus,
   removeLoomscopeHooks,
 } from "@/server/services/ccSettingsPatcher";
@@ -355,6 +356,60 @@ describe("removeLoomscopeHooks", () => {
     await expect(removeLoomscopeHooks(PORT)).resolves.toMatchObject({
       settingsExists: false,
     });
+  });
+});
+
+describe("getConfiguredHookEventsSync (Option B, #157)", () => {
+  it("returns null when settings.json is missing", () => {
+    // beforeEach points at a path that doesn't exist yet.
+    const result = getConfiguredHookEventsSync(PORT);
+    expect(result).toBeNull();
+  });
+
+  it("returns null on malformed JSON", async () => {
+    await fs.writeFile(settingsFile, "{not json", "utf8");
+    expect(getConfiguredHookEventsSync(PORT)).toBeNull();
+  });
+
+  it("returns empty Set when settings.json exists but has no hook block", async () => {
+    await fs.writeFile(settingsFile, JSON.stringify({ other: "key" }), "utf8");
+    const result = getConfiguredHookEventsSync(PORT);
+    expect(result).not.toBeNull();
+    expect(result?.size).toBe(0);
+  });
+
+  it("returns exact set of configured events after addLoomscopeHooks subset", async () => {
+    // Add only 2 of the events.
+    const subset = [HOOK_EVENTS_LIST[0], HOOK_EVENTS_LIST[3]];
+    await addLoomscopeHooks(PORT, subset);
+    const result = getConfiguredHookEventsSync(PORT);
+    expect(result).not.toBeNull();
+    expect([...(result as Set<string>)].sort()).toEqual([...subset].sort());
+  });
+
+  it("ignores non-Loomscope third-party hook entries", async () => {
+    await fs.writeFile(
+      settingsFile,
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            { matcher: "Edit", hooks: [{ type: "command", command: "echo other" }] },
+          ],
+        },
+      }),
+      "utf8",
+    );
+    const result = getConfiguredHookEventsSync(PORT);
+    expect(result?.size).toBe(0);
+  });
+
+  it("matches getHookStatus.configured exactly when both run on same file", async () => {
+    await addLoomscopeHooks(PORT, [HOOK_EVENTS_LIST[1], HOOK_EVENTS_LIST[5]]);
+    const sync = getConfiguredHookEventsSync(PORT);
+    const async = await getHookStatus(PORT);
+    expect([...(sync as Set<string>)].sort()).toEqual(
+      [...async.configured].sort(),
+    );
   });
 });
 

@@ -36,6 +36,7 @@ import * as path from "node:path";
 
 import * as crypto from "node:crypto";
 
+import { getConfiguredHookEventsSync } from "@/server/services/ccSettingsPatcher";
 import {
   HOOK_EVENTS,
   publishHook,
@@ -320,9 +321,41 @@ function inputToEnvelope(input: Record<string, unknown>): HookEnvelope {
  *  SDK type, but to avoid pulling the SDK types into this module
  *  (and the union-discrimination overhead) we let the actual SDK
  *  call site shape-check via its existing typed call. */
-function buildSdkHooksMap(): Record<string, unknown> {
+function buildSdkHooksMap(opts: {
+  loomscopePort?: number;
+  enableHookHttpPath?: boolean;
+}): Record<string, unknown> {
+  // EN (v2.2 #157, Option B): when the user has the HTTP hook path
+  // enabled AND has a populated event matrix in settings.json, the SDK
+  // programmatic path mirrors that matrix — events the user unchecked
+  // skip registration here too. Single-source-of-truth UX.
+  //
+  // Fallback to all-on (register every event in HOOK_EVENTS) when:
+  //   • `loomscopePort` is undefined (test / non-prod construction);
+  //   • `enableHookHttpPath` is false — matrix is N/A, SDK is the
+  //     only intended source of events;
+  //   • settings.json can't be read or has no Loomscope entries
+  //     (first-time user; no signal to filter by).
+  //
+  // The matrix is re-read on every spawn (sub-ms sync I/O on a
+  // <2 KB file); a fresh PATCH to /api/cc-hook-onboarding takes
+  // effect on the next SDK respawn without registry-level cache
+  // plumbing.
+  //
+  // 中: Option B — HTTP 矩阵也作用于 SDK 程序化注册。三种 fallback
+  // 走 all-on：缺 port / HTTP path 关掉 / settings.json 没条目。每次
+  // spawn 重新读 settings.json（小文件，sub-ms），无需 cache 失效。
+  let enabled: Set<string> | null = null;
+  if (
+    opts.loomscopePort !== undefined &&
+    opts.enableHookHttpPath !== false
+  ) {
+    const fromMatrix = getConfiguredHookEventsSync(opts.loomscopePort);
+    if (fromMatrix && fromMatrix.size > 0) enabled = fromMatrix;
+  }
   const map: Record<string, unknown> = {};
   for (const event of HOOK_EVENTS) {
+    if (enabled && !enabled.has(event)) continue;
     map[event as HookEventName] = [
       {
         // Empty matcher = match all (mirrors settings.json convention).
@@ -443,6 +476,18 @@ export interface SessionRegistryOptions {
   /** Persistence root for deferral state (~/.loomscope by default).
    *  Tests override to a temp dir to avoid touching the real home. */
   deferralStateDir?: string;
+  /** v2.2 #157 (Option B): the loomscope server's listening port.
+   *  Used to identify our own hook entries in `~/.claude/settings.json`
+   *  so the SDK programmatic hook map respects the event matrix the
+   *  user has configured for the HTTP path. Optional — when absent
+   *  the SDK registers all events (matrix authority disabled,
+   *  default behavior). Production wires it from
+   *  `parsePortFromOrigin(allowedOrigin)`; tests can omit.
+   *
+   *  中: Loomscope server 监听端口。Option B 用它识别 settings.json 里
+   *  的 Loomscope hook 条目，让 SDK 程序化注册尊重用户矩阵。缺省
+   *  (undefined) 时 SDK 注册全部事件，跟改前行为一致。 */
+  loomscopePort?: number;
 }
 
 /** v∞.3 PR1: a pending permission prompt awaiting browser response.
@@ -1273,7 +1318,10 @@ export class SessionRegistry {
         // original wiring.
         hooks:
           this.opts.enableHookSdkPath !== false
-            ? buildSdkHooksMap()
+            ? buildSdkHooksMap({
+                loomscopePort: this.opts.loomscopePort,
+                enableHookHttpPath: this.opts.enableHookHttpPath,
+              })
             : undefined,
         // ──────────────────────────────────────────────────────────
         // v∞.3 PR1: canUseTool — Loomscope's chance to mediate

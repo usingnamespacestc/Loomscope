@@ -23,6 +23,7 @@
 // /api/cc-hook 的 entry，其它 hook 完全不碰。
 
 import * as crypto from "node:crypto";
+import * as fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -153,6 +154,57 @@ export async function getHookStatus(loomscopePort: number): Promise<HookStatus> 
   }
   const missing = HOOK_EVENTS_LIST.filter((e) => !configured.includes(e));
   return { settingsPath: p, settingsExists: true, configured, missing };
+}
+
+/**
+ * EN (v2.2 #157, Option B): sync variant of getHookStatus that returns
+ * just the configured event set. Used by sessionRegistry.buildSdkHooksMap
+ * to filter the SDK programmatic hook registration by the user's matrix —
+ * the spawn path is sync so we can't await fsp.readFile there. settings.json
+ * is small (typically <2 KB) so the sync read costs sub-millisecond per
+ * spawn; acceptable given the alternative (caching + invalidate plumbing)
+ * is much more code.
+ *
+ * Returns `null` (NOT an empty Set) on three "no signal" cases:
+ *   • settings.json doesn't exist
+ *   • parse failure
+ *   • any I/O error
+ * The caller treats null as "fall back to all-on" so first-time / broken
+ * settings don't silently disable SDK hooks.
+ *
+ * 中: getHookStatus 的同步版本，只返回 configured 集合。SDK spawn 路径
+ * 是同步的所以这里同步读 settings.json（小文件，sub-ms）。读不到 /
+ * 解析失败 / I/O 错返回 null → caller fallback all-on，避免首次用户
+ * 静默掉所有 SDK hooks。
+ */
+export function getConfiguredHookEventsSync(
+  loomscopePort: number,
+): Set<string> | null {
+  const p = settingsPath();
+  let raw: string;
+  try {
+    raw = fs.readFileSync(p, "utf8");
+  } catch {
+    return null;
+  }
+  let parsed: CcSettings;
+  try {
+    parsed = JSON.parse(raw) as CcSettings;
+  } catch {
+    return null;
+  }
+  const hooks = (parsed.hooks ?? {}) as Record<string, unknown[]>;
+  const configured = new Set<string>();
+  for (const event of HOOK_EVENTS_LIST) {
+    const entries = hooks[event];
+    if (
+      Array.isArray(entries) &&
+      entries.some((e) => entryHasOurAction(e, loomscopePort))
+    ) {
+      configured.add(event);
+    }
+  }
+  return configured;
 }
 
 /**

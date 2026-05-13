@@ -116,6 +116,13 @@ export function createApp(opts: AppOptions) {
   // live without restart. Note: createApp is sync, so we can't await
   // loadPreferences here — we read it synchronously below using a
   // sync read; if missing we fall back to the default.
+  // v2.2 #157: Loomscope's own listening port — parsed once up here
+  // because BOTH SessionRegistry (for the SDK hook matrix lookup) and
+  // ccHookOnboardingRouter (lower down) need it. Moving the parse
+  // before the registry construction lets us pass it cleanly.
+  // 中: 把 port 解析提前，registry 和 ccHookOnboardingRouter 共享。
+  const port = parsePortFromOrigin(opts.allowedOrigin) ?? 5174;
+
   const registry =
     opts.registry ??
     new SessionRegistry({
@@ -127,6 +134,16 @@ export function createApp(opts: AppOptions) {
                             // docs/dual-writer-race-mitigation.md
       enableHookHttpPath: true, // default; PATCH updates live
       enableHookSdkPath: true,  // default; PATCH updates live
+      // v2.2 #157 (Option B): the matrix in settings.json becomes
+      // single-source-of-truth for BOTH HTTP and SDK hook paths.
+      // buildSdkHooksMap reads this port to identify our entries in
+      // settings.json and filter SDK callback registration to match
+      // the user's matrix. See sessionRegistry.ts:buildSdkHooksMap
+      // for the fallback semantics (all-on when matrix is empty / HTTP
+      // disabled).
+      // 中: Option B 让 settings.json 的事件矩阵也作用于 SDK 程序化
+      // 路径。这里把 server port 灌进 registry。
+      loomscopePort: port,
       // v1.6: explicit CC binary path. Works around SDK picking the
       // wrong libc variant (e.g. musl on a glibc host). See
       // resolveClaudePath() jsdoc for ordering. Undefined = SDK's
@@ -282,12 +299,10 @@ export function createApp(opts: AppOptions) {
   app.route("/api/sessions", permissionPromptsRouter({ registry }));
   app.route("/api/permission-rules", permissionRulesRouter({ registry }));
   app.route("/api/preferences", preferencesRouter({ registry }));
-  // v∞.0 PR 3: parse allowedOrigin to recover the listening port —
-  // settings.json hook URLs are constructed against that port. If
-  // the URL is malformed (custom deploys), fall back to 5174 which
-  // matches our default; the patcher is harmless in that case
-  // because users won't be running on a port mismatch by accident.
-  const port = parsePortFromOrigin(opts.allowedOrigin) ?? 5174;
+  // v∞.0 PR 3: `port` resolved at registry construction (see above);
+  // we reuse the same value here. settings.json hook URLs are
+  // constructed against this port.
+  // 中: port 已在 registry 构造时解析，这里复用。
   app.route(
     "/api/cc-hook-onboarding",
     ccHookOnboardingRouter({ port, getHookSecret }),
