@@ -31,8 +31,12 @@ import {
   getStashedState,
   setStashedState,
 } from "@/server/services/chatFlowCache";
-import { resetSession as resetDeltaSession } from "@/server/services/chatFlowDeltaEngine";
-import { clearClosureMemberStash } from "@/server/services/mergedChatFlowLoader";
+// PR D5 final: snapshot reset on unsubscribe REMOVED (caused
+// re-emit floods on reconnect that stalled UI for sessions with
+// hundreds of ChatNodes). The delta-engine + mergedChatFlowLoader
+// stashes now persist across SSE blips; reconciliation happens via
+// checkpoint chatNodeCount and drift-ping hash. See onAbort comment.
+// 中: snapshot reset 已移除——大 session 重连会触发 re-emit 风暴。
 import { getPendingPermission } from "@/server/services/pendingPermissionTracker";
 import { findForkClosure, type ClosureMember } from "@/server/services/forkTree";
 // Read paths use the with-trash locator so a session that was soft-
@@ -272,29 +276,37 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
           unsubscribe();
           if (subscriberCount(id) === 0) {
             unwatchSession(id);
-            // v2.1 PR D5 (revised 2026-05-13): on last subscriber drop,
-            // reset the delta engine snapshot SO the reconnecting
-            // client gets ALL ChatNodes re-emitted as `chatnode-added`
-            // (server snapshot fresh → first processFresh emits every
-            // node + checkpoint). Client reducer dedups by id —
-            // existing nodes are no-op replace, missed nodes during
-            // disconnect get appended. No need for client-side full
-            // refresh.
+            // v2.1 PR D5 final (2026-05-13): DO NOT reset the delta
+            // engine snapshot here. An earlier attempt did the reset
+            // + relied on `chatnode-added` re-emit to reconcile
+            // reconnecting clients, but for sessions with hundreds
+            // of ChatNodes (the dev session has ~650), the re-emit
+            // floods 650+ events through the client reducer on every
+            // reconnect — and vite-proxy chunked-encoding flakes
+            // trigger frequent reconnects — leading to a stuck UI
+            // (the "page lags 60s behind SSE" bug the user reported).
             //
-            // Combined with the client `hello` handler resetting
-            // `lastDeltaSeq = null` (so the re-emitted seq=1 is
-            // accepted as baseline instead of gap-detecting), this
-            // gives clean reconnect semantics: brief blip → all data
-            // re-confirmed, missing pieces filled in, no 4s+ refresh
-            // GET round-trip.
+            // Keeping the snapshot means: server emits only true
+            // diffs going forward. If the client's chatFlow is stale
+            // (some chokidar fires happened during disconnect), the
+            // mismatch is caught by:
+            //   (a) the next checkpoint event whose chatNodeCount
+            //       won't match the local count → triggers refresh
+            //   (b) drift-ping (every 30 s, hash compare) → refresh
+            // Both run through `refreshSession`'s dedup + coalesce
+            // path, so at worst one 4-s GET per reconnect-with-true-
+            // stale-data.
             //
-            // 中: 重连时 server snapshot 重置 → 重新 emit 所有
-            // ChatNode 当 added；客户端 reducer 自带 dedup（id 已存
-            // 在则替换），missed 节点直接被 append。配合 client hello
-            // 重置 lastDeltaSeq=null 接受 seq=1 baseline，避免 gap 循
-            // 环 + 避免 4s refresh GET。
-            resetDeltaSession(id);
-            clearClosureMemberStash(id);
+            // For brief reconnect blips with no underlying change,
+            // checkpoint matches, drift hash matches, no refresh
+            // happens. Clean.
+            //
+            // 中: snapshot 不再 reset。之前 reset + re-emit 在 650+
+            // 节点 session 上每次 vite-proxy 抖动都把 650 条 added 砸
+            // 进客户端 reducer，连击 React render 把 UI 卡死 60 秒。
+            // 现在保持 snapshot，client 通过 checkpoint chatNodeCount
+            // 错位 或 drift-ping hash 错位检测 stale 然后 refresh，最坏
+            // 情况一次 4s GET，不再有 reduce 风暴。
           }
         });
         await stream.writeSSE({
