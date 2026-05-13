@@ -21,6 +21,26 @@ export default defineConfig({
   server: {
     port: 5175,
     proxy: {
+      // EN (2026-05-13): SSE long-poll endpoint. EventSource keeps the
+      // connection open indefinitely; sharing the `/api` 60 s cap
+      // below was killing it at 60 s and surfacing as
+      // `ERR_INCOMPLETE_CHUNKED_ENCODING` in the browser console
+      // (followed by an EventSource auto-reconnect). Vite proxy
+      // matches regex keys starting with `^` and prefers the most-
+      // specific match, so this entry wins for
+      // `/api/sessions/<id>/events` while every other `/api/...` keeps
+      // the slow-GET-friendly 60 s cap.
+      //
+      // 中: SSE 长连接专属代理。EventSource 永久挂着；本来跟普通
+      // /api 共享 60s timeout，到 60s 就被 vite 砍 → 浏览器报
+      // ERR_INCOMPLETE_CHUNKED_ENCODING。正则前缀 `^` 让这条规则比
+      // /api 更具体；timeout: 0 = 永不超时。
+      "^/api/sessions/[^/]+/events$": {
+        target: "http://localhost:5174",
+        changeOrigin: true,
+        timeout: 0, // no read-timeout — SSE is long-poll by design
+        proxyTimeout: 0,
+      },
       // 2026-05-11: large sessions (the dev's own 120 MB Loomscope
       // session is a real case) take ~4 s to serialise + transmit;
       // some http-proxy defaults trigger 502 well before that. Pin

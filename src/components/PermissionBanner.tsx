@@ -27,7 +27,12 @@ export function PermissionBanner({ sessionId }: { sessionId: string }) {
   return (
     <div
       data-testid="permission-banner"
-      className="absolute left-1/2 top-2 z-30 -translate-x-1/2 max-w-2xl rounded border border-amber-300 bg-amber-50/95 px-3 py-2 text-[12px] text-amber-900 shadow-md backdrop-blur"
+      // z-40 to clear SessionSearchBar (z-30) when banner height
+      // overflows the 56 px gap to the search bar — banner must stay
+      // visible on top of every other floating chrome.
+      // 中: z-40 让 banner 浮在 SessionSearchBar (z-30) 上方，避免
+      // banner 高度超过 56px 时被搜索框遮挡。
+      className="absolute left-1/2 top-2 z-40 -translate-x-1/2 max-w-2xl rounded border border-amber-300 bg-amber-50/95 px-3 py-2 text-[12px] text-amber-900 shadow-md backdrop-blur"
     >
       <div className="flex items-start gap-2">
         <span className="text-amber-600">⚠</span>

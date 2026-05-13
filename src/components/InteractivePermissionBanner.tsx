@@ -92,7 +92,7 @@ export function InteractivePermissionBanner({
     <div
       data-testid="interactive-permission-banner"
       data-prompt-id={top.promptId}
-      className="absolute left-1/2 top-2 z-30 -translate-x-1/2 w-full max-w-2xl rounded-lg border border-blue-300 bg-blue-50/95 px-3 py-2.5 text-[12px] text-blue-900 shadow-md backdrop-blur"
+      className="absolute left-1/2 top-2 z-40 -translate-x-1/2 w-full max-w-2xl rounded-lg border border-blue-300 bg-blue-50/95 px-3 py-2.5 text-[12px] text-blue-900 shadow-md backdrop-blur"
     >
       <div className="flex items-start gap-2">
         <span className="text-blue-600 text-base leading-tight">🔐</span>

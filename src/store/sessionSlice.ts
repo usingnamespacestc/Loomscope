@@ -637,6 +637,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     let cf = cur.chatFlow;
     let workflowCache = cur.workflowCache;
     let foldedCompactIds = cur.foldedCompactIds;
+    let nextSelected = cur.selectedNodeId;
     switch (delta.type) {
       case "chatnode-added": {
         // EN: dedup — server sometimes re-sends an existing node
@@ -644,6 +645,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         // duplicate as no-op vs append, matching add-or-replace.
         // 中: 服务端偶尔重发已有节点，按 add-or-replace 处理。
         const existsIdx = cf.chatNodes.findIndex((c) => c.id === delta.chatNode.id);
+        const isNewArrival = existsIdx < 0;
         if (existsIdx >= 0) {
           const arr = cf.chatNodes.slice();
           arr[existsIdx] = delta.chatNode;
@@ -656,6 +658,30 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         if (isCompactFoldHost(delta.chatNode) && !foldedCompactIds.has(delta.chatNode.id)) {
           foldedCompactIds = new Set(foldedCompactIds);
           foldedCompactIds.add(delta.chatNode.id);
+        }
+        // EN (v2.2 fix, 2026-05-14): follow-on-leaf for delta path.
+        // _refreshSessionInner had this logic but the delta reducer
+        // (which now handles the steady state after PR D1/D2) didn't —
+        // so new ChatNodes arriving via terminal CC (or any non-
+        // Loomscope-spawned source) appeared in the canvas but focus
+        // stayed on the previous leaf. Mirrors the refresh-path logic:
+        // when the new node descends from the user's currently-focused
+        // node (or the chronological tail when no explicit selection),
+        // advance focus to the new node. If user is mid-history reading
+        // a different branch, focus stays put.
+        //
+        // 中: PR D 之后 delta 接管稳态，原本的 follow-on-leaf 留在
+        // refresh 路径没被搬过来。这里补回——新节点是当前 focused
+        // 节点的子节点（或在无显式 focus 时是上一份 chatFlow 的链尾
+        // 的子节点）就跟随。
+        if (isNewArrival && delta.chatNode.parentChatNodeId) {
+          const prevTail =
+            cur.chatFlow?.chatNodes[cur.chatFlow.chatNodes.length - 1]?.id ??
+            null;
+          const effectiveSelected = nextSelected ?? prevTail;
+          if (delta.chatNode.parentChatNodeId === effectiveSelected) {
+            nextSelected = delta.chatNode.id;
+          }
         }
         break;
       }
@@ -725,6 +751,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       chatFlow: cf,
       workflowCache,
       foldedCompactIds,
+      selectedNodeId: nextSelected,
       lastDeltaSeq: delta.seq,
       lastUpdated: Date.now(),
     });
@@ -831,12 +858,30 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         ...cur.chatFlow,
         chatNodes: [...cur.chatFlow.chatNodes, placeholder],
       };
+      // EN (v2.2 fix, 2026-05-14): follow-on-leaf for the raw-record
+      // placeholder path. placeholder.parentChatNodeId is null (we
+      // don't know it until ground-truth lands), so the "parent ==
+      // selected" rule from applyChatFlowDelta doesn't apply here.
+      // Heuristic: a placeholder appears at the END of the chatNodes
+      // array (it's brand new) and represents the latest user turn.
+      // If the user had been on the old leaf (or had no explicit
+      // selection — implicit-leaf focus), advance to the placeholder.
+      // If they were mid-history, leave focus put.
+      // 中: 占位 ChatNode parentChatNodeId 为 null，不能用 parent==
+      // selected 判断。改用"用户原本在老 leaf 或没显式 focus"则跟随
+      // 到新占位；mid-history reading 时不动。
+      const prevTail =
+        cur.chatFlow.chatNodes[cur.chatFlow.chatNodes.length - 1]?.id ?? null;
+      const effectiveSelected = cur.selectedNodeId ?? prevTail;
+      const nextSelected =
+        effectiveSelected === prevTail ? placeholder.id : cur.selectedNodeId;
       const nextUuids = new Set(cur.rawAppliedRecordUuids);
       nextUuids.add(record.uuid);
       const updated = new Map(sessions);
       updated.set(sessionId, {
         ...cur,
         chatFlow: cf,
+        selectedNodeId: nextSelected,
         rawAppliedRecordUuids: nextUuids,
         lastUpdated: Date.now(),
       });

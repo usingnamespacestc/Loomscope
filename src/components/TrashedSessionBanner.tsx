@@ -29,7 +29,7 @@ export function TrashedSessionBanner({ sessionId }: { sessionId: string }) {
   return (
     <div
       data-testid="trashed-session-banner"
-      className="absolute left-1/2 top-2 z-30 -translate-x-1/2 max-w-2xl rounded border border-amber-300 bg-amber-50/95 px-3 py-2 text-[12px] text-amber-900 shadow-md backdrop-blur"
+      className="absolute left-1/2 top-2 z-40 -translate-x-1/2 max-w-2xl rounded border border-amber-300 bg-amber-50/95 px-3 py-2 text-[12px] text-amber-900 shadow-md backdrop-blur"
     >
       <div className="flex items-start gap-2">
         <span className="text-amber-600">🗑️</span>

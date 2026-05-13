@@ -228,6 +228,67 @@ describe("applyChatFlowDelta", () => {
     expect(useStore.getState().refreshSession).not.toHaveBeenCalled();
   });
 
+  it("chatnode-added: follow-on-leaf — focus advances to new child of focused node", () => {
+    // EN (v2.2 fix): when delta adds a child of the user's focused
+    // ChatNode, focus advances. Mirrors _refreshSessionInner's
+    // follow-on-leaf logic. Without this fix, terminal-CC writes
+    // produced new nodes in the canvas but focus stayed put.
+    // 中: 新节点是 focused 节点的子节点 → focus 跟随。
+    useStore.setState((s) => {
+      const sessions = new Map(s.sessions);
+      sessions.set(SID, {
+        ...sessions.get(SID)!,
+        selectedNodeId: "a",
+      });
+      return { sessions };
+    });
+    seed(flow([cn("a")]));
+    // Re-set selection after seed (which writes a fresh state).
+    useStore.setState((s) => {
+      const sessions = new Map(s.sessions);
+      sessions.set(SID, { ...sessions.get(SID)!, selectedNodeId: "a" });
+      return { sessions };
+    });
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 1,
+      chatNode: cn("b", "a"),
+    });
+    expect(useStore.getState().sessions.get(SID)?.selectedNodeId).toBe("b");
+  });
+
+  it("chatnode-added: focus stays put when user is mid-history", () => {
+    // EN: user clicked an older ChatNode; new arrival at the leaf
+    // doesn't yank focus.
+    // 中: 用户在历史中间点了节点，新节点不抢 focus。
+    seed(flow([cn("a"), cn("b", "a"), cn("c", "b")]));
+    useStore.setState((s) => {
+      const sessions = new Map(s.sessions);
+      sessions.set(SID, { ...sessions.get(SID)!, selectedNodeId: "a" });
+      return { sessions };
+    });
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 1,
+      chatNode: cn("d", "c"), // descends from c (the leaf), not from a
+    });
+    expect(useStore.getState().sessions.get(SID)?.selectedNodeId).toBe("a");
+  });
+
+  it("chatnode-added: implicit-leaf follow when no explicit selection", () => {
+    // EN: selectedNodeId is null but conversation panel shows latest
+    // leaf path; treating "no selection" as "implicit focus on chrono
+    // tail" lets passive watching auto-advance.
+    // 中: 没显式 focus 时把链尾当 implicit focus，被动观察也跟随。
+    seed(flow([cn("a"), cn("b", "a")])); // chrono tail = b
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 1,
+      chatNode: cn("c", "b"), // child of implicit-tail b
+    });
+    expect(useStore.getState().sessions.get(SID)?.selectedNodeId).toBe("c");
+  });
+
   it("apply when session has no chatFlow yet → triggers refreshSession", () => {
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
