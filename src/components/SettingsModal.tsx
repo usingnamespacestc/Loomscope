@@ -523,6 +523,7 @@ interface Preferences {
   /** v2.0.1 PR C: when on, registry auto-defers turn dispatch when
    *  Anthropic 5h utilization crosses 90%. Default off. */
   autoDeferOnRateLimit: boolean;
+  enableInteractivePermissions: boolean;
   /** v2.1 PR D3: drift detection period in seconds. 0 = off,
    *  positive value clamps to [1, 600]. Default 30s. */
   driftDetectionSec: number;
@@ -535,6 +536,7 @@ const DEFAULT_PREFS: Preferences = {
   respawnPerSend: true,
   autoDeferOnRateLimit: false,
   driftDetectionSec: 30,
+  enableInteractivePermissions: false,
 };
 
 function usePreferences() {
@@ -568,6 +570,10 @@ function usePreferences() {
               : false,
           driftDetectionSec:
             typeof p.driftDetectionSec === "number" ? p.driftDetectionSec : 30,
+          enableInteractivePermissions:
+            typeof p.enableInteractivePermissions === "boolean"
+              ? p.enableInteractivePermissions
+              : false,
         });
       } catch (err) {
         if (!cancelled) {
@@ -617,6 +623,10 @@ function usePreferences() {
             typeof next.driftDetectionSec === "number"
               ? next.driftDetectionSec
               : cur.driftDetectionSec,
+          enableInteractivePermissions:
+            typeof next.enableInteractivePermissions === "boolean"
+              ? next.enableInteractivePermissions
+              : cur.enableInteractivePermissions,
         }));
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -853,6 +863,47 @@ function SessionRuntimePanel() {
         </p>
         <p className="mt-1 text-[10px] italic text-amber-700">
           {t("settings.runtime.auto_defer_subscriber_caveat")}
+        </p>
+      </section>
+
+      {/* v2.3 PR F1+F2+F3+F4: opt-in interactive permission gate for
+          terminal CC's PreToolUse. When ON, terminal CC tool prompts
+          show up in the browser banner (allow / always / deny + the
+          AskUserQuestion form) instead of requiring alt-tab to
+          terminal. Bypass-mode CC sessions remain untouched (the
+          server short-circuits on `permission_mode: bypassPermissions`
+          regardless of this toggle). */}
+      {/* 中: 终端 CC 的 PreToolUse 拦截到浏览器 banner 决定。
+          默认关；bypass 模式无视此开关。 */}
+      <section>
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">
+          {t("settings.runtime.section_interactive_permissions")}
+        </h3>
+        <p className="mb-3 text-[11px] text-gray-500 leading-relaxed">
+          {t("settings.runtime.interactive_permissions_description")}
+        </p>
+        <label className="flex cursor-pointer items-center gap-3">
+          <input
+            type="checkbox"
+            data-testid="settings-runtime-interactive-permissions"
+            checked={prefs.enableInteractivePermissions}
+            onChange={(e) =>
+              void patch({ enableInteractivePermissions: e.target.checked })
+            }
+            disabled={saving}
+            className="h-4 w-4 cursor-pointer"
+          />
+          <span className="text-xs text-gray-700">
+            {t("settings.runtime.interactive_permissions_label")}
+          </span>
+        </label>
+        <p className="mt-1 text-[10px] italic text-gray-400">
+          {prefs.enableInteractivePermissions
+            ? t("settings.runtime.interactive_permissions_on_hint")
+            : t("settings.runtime.interactive_permissions_off_hint")}
+        </p>
+        <p className="mt-1 text-[10px] italic text-amber-700">
+          {t("settings.runtime.interactive_permissions_bypass_caveat")}
         </p>
       </section>
 

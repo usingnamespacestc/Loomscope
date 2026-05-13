@@ -401,7 +401,13 @@
       "drift_detection_description": "v2.1 Delta-SSE keeps the client in sync via semantic events pushed by the server. In theory client state always matches server; in practice a reducer bug or SSE drop can silently drift them apart. This period controls how often the server hashes the chatflow and broadcasts it for the client to verify; mismatch forces a full refresh. 0 disables; positive values clamp to [1, 600] seconds.",
       "drift_unit_seconds": "seconds (0 = off)",
       "drift_on_hint": "Enabled: hash check every {{sec}} seconds. CPU + network cost is negligible; safety net for drift bugs.",
-      "drift_off_hint": "Disabled: no hash verification — trust the delta sequence alone."
+      "drift_off_hint": "Disabled: no hash verification — trust the delta sequence alone.",
+      "section_interactive_permissions": "Interactive tool permissions (terminal CC)",
+      "interactive_permissions_description": "When enabled, Loomscope intercepts your terminal Claude Code's PreToolUse hook so you can allow / deny / always-allow tool calls — and answer AskUserQuestion prompts — right from the browser banner, instead of alt-tabbing back to your terminal. SDK-spawned sessions already do this (canUseTool path); this toggle extends it to terminal CC via the settings.json HTTP hook. Persisted 'Always allow' rules are shared across both paths.",
+      "interactive_permissions_label": "Resolve terminal CC permission prompts in browser",
+      "interactive_permissions_on_hint": "Enabled: terminal CC permission prompts appear in Loomscope's banner with allow/deny/always buttons + AskUserQuestion form. Hook holds CC for up to 9 min waiting for your decision; if you don't decide, CC falls back to its terminal prompt.",
+      "interactive_permissions_off_hint": "Disabled: terminal CC's permission prompts stay in your terminal (read-only PermissionBanner shown in Loomscope as a heads-up). SDK sessions still use the browser banner for canUseTool.",
+      "interactive_permissions_bypass_caveat": "⚠ CC sessions running in bypassPermissions mode always skip this — bypass means you opted out of all prompting, terminal or browser."
     },
     "hooks": {
       "loading": "Loading…",

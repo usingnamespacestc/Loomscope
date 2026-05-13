@@ -401,7 +401,13 @@
       "drift_detection_description": "v2.1 Delta-SSE 用 server 推的语义事件保持客户端状态同步。理论上 client 跟 server 始终一致；但万一 reducer 有 bug / SSE 漏发，状态会静默漂移。这里设的周期是 server 多久算一次本地 chatflow hash + 推给客户端做对比；client 算出不一致会自动 refresh 强同步。设 0 完全关闭；正值钳到 [1, 600] 秒。",
       "drift_unit_seconds": "秒（0=关闭）",
       "drift_on_hint": "已启用：每 {{sec}} 秒一次 hash 对比。CPU/网络都可忽略，bug 兜底",
-      "drift_off_hint": "已禁用：不再做 hash 校验，纯靠 delta 序列保证一致性"
+      "drift_off_hint": "已禁用：不再做 hash 校验，纯靠 delta 序列保证一致性",
+      "section_interactive_permissions": "工具权限交互（终端 CC）",
+      "interactive_permissions_description": "开启后，Loomscope 拦截你 terminal Claude Code 的 PreToolUse hook，让你直接在浏览器 banner 里允许 / 拒绝 / 始终允许工具调用，以及回答 AskUserQuestion 多选问题 —— 不用切回终端。Loomscope 自己启动的 SDK session 早已通过 canUseTool 走这条路；此开关把同样的体验扩展给 terminal CC（走 settings.json HTTP hook）。「始终允许」保存的规则两条路径共用。",
+      "interactive_permissions_label": "在浏览器中处理终端 CC 的权限请求",
+      "interactive_permissions_on_hint": "已启用：终端 CC 的权限请求会在 Loomscope banner 里弹出 allow/deny/always 按钮 + AskUserQuestion 表单。hook 最多 hold 9 分钟等你决定；超时则 CC 回落到终端原生 prompt。",
+      "interactive_permissions_off_hint": "已禁用：终端 CC 的权限请求留在终端（Loomscope 仅显示只读 PermissionBanner 提醒）。Loomscope 启动的 SDK session 仍走浏览器 banner（不受此开关影响）。",
+      "interactive_permissions_bypass_caveat": "⚠ 运行在 bypassPermissions 模式下的 CC 永远跳过本开关 —— bypass 表示你已显式放弃所有 prompt（无论终端还是浏览器）。"
     },
     "hooks": {
       "loading": "加载中…",

@@ -26,6 +26,16 @@ import type { MiddlewareHandler } from "hono";
 // 同源 + CORS 已经够用；本项目 Mode A 模型默认本机可信。
 const CSRF_BYPASS_PATHS = new Set([
   "/api/cc-hook",
+  // v2.3 PR F1: browser POST resolves the long-poll permission gate.
+  // Same trust model as the SDK canUseTool decision endpoint
+  // (/api/sessions/<sid>/permission-prompts/<pid>/decision, also
+  // bypassed via the /api/sessions/ prefix): localhost-only origin
+  // + strict CORS already shut out cross-origin posts, CSRF would
+  // be redundant + the browser banner doesn't have access to the
+  // CSRF token.
+  // 中: 浏览器 banner POST 决定。SDK 那条路 /api/sessions/.../decision
+  // 也走 CSRF bypass，本路同模型——本地 origin + CORS 已挡住跨源。
+  "/api/cc-hook/decision",
   "/api/cc-hook-onboarding/patch",
   "/api/cc-hook-onboarding/rotate-secret",
 ]);
