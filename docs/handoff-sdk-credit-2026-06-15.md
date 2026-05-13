@@ -142,7 +142,7 @@ fallback, and reports `cc_entrypoint=cli` to Anthropic.
 
 If header-spoof fails, the next escalation is making CC actually
 *behave* as interactive — allocate a PTY so `process.stdout.isTTY ===
-true` propagates through every code path. Two problems:
+true` propagates through every code path. Three problems:
 
 1. **No structured input protocol exists in interactive mode**. CC's
    `--input-format=stream-json` only works with `--print`. Interactive
@@ -153,13 +153,39 @@ true` propagates through every code path. Two problems:
    the `A. 拦截 stdin/stdout` route ruled out in `docs/plan.md` →
    "不再讨论的选项".
 
-2. **The TUI rendered to stdout is decorative for us anyway**.
+2. **Image attachments need an indirection layer**. SDK mode lets us
+   pass `{type:"image", source:{type:"base64",...}}` content blocks
+   directly. Interactive mode (per CC source
+   `~/claude-code-source-code/src/hooks/usePasteHandler.ts:130-148`)
+   only ingests images as **file paths via bracketed paste**:
+   `isImageFilePath()` (extension-based) filters lines from a paste
+   sequence, then `tryReadImageFromPath()` reads each from disk and
+   adds it as an attachment chip. PTY mode would therefore have to:
+
+   1. Decode the user's uploaded image (base64) and write it to a
+      Loomscope-managed temp file (`~/.loomscope/tmp/image-<uuid>.png`).
+   2. Send a bracketed-paste sequence (`\e[200~<path>\n\e[201~`) over
+      the PTY — plain typed characters wouldn't trigger CC's paste
+      branch.
+   3. Then resume normal typing for the prompt body + simulate Enter.
+   4. Reap the temp file after the turn (TTL sweep + commit-time
+      delete; can't delete on submit because CC re-reads on resume).
+
+   Plus: bracketed-paste mode must be enabled in the PTY; some
+   terminal emulators ship with it off by default. Multi-image
+   handling needs newline / space separators per the same source
+   file. None of this is impossible, but it's protocol coupling
+   on top of the keyboard-simulation already required for text.
+
+3. **The TUI rendered to stdout is decorative for us anyway**.
    Loomscope reads conversation state from `~/.claude/projects/<id>.jsonl`
    — not from stdout. So we wouldn't pay for parsing the TUI; we'd
    pay for writing into it.
 
-PTY simulation is therefore a "we have no choice" last resort, not a
-desirable Phase 2 implementation.
+PTY simulation is therefore a "we have no choice" last resort. Best
+estimate for Phase 2-B cost: **1.5-2 weeks** including image-path
+indirection, bracketed-paste handling, and cross-terminal-emulator
+compatibility testing.
 
 ## Phased plan
 
