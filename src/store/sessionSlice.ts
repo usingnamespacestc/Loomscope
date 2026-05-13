@@ -1,6 +1,7 @@
 import type { StateCreator } from "zustand";
 
 import type { ChatFlow, ChatNode, DelegateNode, WorkFlow } from "@/data/types";
+import { isToolResultRecord } from "@/parse/raw-record";
 import type { AgentMetadata } from "@/parse/sidecar";
 import type {
   DrillFrame,
@@ -724,6 +725,97 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       workflowCache,
       foldedCompactIds,
       lastDeltaSeq: delta.seq,
+      lastUpdated: Date.now(),
+    });
+    set({ sessions: updated });
+  },
+
+  // v2.2 PR E1: raw-record fast path. Server broadcasts a `raw-records`
+  // SSE event with newly-appended jsonl records as soon as chokidar
+  // sees the write — well before buildChatFlow finishes (~1.5-2s on
+  // 650-ChatNode sessions). We spawn a placeholder ChatNode keyed on
+  // the record's promptId so the UI updates immediately; the
+  // subsequent ground-truth `delta` event (chatnode-added with the
+  // SAME promptId) replaces the placeholder in-place via the existing
+  // dedup in applyChatFlowDelta.
+  //
+  // MVP scope: only user records get placeholders. tool_result /
+  // assistant / system records are skipped — they'd require
+  // mutating an existing ChatNode's workflow, which is more
+  // structural and not worth the complexity vs. the ~1s wait for
+  // ground-truth.
+  //
+  // 中: raw-record 快速通道。chokidar 一看到 jsonl append 就广播；
+  // 我们用 record.promptId 当 id 造占位 ChatNode，1-2s 后 delta 到
+  // 时通过同 id 替换。MVP 只处理 user record。
+  applyRawRecord: (sessionId, record) => {
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur || !cur.chatFlow) return;
+    // Filters — see the docblock on SessionSlice.applyRawRecord for
+    // why each is excluded.
+    // 中: 过滤；理由见 types.ts 上的文档注释。
+    if (record.type !== "user") return;
+    if (!record.promptId) return;
+    if (!record.uuid) return;
+    if (record.isMeta) return;
+    if (record.isSidechain) return;
+    if (record.isCompactSummary) return;
+    if (isToolResultRecord(record)) return;
+    // Already have a ChatNode with this promptId — either the
+    // ground-truth delta beat us, or a previous raw-record already
+    // placed a placeholder. Do nothing.
+    // 中: 同 promptId 已存在则跳过——可能 delta 先到了，或前一条
+    // raw-record 已经放过占位。
+    const existing = cur.chatFlow.chatNodes.find((c) => c.id === record.promptId);
+    if (existing) return;
+    const placeholder: ChatNode = {
+      kind: "chat",
+      id: record.promptId,
+      parentChatNodeId: null,
+      rootUserUuid: record.uuid,
+      userMessage: {
+        uuid: record.uuid,
+        content: record.message?.content ?? "",
+        timestamp: record.timestamp,
+        attachments: [],
+      },
+      workflow: {
+        nodes: [],
+        edges: [],
+        // hasInFlightWork=true so the running spinner shows; the
+        // ground-truth delta updates the summary with real numbers.
+        // 中: hasInFlightWork=true 让旋转动画立刻出现，ground-truth
+        // 会用真实数据覆盖。
+        summary: {
+          assistantPreview: "",
+          assistantText: [],
+          llmCount: 0,
+          hasInFlightWork: true,
+          chainCount: 0,
+          toolCount: 0,
+          totalThinkingChars: 0,
+          contextTokens: 0,
+          maxContextTokens: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          durationMs: null,
+          toolUseFilePaths: [],
+        },
+      },
+      trigger: "user",
+      isCompactSummary: false,
+      meta: {},
+      timestamp: record.timestamp,
+    };
+    const cf: ChatFlow = {
+      ...cur.chatFlow,
+      chatNodes: [...cur.chatFlow.chatNodes, placeholder],
+    };
+    const updated = new Map(sessions);
+    updated.set(sessionId, {
+      ...cur,
+      chatFlow: cf,
       lastUpdated: Date.now(),
     });
     set({ sessions: updated });

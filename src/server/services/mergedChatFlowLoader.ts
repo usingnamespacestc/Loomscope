@@ -60,6 +60,26 @@ export function clearClosureMemberStash(entrySid: string): void {
   }
 }
 
+/**
+ * EN (v2.2 PR E1): return shape extended to include `newRecords` —
+ * the records appended since the previous incremental call, in the
+ * same parser order. The mainJsonlChangeHandler broadcasts these as
+ * raw-record SSE events for the client's optimistic-render fast path
+ * (instant UI without waiting for buildChatFlow). When no prior state
+ * exists (first call / state reset), newRecords is empty (= "we don't
+ * know what's new; just trust the full chatFlow"). When the read
+ * fell back to full (file shrunk etc.), also empty.
+ *
+ * 中: 返回值加 newRecords —— 跟上次相比新追加的 record 列表。
+ * 主 jsonl 变更处理器拿这个广播 raw-record SSE 给客户端做即时
+ * 渲染。没有 prev state 或 fallback 全量时 newRecords 为空（客户端
+ * 等 ground-truth delta）。
+ */
+export interface LoadMergedResult {
+  chatFlow: ChatFlow;
+  newRecords: RawRecord[];
+}
+
 /** Load + merge a ChatFlow from a fork closure. Identical to the
  *  former sessions.ts internal helper — extracted so delta engine
  *  shares the same loader. */
@@ -67,13 +87,22 @@ export async function loadMergedChatFlowForDelta(args: {
   entryJsonlPath: string;
   entrySessionId: string;
   closure: ClosureMember[];
-}): Promise<ChatFlow> {
+}): Promise<LoadMergedResult> {
   const { entryJsonlPath, entrySessionId, closure } = args;
   if (closure.length <= 1) {
     const prevState = getStashedState(entrySessionId);
+    const prevCount = prevState?.records.length ?? 0;
     const r = await parseJsonlFileIncremental(entryJsonlPath, prevState);
     setStashedState(entrySessionId, r.state);
-    return r.chatFlow;
+    // EN (PR E1): newRecords = records appended since prev call.
+    // When usedIncremental is false (first call / file shrunk),
+    // there's no "delta" to speak of — leave newRecords empty.
+    // 中: 增量路径下 newRecords = records 尾部新增段；fallback 全量
+    // 时不算 delta（客户端走 ground-truth）。
+    const newRecords = r.usedIncremental
+      ? r.state.records.slice(prevCount)
+      : [];
+    return { chatFlow: r.chatFlow, newRecords };
   }
   clearStashedState(entrySessionId);
   // v2.1 PR D4 stretch: per-member incremental read. Each closure
@@ -93,13 +122,31 @@ export async function loadMergedChatFlowForDelta(args: {
   // 中: 每个 closure member 自己存一份 records 增量 state；fs.change
   // 时只读 tail，合并后整体 dedup + buildChatFlow。member 列表变化
   // 时新成员走 full fallback；删除的 member stash 在 SSE 退订时清。
-  const recordsByMember: Array<{ sessionId: string; records: RawRecord[] }> = [];
+  const recordsByMember: Array<{
+    sessionId: string;
+    records: RawRecord[];
+    newRecords: RawRecord[];
+  }> = [];
   for (const m of closure) {
     const key = memberStashKey(entrySessionId, m.sessionId);
     const prevState = closureMemberStash.get(key);
+    const prevCount = prevState?.records.length ?? 0;
     const r = await readRecordsIncremental(m.jsonlPath, prevState);
     closureMemberStash.set(key, r.state);
-    recordsByMember.push({ sessionId: m.sessionId, records: r.records });
+    // EN (PR E1): per-member newRecords. Aggregated across members
+    // for the broadcast. Order across members isn't strictly
+    // chronological (different files), but each record has uuid +
+    // parentUuid so the client builder can stitch correctly.
+    // 中: 每个 member 的 newRecords 累加广播。跨 member 不严格按时
+    // 序但每条 record 自带 uuid + parentUuid 客户端能拼。
+    const newRecords = r.usedIncremental
+      ? r.records.slice(prevCount)
+      : [];
+    recordsByMember.push({
+      sessionId: m.sessionId,
+      records: r.records,
+      newRecords,
+    });
   }
   const seenUuids = new Set<string>();
   const merged: RawRecord[] = [];
@@ -113,7 +160,18 @@ export async function loadMergedChatFlowForDelta(args: {
   const chatFlow = buildChatFlow(merged, entryJsonlPath);
   chatFlow.id = entrySessionId;
   chatFlow.linkedSessions = closure.map((m) => m.sessionId);
-  return chatFlow;
+  // Aggregate newRecords with uuid-dedup (same logic as merged).
+  // 中: newRecords 跨 member 用 uuid 去重，避免 fork closure 重复广播。
+  const newSeen = new Set<string>();
+  const aggregatedNew: RawRecord[] = [];
+  for (const { newRecords } of recordsByMember) {
+    for (const r of newRecords) {
+      if (r.uuid && newSeen.has(r.uuid)) continue;
+      if (r.uuid) newSeen.add(r.uuid);
+      aggregatedNew.push(r);
+    }
+  }
+  return { chatFlow, newRecords: aggregatedNew };
 }
 
 /** Test-only: clear all per-member stashes between cases. */

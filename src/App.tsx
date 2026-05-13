@@ -203,6 +203,30 @@ export default function App() {
         console.error("[loomscope] sse delta parse failed:", err);
       }
     });
+    // v2.2 PR E1: raw-record fast path. Server broadcasts these the
+    // moment chokidar reports a jsonl append, before buildChatFlow
+    // finishes. The store reducer spawns optimistic placeholder
+    // ChatNodes (user records only in MVP); the slower ground-truth
+    // `delta` event ~1-2s later replaces them in-place via the same
+    // promptId.
+    // 中: raw-record 通道。chokidar 看到 jsonl 写入立即广播，绕开
+    // 1-2s 的 buildChatFlow；store reducer 造占位 ChatNode，后续
+    // ground-truth delta 用同 promptId 原地替换。
+    es.addEventListener("raw-records", (ev) => {
+      try {
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          sessionId: string;
+          records: Parameters<
+            ReturnType<typeof useStore.getState>["applyRawRecord"]
+          >[1][];
+        };
+        if (payload.sessionId !== activeId) return;
+        const apply = useStore.getState().applyRawRecord;
+        for (const r of payload.records) apply(activeId, r);
+      } catch (err) {
+        console.error("[loomscope] sse raw-records parse failed:", err);
+      }
+    });
     // EN (v2.1 PR D3): drift-ping. Server periodically emits its
     // chatflow hash; client recomputes the same hash on local state
     // and forces a refreshSession if they diverge. Backstop for

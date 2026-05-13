@@ -34,8 +34,12 @@ import {
 import { turnsRouter } from "@/server/routes/turns";
 import { workspacesRouter } from "@/server/routes/workspaces";
 import { initHookSseForwarder } from "@/server/services/hookSseForwarder";
-import { getOrLoad as getOrLoadCachedChatFlow } from "@/server/services/chatFlowCache";
+import {
+  buildCacheKey,
+  setCached,
+} from "@/server/services/chatFlowCache";
 import { processFresh as processChatFlowDelta } from "@/server/services/chatFlowDeltaEngine";
+import { broadcast as broadcastSse } from "@/server/services/sseHub";
 import { setDriftDetectionInterval } from "@/server/services/driftDetection";
 import { findForkClosure } from "@/server/services/forkTree";
 import { locateSessionJsonl } from "@/server/services/locateJsonl";
@@ -174,17 +178,36 @@ export function createApp(opts: AppOptions) {
             projectDir,
             entrySessionId: sessionId,
           });
-          const { chatFlow } = await getOrLoadCachedChatFlow({
-            sessionId,
+          // EN (v2.2 PR E1): single load via loadMergedChatFlowForDelta
+          // — returns both the rebuilt chatFlow AND the new raw records
+          // added since the last incremental call. Broadcast the raw
+          // records immediately (fast path, ~10ms — client renders
+          // optimistic placeholder ChatNodes from them), then run
+          // processChatFlowDelta to emit ground-truth deltas (slow,
+          // ~1-2s — buildChatFlow ran inside the loader).
+          //
+          // Cache population: we call setCached directly with the
+          // rebuilt chatFlow so a concurrent GET /:id hits the cache
+          // without re-running the loader. The LRU was just
+          // invalidated by chokidar; this re-populates it post-load.
+          //
+          // 中: 一次 load 拿 chatFlow + newRecords。raw-record 立即广
+          // 播（10ms 级，client 拿来即时渲染 placeholder）；同时跑
+          // ground-truth delta（1-2s 级，buildChatFlow 已在 loader 里
+          // 跑完）。Cache 手动 set 让并发 GET 命中。
+          const { chatFlow, newRecords } = await loadMergedChatFlowForDelta({
+            entryJsonlPath: jsonlPath,
+            entrySessionId: sessionId,
             closure,
-            fallbackJsonlPath: jsonlPath,
-            loader: () =>
-              loadMergedChatFlowForDelta({
-                entryJsonlPath: jsonlPath,
-                entrySessionId: sessionId,
-                closure,
-              }),
           });
+          if (newRecords.length > 0) {
+            broadcastSse(sessionId, {
+              event: "raw-records",
+              data: { sessionId, records: newRecords },
+            });
+          }
+          const cacheKey = await buildCacheKey(sessionId, closure, jsonlPath);
+          setCached(cacheKey, chatFlow);
           await processChatFlowDelta(sessionId, chatFlow);
         } catch (err) {
           console.warn(

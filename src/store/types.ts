@@ -3,6 +3,7 @@
 // `LiveEventSlice` without rippling across the rest of the store.
 
 import type { ChatFlow, ChatNode, WorkflowSummary } from "@/data/types";
+import type { RawRecord } from "@/parse/raw-record";
 import type { AgentMetadata } from "@/parse/sidecar";
 
 /**
@@ -390,6 +391,26 @@ export interface SessionSlice {
    *  退回 full refresh，避免乱序状态。
    */
   applyChatFlowDelta: (sessionId: string, delta: ChatFlowDeltaEvent) => void;
+  /** EN (v2.2 PR E1): apply a freshly-appended raw jsonl record to the
+   *  active session's ChatFlow for an instant optimistic placeholder
+   *  ChatNode — bypasses the ~1.5-2s buildChatFlow latency on the
+   *  server. Scoped to MVP-relevant records:
+   *    - `type=user` (non-meta, non-toolResult, non-compactSummary,
+   *      non-sidechain, with promptId) → spawn a placeholder ChatNode
+   *      keyed on `record.promptId`. Skipped if a ChatNode with that
+   *      id already exists (the ground-truth `chatnode-added` delta
+   *      arrived first OR a previous raw-record already placed one).
+   *  All other record types are no-ops in MVP — the ground-truth delta
+   *  flips them in 1-2s. The placeholder ChatNode's id matches the
+   *  eventual real id (=promptId), so when the delta arrives,
+   *  applyChatFlowDelta's existing dedup (`existsIdx >= 0` →
+   *  replace-in-place) seamlessly swaps it out.
+   *
+   *  中: PR E1 把刚 append 的 raw record 当 optimistic placeholder。
+   *  目前只处理 user record（生成占位 ChatNode），后续 ground-truth
+   *  delta 通过同 id 在 applyChatFlowDelta 里替换掉。
+   */
+  applyRawRecord: (sessionId: string, record: RawRecord) => void;
   // EN: bump lastInvalidateAt for `sessionId` to now. Called from the
   // SSE `invalidate` handler in App.tsx so liveness UI flips into
   // active state.
