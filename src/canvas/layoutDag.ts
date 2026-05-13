@@ -126,6 +126,14 @@ const FOLD_NODE_HEIGHT = 92;
 // AwaySummaryNodeCard is the smallest synthetic node — just badge +
 // truncated summary body.
 const AWAY_SUMMARY_NODE_HEIGHT = 80;
+// Gap between awaySummary card bottom and host card top. NODE_HEIGHT
+// (260) is a DAGRE LAYOUT HINT — actual ChatNodeCard auto-grows with
+// content (many tool calls → taller card). Picking a generous gap so
+// even a taller-than-hint host doesn't get overlapped by the
+// synthetic bottom edge. 64px ≈ one extra row-height beyond hint.
+// 中: 留 64px 安全间距。NODE_HEIGHT 只是 dagre hint，真卡可能更高，
+// 间距小了易被下方实际卡片遮挡。
+const AWAY_GAP_PX = 64;
 
 // Public API: derive React Flow nodes/edges with positions from a
 // ChatFlow + the set of compact ChatNode ids whose pre-compact range
@@ -158,12 +166,45 @@ export function layoutChatFlow(
     marginy: 20,
   });
 
+  // EN (2026-05-13): pre-scan for hosts carrying awaySummary content
+  // so the dagre setNode pass below can reserve vertical space for
+  // their synthetic-card overlay. Without this reservation, fork
+  // siblings (same rank in LR = stacked vertically at the same X)
+  // get packed tight against host's top edge and the awaySummary
+  // card — placed manually after dagre layout at host.y - 274 — ends
+  // up rendered on top of the sibling card.
+  //
+  // 中: 预扫一遍带 awaySummary 的 host id 集合。后面 g.setNode 时给
+  // 这些 host 报告"更高"的盒高，把 awaySummary 占的 144px 纵向空间
+  // 一并预留——否则 LR 布局下 fork sibling (同 rank 上下堆叠) 会
+  // 紧贴 host 上沿，让手动放置的 awaySummary 卡正好压在 sibling 上。
+  const awayHostIds = new Set<string>();
+  for (const cn of chatFlow.chatNodes) {
+    if (projection.hidden.has(cn.id)) continue;
+    if (!cn.meta?.awaySummary?.content) continue;
+    awayHostIds.add(cn.id);
+  }
+  // Vertical headroom an awaySummary card needs above its host (its
+  // own height + the visual gap). Reserved symmetrically by inflating
+  // dagre's host-height hint by 2×: dagre node boxes are
+  // centre-anchored, so we have to inflate both up and down to
+  // actually push siblings UP. The "wasted" downward 144px just adds
+  // air below the host — acceptable cost; the canvas is already
+  // mostly empty vertical space.
+  // 中: awaySummary 卡需要的纵向 headroom = 卡高 + 间距 = 144px。
+  // dagre node box 中心对称，所以盒子加 2×144 = 288 才能让 sibling
+  // 真正往上挪 144。下方多出来的 144 是浪费，但 canvas 纵向空旷可接受。
+  const AWAY_RESERVED_PX = AWAY_SUMMARY_NODE_HEIGHT + AWAY_GAP_PX;
+
   // dagre nodes: skip hidden ChatNodes; emit a phantom chatFold for
   // each active fold host BEFORE walking edges so g.setEdge calls find
   // both endpoints registered.
   for (const cn of chatFlow.chatNodes) {
     if (projection.hidden.has(cn.id)) continue;
-    g.setNode(cn.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+    const heightHint = awayHostIds.has(cn.id)
+      ? NODE_HEIGHT + 2 * AWAY_RESERVED_PX
+      : NODE_HEIGHT;
+    g.setNode(cn.id, { width: NODE_WIDTH, height: heightHint });
   }
   for (const hostId of projection.activeFoldHostIds) {
     g.setNode(chatFoldIdFor(hostId), {
@@ -171,32 +212,19 @@ export function layoutChatFlow(
       height: FOLD_NODE_HEIGHT,
     });
   }
-  // EN (2026-05-13): synthetic awaySummary nodes are now positioned
-  // DIRECTLY ABOVE their host ChatNode (Agentloom chatBrief pattern)
-  // rather than upstream / dagre-rank-managed. They're treated as
-  // "decorative annotations" — no dagre node, no edge — and placed
-  // manually after dagre lays out the real ChatNodes.
+  // EN (2026-05-13): synthetic awaySummary nodes are positioned
+  // DIRECTLY ABOVE their host ChatNode (Agentloom chatBrief pattern).
+  // They're treated as "decorative annotations" — no dagre node, no
+  // edge — and placed manually after dagre lays out the real
+  // ChatNodes. The fork-sibling overlap that resulted from this
+  // pure-overlay strategy is solved by inflating host's dagre height
+  // hint (see awayHostIds pass above).
   //
-  // 中: 合成 awaySummary 节点改为放在 host 节点正上方（Agentloom
-  // chatBrief 风格），不再参与 dagre 排版，也不连边。dagre 跑完
-  // 真 ChatNode 后再手动按 host 位置算上方偏移。
-  //
-  // Semantic note: thanks to the parser change in 2026-05-13, the
-  // awaySummary now lives on the ChatNode that PRECEDED the gap
-  // (= "the turn that ended this session and got recapped on
-  // resumption"), not the new turn after the gap. So visually the
-  // badge appears above the LAST turn of the previous "session
-  // segment" — reads as a closing summary for that segment.
-  const awayHostIds = new Set<string>();
-  for (const cn of chatFlow.chatNodes) {
-    if (projection.hidden.has(cn.id)) continue;
-    if (!cn.meta?.awaySummary?.content) continue;
-    awayHostIds.add(cn.id);
-    // Intentionally NOT calling g.setNode / g.setEdge here — the
-    // synthetic node sits outside dagre's layout. See the awayRfs
-    // build pass below.
-    // 中: 故意不挂 dagre 节点 / 边——纯装饰，dagre 不知道它。
-  }
+  // Semantic note: the awaySummary lives on the ChatNode that
+  // PRECEDED the gap (= "the turn that ended this session and got
+  // recapped on resumption"), not the new turn after the gap. So
+  // visually the badge appears above the LAST turn of the previous
+  // "session segment" — reads as a closing summary for that segment.
 
   const edges: RFEdge[] = [];
 
@@ -382,14 +410,6 @@ export function layoutChatFlow(
   // 中: awaySummary 卡直接放 host 节点正上方，同 X，向上偏移卡高 +
   // gap。不参与 dagre 因为 dagre 会强行给它单独的 rank（= 用户抱怨
   // 的上游左侧位置），手动 offset 干净。
-  // Gap between synthetic bottom and host top. NODE_HEIGHT (260) is a
-  // DAGRE LAYOUT HINT — actual ChatNodeCard auto-grows with content
-  // (many tool calls → taller card). Picking a generous gap so even
-  // a taller-than-hint host doesn't get overlapped by the synthetic
-  // bottom edge. 64px ≈ one extra row-height beyond hint.
-  // 中: 留 64px 安全间距。NODE_HEIGHT 只是 dagre hint，真卡可能更高，
-  // 间距小了易被下方实际卡片遮挡。
-  const AWAY_GAP_PX = 64;
   const awayRfs: LayoutAwaySummaryRFNode[] = [];
   for (const hostId of awayHostIds) {
     const synId = awaySummaryIdFor(hostId);

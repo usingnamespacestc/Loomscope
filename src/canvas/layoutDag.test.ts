@@ -982,6 +982,46 @@ describe("layoutChatFlow — awaySummary synthetic nodes (v1.2 R5)", () => {
     expect(syn.position.y).toBeLessThan(host.position.y);
   });
 
+  it("fork sibling does not overlap the awaySummary card (2026-05-13)", () => {
+    // EN: regression — when host has both an awaySummary and a fork
+    // sibling at the same dagre rank (LR layout stacks them in the
+    // same X column), the previous code reserved no room above host
+    // for the synthetic awaySummary card, so the sibling card and
+    // awaySummary card collided. Fix inflates host's dagre height by
+    // 2 × (AWAY_SUMMARY_NODE_HEIGHT + AWAY_GAP_PX) so dagre packs
+    // the sibling far enough away to clear the awaySummary footprint.
+    //
+    // 中: 回归测试。LR 下 fork sibling 与 host 在同一 X 列上下堆叠；
+    // 旧代码不知道 host 上方需要留 awaySummary 卡的空间，sibling 紧
+    // 贴 host 上沿 → 和手动放上去的 awaySummary 卡正好重叠。修复
+    // 通过给 host 报告更高的 dagre 盒高把 sibling 推开。
+    const cf = makeChatFlow([
+      makeChatNode({ id: "parent" }),
+      makeChatNode({ id: "sib", parentChatNodeId: "parent" }),
+      makeChatNode({
+        id: "host",
+        parentChatNodeId: "parent",
+        meta: {
+          awaySummary: { uuid: "u-away", content: "recap" },
+        },
+      }),
+    ]);
+    const { nodes } = layoutChatFlow(cf);
+    const host = nodes.find((n) => n.id === "host")!;
+    const sib = nodes.find((n) => n.id === "sib")!;
+    const syn = nodes.find((n) => n.id === "awaySummary-host")!;
+    // The 80-tall awaySummary card sits at [syn.y, syn.y + 80].
+    // The 260-tall sibling card sits at [sib.y, sib.y + 260].
+    // After the fix sibling's bottom must be ABOVE awaySummary's top
+    // (no Y overlap), assuming both are in the same X column.
+    // 中: awaySummary 卡纵向区间 [syn.y, syn.y+80]，sibling 卡纵向区间
+    // [sib.y, sib.y+260]；修复后必须 sib 卡底 < awaySummary 卡顶。
+    expect(sib.position.x).toBe(host.position.x);
+    const sibBottom = sib.position.y + 260; // NODE_HEIGHT
+    const synTop = syn.position.y;
+    expect(sibBottom).toBeLessThanOrEqual(synTop);
+  });
+
   it("skips awaySummary injection when content is empty", () => {
     const cf = makeChatFlow([
       makeChatNode({
