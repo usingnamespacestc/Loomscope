@@ -486,6 +486,26 @@ export default function App() {
       // Belt-and-suspenders: some browsers fire onopen before the
       // hello frame arrives; mark open on either signal.
       useStore.getState().setLiveStatus("session", "open");
+      // v2.1 PR D5 (2026-05-13): hello = EventSource (re)connect
+      // success signal. ONLY on RECONNECT (lastDeltaSeq != null,
+      // meaning we had a state from prior connection), reset
+      // lastDeltaSeq + force refresh — server's seq may have
+      // restarted (if it was the last subscriber to drop) or
+      // marched forward (if other subscribers kept it advancing
+      // while we were disconnected). Either way our cached lastSeq
+      // is invalid. On initial mount lastDeltaSeq is null (just
+      // hydrated), so skip the wasted refresh — loadSession is
+      // doing that work in another effect.
+      //
+      // 中: hello 是 EventSource (重)连接成功。仅在 reconnect 时
+      // （lastDeltaSeq != null, 说明之前已有 state）强制 refresh，
+      // 因为 server seq 可能已经重起 / 跑前。初次挂载时 lastDeltaSeq
+      // 是 null（loadSession 还没跑完或刚跑完），跳过这里的重复
+      // refresh。
+      const sess = useStore.getState().sessions.get(activeId);
+      if (sess?.lastDeltaSeq != null) {
+        void useStore.getState().refreshSession(activeId);
+      }
     });
     es.addEventListener("ping", () => {
       // Heartbeat — no-op.

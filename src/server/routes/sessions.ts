@@ -31,8 +31,10 @@ import {
   getStashedState,
   setStashedState,
 } from "@/server/services/chatFlowCache";
-import { resetSession as resetDeltaSession } from "@/server/services/chatFlowDeltaEngine";
-import { clearClosureMemberStash } from "@/server/services/mergedChatFlowLoader";
+// PR D5: resetDeltaSession / clearClosureMemberStash imports removed
+// when their callsites were removed (snapshot must persist across
+// SSE reconnect blips). Re-add if a genuine reset point reappears.
+// 中: PR D5 拿掉 SSE 断开自动清快照后这两个 import 不再用。
 import { getPendingPermission } from "@/server/services/pendingPermissionTracker";
 import { findForkClosure, type ClosureMember } from "@/server/services/forkTree";
 // Read paths use the with-trash locator so a session that was soft-
@@ -272,21 +274,25 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
           unsubscribe();
           if (subscriberCount(id) === 0) {
             unwatchSession(id);
-            // v2.1 PR D1: drop the delta-engine snapshot too so a
-            // fresh reconnection re-emits initial state via the
-            // chatnode-added path (instead of comparing against a
-            // stale snapshot from a previous session that has since
-            // mutated). Snapshot is cheap to rebuild — first delta
-            // batch after reconnect emits one chatnode-added per
-            // node.
-            // 中: 最后一个 SSE 订阅者断开时清 delta 引擎快照，重连
-            // 后第一批 delta 把所有节点当 added 重发，避免对错快照。
-            resetDeltaSession(id);
-            // v2.1 PR D4: also clear closure member stash so the next
-            // reconnection's first merged-load goes through the full
-            // read path and rebuilds fresh state.
-            // 中: 同时清 closure member 增量 state 让重连后全量重建。
-            clearClosureMemberStash(id);
+            // v2.1 PR D5 (2026-05-13): DON'T reset delta engine
+            // snapshot on subscriber drop. EventSource auto-reconnect
+            // (vite-proxy chunked-encoding flakes, brief network
+            // drops, etc.) blips subscriberCount to 0 then back to 1.
+            // Resetting snapshot here causes server seq to restart
+            // from 1 while client lastSeq is at N → every subsequent
+            // delta triggers a gap-detected refreshSession on the
+            // client until baseline reseeds. With the persistent
+            // snapshot, server's seq stays continuous; client's new
+            // `hello`-driven lastSeq reset (App.tsx) seeds baseline
+            // cleanly. Snapshot memory cost is bounded (per-ChatNode
+            // signature only, not full ChatNodes).
+            // 中: 最后订阅者断开时**不**清 delta 快照。EventSource
+            // 自动重连时 subscriberCount 会短暂 0→1，清 snapshot 会
+            // 让 server seq 从 1 重起 vs 客户端 lastSeq=N → 每条
+            // delta 都 gap → 永远 refresh 循环。让 snapshot 长期
+            // 存活，让客户端 hello 来重置 baseline。
+            // resetDeltaSession(id); // <- removed in PR D5
+            // clearClosureMemberStash(id); // <- removed in PR D5
           }
         });
         await stream.writeSSE({

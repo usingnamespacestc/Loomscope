@@ -565,6 +565,21 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       // Failure on a refresh is non-fatal — the previous chatFlow is
       // still valid; log and let the next SSE invalidate retry.
       console.error("[loomscope] refreshSession failed:", err);
+      // v2.1 PR D5 (2026-05-13): even on failed refresh, drop
+      // lastDeltaSeq=null so subsequent deltas seed a fresh baseline
+      // instead of looping in gap-detection-retriggers-refresh against
+      // the same stale lastSeq. The chatFlow stays at its old content
+      // (stale but not catastrophic); future deltas + drift detection
+      // will eventually reconcile.
+      // 中: refresh 失败时也要清 lastDeltaSeq=null，避免 gap → refresh →
+      // 失败 → 同 gap 再次触发的死循环。chatFlow 暂保留旧内容，
+      // 后续 delta + 30s drift hash 会自然纠正。
+      const updated = new Map(get().sessions);
+      const cur = updated.get(id);
+      if (cur && cur.lastDeltaSeq != null) {
+        updated.set(id, { ...cur, lastDeltaSeq: null });
+        set({ sessions: updated });
+      }
     }
   },
 
