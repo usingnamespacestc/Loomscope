@@ -138,6 +138,126 @@ describe("InteractivePermissionBanner — source-aware decision routing", () => 
     expect(chip.getAttribute("data-source")).toBe("http");
   });
 
+  it("AskUserQuestion: renders form instead of allow/deny buttons", () => {
+    useStore.setState((s) => {
+      const sessions = new Map(s.sessions);
+      sessions.set(SID, {
+        chatFlow: null,
+        foldedNodeIds: new Set(),
+        foldedCompactIds: new Set(),
+        viewport: { x: 0, y: 0, zoom: 1 },
+        selectedNodeId: null,
+        workflowSelectedNodeId: null,
+        drillStack: [],
+        branchMemory: {},
+        subAgentCache: new Map(),
+        workflowCache: new Map(),
+        workflowViewports: new Map(),
+        pendingPermission: null,
+        pendingCanUseToolPrompts: [
+          {
+            promptId: "auq-1",
+            toolName: "AskUserQuestion",
+            toolInput: {
+              questions: [
+                {
+                  question: "Pick one:",
+                  options: [
+                    { label: "Yes", description: "" },
+                    { label: "No", description: "" },
+                  ],
+                },
+              ],
+            },
+            receivedAt: 0,
+            source: "http",
+          },
+        ],
+        currentTurn: null,
+        lastTurnHookAt: 0,
+        lastTurnUserSubmittedAt: 0,
+        lastNotification: null,
+        isLoading: false,
+        error: null,
+        lastUpdated: 0,
+        lastInvalidateAt: 0,
+        lastDeltaSeq: null,
+        rawAppliedRecordUuids: new Set<string>(),
+      });
+      return { sessions, activeSessionId: SID };
+    });
+    render(<InteractivePermissionBanner sessionId={SID} />);
+    // Form rendered, allow/deny absent.
+    expect(screen.getByTestId("ask-user-question-form")).toBeTruthy();
+    expect(screen.queryByTestId("permission-banner-allow")).toBeNull();
+  });
+
+  it("AskUserQuestion submit POSTs updatedInput on the source-specific endpoint", async () => {
+    useStore.setState((s) => {
+      const sessions = new Map(s.sessions);
+      sessions.set(SID, {
+        chatFlow: null,
+        foldedNodeIds: new Set(),
+        foldedCompactIds: new Set(),
+        viewport: { x: 0, y: 0, zoom: 1 },
+        selectedNodeId: null,
+        workflowSelectedNodeId: null,
+        drillStack: [],
+        branchMemory: {},
+        subAgentCache: new Map(),
+        workflowCache: new Map(),
+        workflowViewports: new Map(),
+        pendingPermission: null,
+        pendingCanUseToolPrompts: [
+          {
+            promptId: "auq-2",
+            toolName: "AskUserQuestion",
+            toolInput: {
+              questions: [
+                {
+                  question: "Lib?",
+                  options: [
+                    { label: "A", description: "" },
+                    { label: "B", description: "" },
+                  ],
+                },
+              ],
+            },
+            receivedAt: 0,
+            source: "sdk",
+          },
+        ],
+        currentTurn: null,
+        lastTurnHookAt: 0,
+        lastTurnUserSubmittedAt: 0,
+        lastNotification: null,
+        isLoading: false,
+        error: null,
+        lastUpdated: 0,
+        lastInvalidateAt: 0,
+        lastDeltaSeq: null,
+        rawAppliedRecordUuids: new Set<string>(),
+      });
+      return { sessions, activeSessionId: SID };
+    });
+    render(<InteractivePermissionBanner sessionId={SID} />);
+    // Pick option B.
+    fireEvent.click(screen.getAllByRole("radio")[1]);
+    fireEvent.click(screen.getByTestId("ask-user-question-submit"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(captured).toHaveLength(1);
+    expect(captured[0].url).toBe(
+      `/api/sessions/${SID}/permission-prompts/auq-2/decision`,
+    );
+    const body = JSON.parse(String(captured[0].init?.body));
+    expect(body.behavior).toBe("allow");
+    expect(body.persist).toBe(false);
+    expect(body.updatedInput).toBeTruthy();
+    expect(body.updatedInput.answers).toEqual({ "Lib?": "B" });
+    expect(body.updatedInput.questions).toBeTruthy();
+  });
+
   it("source chip defaults to SDK label when source is missing", () => {
     seed({ promptId: "legacy", toolName: "Bash" }); // no source field
     render(<InteractivePermissionBanner sessionId={SID} />);

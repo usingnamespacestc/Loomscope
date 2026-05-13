@@ -48,6 +48,14 @@ const decisionBodySchema = z.object({
   // as the rejection reason). When omitted the SDK callback fills a
   // generic Chinese-localized default.
   message: z.string().optional(),
+  // v2.3 PR F3/F4: structured payload to feed back into the tool's
+  // input — primarily for `AskUserQuestion` where the SDK's
+  // canUseTool callback returns `{ behavior: "allow", updatedInput }`
+  // and CC re-runs the tool with the user-filled answers. Schema
+  // is `Record<string, unknown>` because the shape varies per tool;
+  // SDK validates the actual fields downstream.
+  // 中: AskUserQuestion 走的 user-filled answers，喂回 tool.call。
+  updatedInput: z.record(z.string(), z.unknown()).optional(),
 });
 
 export interface PermissionPromptsRouterOptions {
@@ -75,6 +83,7 @@ export function permissionPromptsRouter(opts: PermissionPromptsRouterOptions) {
       const resolved = opts.registry.resolvePermissionPrompt(promptId, {
         behavior: body.behavior,
         message: body.message,
+        updatedInput: body.updatedInput,
       });
       if (!resolved) {
         // Prompt not in registry — usually stale (already resolved /

@@ -165,6 +165,15 @@
     "source_sdk": "loomscope",
     "source_sdk_tooltip": "Prompt from a Loomscope-spawned Claude Code session (via SDK canUseTool)"
   },
+  "ask_user_question": {
+    "multiselect": "(multi-select)",
+    "other_label": "Other",
+    "other_placeholder": "Type a custom answer…",
+    "notes_placeholder": "Optional notes for Claude…",
+    "submit": "Submit",
+    "cancel": "Cancel",
+    "parse_failed": "Could not parse AskUserQuestion input — use Cancel to abort."
+  },
   "permission_rules": {
     "section_title": "Always-allowed tools",
     "section_description": "Loomscope intercepts Claude's tool permission requests via the SDK canUseTool callback. Clicking \"Allow always\" saves the tool to ~/.loomscope/permissions.json so future calls auto-allow without prompting. Remove rules here.",

@@ -506,7 +506,16 @@ interface PendingPermissionPrompt {
   id: string;
   sessionId: string;
   toolName: string;
-  resolve: (decision: { behavior: PermissionBehavior; message?: string }) => void;
+  resolve: (decision: {
+    behavior: PermissionBehavior;
+    message?: string;
+    /** v2.3 PR F3/F4: AskUserQuestion-style payload passed from
+     *  /api/sessions/:id/permission-prompts/:promptId/decision
+     *  through to the canUseTool resolver. When undefined, the
+     *  resolver falls back to the original `input` (= no answer
+     *  modification — plain allow). */
+    updatedInput?: Record<string, unknown>;
+  }) => void;
   reject: (err: Error) => void;
 }
 
@@ -588,7 +597,17 @@ export class SessionRegistry {
    *  already resolved / never existed). */
   resolvePermissionPrompt(
     promptId: string,
-    decision: { behavior: PermissionBehavior; message?: string },
+    decision: {
+      behavior: PermissionBehavior;
+      message?: string;
+      /** v2.3 PR F3/F4: structured payload to feed back into the
+       *  tool's input. AskUserQuestion uses this to ship the user-
+       *  filled `answers` (+ optional `annotations`) so CC re-runs
+       *  the tool with them. Plain allow/deny prompts leave this
+       *  undefined.
+       *  中: AskUserQuestion 走 updatedInput 把用户填的 answers 喂回。 */
+      updatedInput?: Record<string, unknown>;
+    },
   ): { sessionId: string; toolName: string } | null {
     const p = this.pendingPermissionPrompts.get(promptId);
     if (!p) return null;
@@ -1179,7 +1198,16 @@ export class SessionRegistry {
           toolName,
           resolve: (decision) => {
             if (decision.behavior === "allow") {
-              resolve({ behavior: "allow", updatedInput: input });
+              // v2.3 PR F3/F4: prefer the browser-supplied
+              // updatedInput (AskUserQuestion sets it to the
+              // user-filled answers). Falls back to original input
+              // for plain allow.
+              // 中: 优先用浏览器回的 updatedInput (AskUserQuestion 填
+              // 的 answers)；普通工具沿用原 input。
+              resolve({
+                behavior: "allow",
+                updatedInput: decision.updatedInput ?? input,
+              });
             } else {
               resolve({
                 behavior: "deny",

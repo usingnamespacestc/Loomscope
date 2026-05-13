@@ -165,6 +165,15 @@
     "source_sdk": "loomscope",
     "source_sdk_tooltip": "来自 Loomscope 启动的 Claude Code（SDK canUseTool）"
   },
+  "ask_user_question": {
+    "multiselect": "（多选）",
+    "other_label": "其它",
+    "other_placeholder": "输入自定义回答…",
+    "notes_placeholder": "给 Claude 的可选备注…",
+    "submit": "提交",
+    "cancel": "取消",
+    "parse_failed": "AskUserQuestion 输入解析失败 — 点取消放弃。"
+  },
   "permission_rules": {
     "section_title": "始终允许的工具",
     "section_description": "Loomscope 通过 SDK canUseTool 拦截 Claude 的工具权限请求；点击「始终允许」会把当前工具记到 ~/.loomscope/permissions.json，下次再不弹。可以在这里删除。",

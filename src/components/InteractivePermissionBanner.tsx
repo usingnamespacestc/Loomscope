@@ -28,6 +28,10 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import {
+  AskUserQuestionForm,
+  type AskUserQuestionFormSubmit,
+} from "@/components/AskUserQuestionForm";
 import { useStore } from "@/store/index";
 
 export function InteractivePermissionBanner({
@@ -52,15 +56,21 @@ export function InteractivePermissionBanner({
   const send = async (
     behavior: "allow" | "deny",
     persist: boolean,
+    /** v2.3 PR F3/F4: when provided, packs into the decision body's
+     *  `updatedInput` so CC's tool re-runs with this payload
+     *  (AskUserQuestion writes answers + annotations here). Plain
+     *  allow/deny leaves it undefined.
+     *  中: AskUserQuestion 等需要回填 input 的 tool 用 updatedInput
+     *  字段把用户填的数据喂回。 */
+    updatedInput?: Record<string, unknown>,
   ): Promise<void> => {
     setBusy(true);
     setError(null);
     // v2.3 PR F2: route the decision to the correct endpoint based
     // on prompt source. SDK and HTTP gates are independent server-
     // side mechanisms; mixing endpoints would 404. The body shape
-    // also differs slightly (saveAsRule vs persist; the HTTP gate
-    // also accepts an optional updatedInput field for the
-    // AskUserQuestion case — F3 will use it).
+    // also differs slightly (saveAsRule vs persist; both accept an
+    // optional updatedInput field for the AskUserQuestion case).
     // 中: F2 按 source 走 endpoint。SDK 和 HTTP 是两个独立的等待门，
     // 不能走错。body 字段名也略有区别。
     const source = top.source ?? "sdk";
@@ -68,11 +78,20 @@ export function InteractivePermissionBanner({
       source === "http"
         ? ([
             `/api/cc-hook/decision`,
-            { promptId: top.promptId, behavior, saveAsRule: persist },
+            {
+              promptId: top.promptId,
+              behavior,
+              saveAsRule: persist,
+              ...(updatedInput && { updatedInput }),
+            },
           ] as const)
         : ([
             `/api/sessions/${sessionId}/permission-prompts/${top.promptId}/decision`,
-            { behavior, persist },
+            {
+              behavior,
+              persist,
+              ...(updatedInput && { updatedInput }),
+            },
           ] as const);
     try {
       const res = await fetch(url, {
@@ -96,6 +115,28 @@ export function InteractivePermissionBanner({
     } finally {
       setBusy(false);
     }
+  };
+
+  // v2.3 PR F3: AskUserQuestion swaps the allow/deny button row for
+  // a multi-question form. Submit packages user-filled answers into
+  // `updatedInput` (the shape CC's AskUserQuestionTool.call() echoes
+  // back as the tool_result content).
+  // 中: AskUserQuestion 工具走表单：提交 = allow + 把答案打包成
+  // updatedInput；取消 = deny。
+  const isAskUserQuestion = top.toolName === "AskUserQuestion";
+  const handleAskUserQuestionSubmit = (
+    out: AskUserQuestionFormSubmit,
+  ): void => {
+    const updatedInput: Record<string, unknown> = {
+      // Echo the tool's questions back into updatedInput so CC's
+      // call() sees the full shape it expects (questions + answers +
+      // optional annotations).
+      // 中: questions 原样回填，CC.tool.call() 需要完整 shape。
+      questions: (top.toolInput as { questions?: unknown }).questions ?? [],
+      answers: out.answers,
+      ...(out.annotations && { annotations: out.annotations }),
+    };
+    void send("allow", false, updatedInput);
   };
 
   // Title: SDK pre-renders a friendly string ("Claude wants to read
@@ -146,7 +187,7 @@ export function InteractivePermissionBanner({
               {top.decisionReason}
             </div>
           )}
-          {inputPreview && (
+          {inputPreview && !isAskUserQuestion && (
             <div className="mt-1 max-h-20 overflow-y-auto rounded bg-blue-100/60 px-2 py-1 font-mono text-[10.5px] text-blue-900 break-all whitespace-pre-wrap">
               {inputPreview}
             </div>
@@ -158,6 +199,22 @@ export function InteractivePermissionBanner({
               })}
             </div>
           )}
+          {isAskUserQuestion && interactiveMode && (
+            <div className="mt-2">
+              <AskUserQuestionForm
+                toolInput={top.toolInput}
+                busy={busy}
+                onSubmit={handleAskUserQuestionSubmit}
+                onCancel={() => void send("deny", false)}
+              />
+              {error && (
+                <div className="mt-1 text-[10px] italic text-rose-600">
+                  ✗ {error}
+                </div>
+              )}
+            </div>
+          )}
+          {!isAskUserQuestion && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {interactiveMode ? (
               <>
@@ -207,6 +264,7 @@ export function InteractivePermissionBanner({
               </span>
             )}
           </div>
+          )}
         </div>
       </div>
     </div>
