@@ -5,47 +5,66 @@
 //      Conversation tab content, BranchSelector at any natural sibling
 //      forks (in-session restore / edit-and-resubmit produces these),
 //      ⑂ N chip on multi-child ChatNodes.
-//   2. The DrillPanel 2-tab strip switching (M3).
+//   2. DrillPanel 4-tab strip + auto tab-selection by viewMode.
 //
 // Mock /branch fork merging is verified at the unit + endpoint level
 // (forkTree.test.ts + app.test.ts using the disk fixture); we don't
 // repeat it via Playwright because the disk fixture isn't visible to
 // the running dev server (it serves ~/.claude/projects).
+//
+// 中: e2e 验 fork canvas + DrillPanel。tab 数已从 v0.8 的 2 个扩到
+// v1.1+ 的 4 个；ChatFlow viewMode 默认 Conversation tab（v0.10 polish
+// 加的 auto-pick）；fork.spec 同步刷新断言。
 
 import { expect, test } from "@playwright/test";
 
 const SESSION_ID = "2362ff7c-9cfc-4f35-817c-0366bb2056ff";
 const PROJECT_CWD = "/home/usingnamespacestc";
 
-test.describe("v0.8 fork browsing — DrillPanel 2-tab + Conversation + canvas", () => {
+test.describe("fork browsing — DrillPanel tabs + Conversation + canvas", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await page.waitForSelector('[data-testid="canvas-host"]', { timeout: 10_000 });
+    await page.waitForSelector('[data-testid="canvas-host"]', { timeout: 15_000 });
     await page.waitForSelector(`[data-testid="workspace-row-${PROJECT_CWD}"]`, {
-      timeout: 10_000,
+      timeout: 15_000,
     });
     const sessionList = page.locator(`[data-testid="session-list-${PROJECT_CWD}"]`);
     if (!(await sessionList.isVisible().catch(() => false))) {
       await page.locator(`[data-testid="workspace-row-${PROJECT_CWD}"]`).click();
     }
+    // GET /api/sessions on a 16-session workspace can take a while —
+    // wait explicitly for the session row before clicking.
+    // 中: 16-session 工作区的会话列表 API 较慢，先等行渲染再点击。
+    await page.waitForSelector(`[data-testid="session-row-${SESSION_ID}"]`, {
+      timeout: 30_000,
+    });
     await page
       .locator(`[data-testid="session-row-${SESSION_ID}"]`)
       .click({ timeout: 10_000 });
-    await page.waitForSelector('[data-testid^="chat-node-"]', { timeout: 25_000 });
+    await page.waitForSelector('[data-testid^="chat-node-"]', { timeout: 30_000 });
   });
 
-  test("DrillPanel renders the 2-tab strip and defaults to Detail tab", async ({ page }) => {
-    const detailTab = page.locator('[data-testid="drill-panel-tab-detail"]');
+  test("DrillPanel renders the 4-tab strip and defaults to Conversation on ChatFlow view", async ({ page }) => {
+    // v1.1 split: Detail / Conversation / Git / Effective-Context.
+    // v0.10 polish: ChatFlow viewMode auto-picks Conversation as the
+    // default tab (workflow drills default to Detail).
+    // 中: ChatFlow 视图自动选 Conversation tab。
     const convTab = page.locator('[data-testid="drill-panel-tab-conversation"]');
-    await expect(detailTab).toBeVisible();
+    const detailTab = page.locator('[data-testid="drill-panel-tab-detail"]');
+    const gitTab = page.locator('[data-testid="drill-panel-tab-git"]');
+    const ecTab = page.locator('[data-testid="drill-panel-tab-effective-context"]');
     await expect(convTab).toBeVisible();
-    await expect(detailTab).toHaveAttribute("data-active", "true");
+    await expect(detailTab).toBeVisible();
+    await expect(gitTab).toBeVisible();
+    await expect(ecTab).toBeVisible();
+    await expect(convTab).toHaveAttribute("data-active", "true");
   });
 
-  test("clicking Conversation tab swaps body to ConversationView", async ({ page }) => {
-    // Click some ChatNode first so the ConversationView has a path
-    // endpoint to anchor on (otherwise the latest-leaf default kicks
-    // in but path bubbles still render — either way works).
+  test("clicking Conversation tab mounts ConversationView (or empty fallback)", async ({ page }) => {
+    // Pick a ChatNode so the conversation has an anchor (latest-leaf
+    // fallback also works but binding to a clicked node gives a
+    // deterministic path).
+    // 中: 点一个 ChatNode 给 ConversationView 锚点。
     const firstChatNode = page.locator('[data-testid^="chat-node-"]').first();
     await firstChatNode.scrollIntoViewIfNeeded();
     await firstChatNode.dispatchEvent("click");
@@ -53,11 +72,17 @@ test.describe("v0.8 fork browsing — DrillPanel 2-tab + Conversation + canvas",
     await expect(
       page.locator('[data-testid="drill-panel-tab-conversation"]'),
     ).toHaveAttribute("data-active", "true");
-    // ConversationView root container OR the empty fallback should
-    // mount. Both have testids — either is valid.
-    const convView = page.locator('[data-testid="conversation-view"]');
-    const empty = page.locator('[data-testid="conversation-empty"]');
-    const haveConv = (await convView.count()) + (await empty.count());
+    // Wait for either ConversationView or the empty fallback to mount.
+    // The lazy Suspense chunk + chatFlow load can take a moment; using
+    // waitForSelector with `or` semantics via Promise.race.
+    // 中: Suspense + chatFlow 加载有延迟，显式等任一 testid 出现。
+    await Promise.race([
+      page.waitForSelector('[data-testid="conversation-view"]', { timeout: 10_000 }),
+      page.waitForSelector('[data-testid="conversation-empty"]', { timeout: 10_000 }),
+    ]);
+    const haveConv =
+      (await page.locator('[data-testid="conversation-view"]').count()) +
+      (await page.locator('[data-testid="conversation-empty"]').count());
     expect(haveConv, "expected conversation-view or conversation-empty").toBeGreaterThan(
       0,
     );

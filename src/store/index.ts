@@ -58,3 +58,19 @@ export const useStore = create<LoomscopeStore>()(
 );
 
 export type { LoomscopeStore } from "@/store/types";
+
+// EN: dev-only window exposure for e2e tests + browser-console
+// debugging. The zustand hook is just a function with `getState` /
+// `setState` attached — exposing it costs nothing in dev, and Vite's
+// production tree-shake strips this branch via `import.meta.env.DEV`.
+// 中: dev 把 store 挂 window，给 e2e 和调试用；prod 构建摇掉。
+//
+// Cast through `unknown` to dodge ImportMeta type plumbing (vite-env
+// types may not be loaded for every tsconfig target).
+// 中: 不依赖 vite-env.d.ts，转 unknown 拿 DEV flag。
+if (typeof window !== "undefined") {
+  const env = (import.meta as unknown as { env?: { DEV?: boolean } }).env;
+  if (env?.DEV) {
+    (window as unknown as { useStore: typeof useStore }).useStore = useStore;
+  }
+}
