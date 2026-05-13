@@ -1,27 +1,29 @@
-// EN (v∞.3 PR1): interactive banner for SDK-driven canUseTool
-// permission prompts. Distinct from `PermissionBanner` (which mirrors
-// CC's read-only PermissionRequest hook for terminal CC) — this one
-// has actual buttons that resolve the SDK's awaiting Promise via
-// POST /api/sessions/:id/permission-prompts/:promptId/decision.
+// EN (v∞.3 PR1 + v2.3 PR F2): interactive banner for permission
+// prompts originating from EITHER:
+//   • SDK canUseTool callback (Loomscope-spawned CC) — resolved via
+//     POST /api/sessions/:id/permission-prompts/:promptId/decision.
+//   • Terminal CC's settings.json HTTP hook (PreToolUse long-poll
+//     gated by `enableInteractivePermissions` preference, PR F1) —
+//     resolved via POST /api/cc-hook/decision.
 //
-// Renders the FIRST pending prompt for the active session as a
-// modal-ish strip above the canvas (same anchor as PermissionBanner).
+// The store carries a `source: "sdk" | "http"` field on each prompt
+// so the click handler picks the right endpoint + body shape (SDK
+// uses { behavior, persist }; HTTP uses { promptId, behavior,
+// saveAsRule, reason? }).
+//
+// Source chip on the banner head distinguishes prompts visually so
+// the user knows which CC instance is asking. Same Allow / Always
+// allow / Deny buttons either way — "Always allow" persists a rule
+// to ~/.loomscope/permissions.json which both paths' pre-checks hit.
+//
 // Multiple pending prompts queue: subsequent ones show after each
-// resolves. Three actions:
-//   - Allow         — one-shot allow, no persistence
-//   - Always allow  — allow + save rule to ~/.loomscope/permissions.json
-//                     so future calls match without prompting
-//   - Deny          — one-shot deny, no persistence (no "always deny"
-//                     button — safer to require explicit re-deny)
+// resolves. Optimistic clear on click; server's
+// `permission-prompt-resolved` SSE is the belt-and-suspenders.
 //
-// Optimistic clear: button click immediately removes the banner +
-// posts decision. Server-side `permission-prompt-resolved` SSE event
-// also fires for redundancy (if the optimistic clear races with a
-// network failure, the SSE event still cleans up).
-//
-// 中: SDK canUseTool 触发的浏览器交互 banner。3 个按钮直接 resolve
-// SDK 端等待中的 Promise。"Always allow" 写入 ~/.loomscope/permissions.json
-// 后续匹配不再弹。
+// 中: 同一个 banner 同时服务 SDK canUseTool 和 terminal-CC HTTP hook
+// 两种 prompt 来源；store 上 source 字段决定按钮 click 走哪个 endpoint。
+// "Always allow" 写到统一的 permission_rules，两条路径的 pre-check 都
+// 命中。
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -53,16 +55,32 @@ export function InteractivePermissionBanner({
   ): Promise<void> => {
     setBusy(true);
     setError(null);
+    // v2.3 PR F2: route the decision to the correct endpoint based
+    // on prompt source. SDK and HTTP gates are independent server-
+    // side mechanisms; mixing endpoints would 404. The body shape
+    // also differs slightly (saveAsRule vs persist; the HTTP gate
+    // also accepts an optional updatedInput field for the
+    // AskUserQuestion case — F3 will use it).
+    // 中: F2 按 source 走 endpoint。SDK 和 HTTP 是两个独立的等待门，
+    // 不能走错。body 字段名也略有区别。
+    const source = top.source ?? "sdk";
+    const [url, body] =
+      source === "http"
+        ? ([
+            `/api/cc-hook/decision`,
+            { promptId: top.promptId, behavior, saveAsRule: persist },
+          ] as const)
+        : ([
+            `/api/sessions/${sessionId}/permission-prompts/${top.promptId}/decision`,
+            { behavior, persist },
+          ] as const);
     try {
-      const res = await fetch(
-        `/api/sessions/${sessionId}/permission-prompts/${top.promptId}/decision`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "same-origin",
-          body: JSON.stringify({ behavior, persist }),
-        },
-      );
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(body),
+      });
       if (!res.ok) {
         // Stale prompt (404) is expected when the SDK already aborted
         // it server-side — silently drop. Other failures surface.
@@ -97,7 +115,32 @@ export function InteractivePermissionBanner({
       <div className="flex items-start gap-2">
         <span className="text-blue-600 text-base leading-tight">🔐</span>
         <div className="flex-1 min-w-0">
-          <div className="font-medium leading-snug">{headline}</div>
+          <div className="flex items-center gap-1.5 leading-snug">
+            <span className="font-medium">{headline}</span>
+            {/* v2.3 PR F2: source chip — distinguishes which CC instance
+                is asking. terminal-CC source means the user's
+                interactive `claude` session fired PreToolUse; sdk
+                source means a Loomscope-spawned headless CC.
+                中: source chip 区分发起方。 */}
+            <span
+              data-testid="permission-banner-source"
+              data-source={top.source ?? "sdk"}
+              className={
+                (top.source ?? "sdk") === "http"
+                  ? "rounded bg-amber-200/80 px-1.5 py-px text-[9.5px] font-semibold text-amber-900"
+                  : "rounded bg-blue-200/80 px-1.5 py-px text-[9.5px] font-semibold text-blue-900"
+              }
+              title={
+                (top.source ?? "sdk") === "http"
+                  ? t("permission_banner.source_http_tooltip")
+                  : t("permission_banner.source_sdk_tooltip")
+              }
+            >
+              {(top.source ?? "sdk") === "http"
+                ? t("permission_banner.source_http")
+                : t("permission_banner.source_sdk")}
+            </span>
+          </div>
           {top.decisionReason && (
             <div className="mt-0.5 text-[11px] text-blue-700">
               {top.decisionReason}

@@ -357,6 +357,11 @@ export default function App() {
           displayName?: string;
           decisionReason?: string;
           blockedPath?: string;
+          /** v2.3 PR F2: "http" for terminal CC PreToolUse via the
+           *  long-poll gate, undefined (treated as "sdk") for the
+           *  Loomscope-spawned canUseTool path. Drives banner chip
+           *  + decision endpoint routing. */
+          source?: "sdk" | "http";
         };
         if (payload.sessionId !== activeId) return;
         useStore.getState().addCanUseToolPrompt(activeId, {
@@ -368,6 +373,7 @@ export default function App() {
           decisionReason: payload.decisionReason,
           blockedPath: payload.blockedPath,
           receivedAt: Date.now(),
+          source: payload.source ?? "sdk",
         });
       } catch (err) {
         console.error("[loomscope] sse permission-prompt parse failed:", err);

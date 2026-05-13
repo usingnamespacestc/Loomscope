@@ -159,7 +159,11 @@
     "allow": "本次允许",
     "allow_always": "始终允许",
     "deny": "拒绝",
-    "viewer_mode": "Viewer-only 模式 — 这里不可批准；请由终端 CC 或其他 writer 决定"
+    "viewer_mode": "Viewer-only 模式 — 这里不可批准；请由终端 CC 或其他 writer 决定",
+    "source_http": "terminal",
+    "source_http_tooltip": "来自你 terminal 启动的 Claude Code（settings.json HTTP hook）",
+    "source_sdk": "loomscope",
+    "source_sdk_tooltip": "来自 Loomscope 启动的 Claude Code（SDK canUseTool）"
   },
   "permission_rules": {
     "section_title": "始终允许的工具",

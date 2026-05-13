@@ -267,6 +267,14 @@ export interface SessionState {
     decisionReason?: string;
     blockedPath?: string;
     receivedAt: number;
+    /** EN (v2.3 PR F2): origin of the prompt — routes the user's
+     *  decision to the right endpoint and drives the banner's source
+     *  chip ("terminal CC" vs "Loomscope-spawned"). Defaults to
+     *  "sdk" for back-compat: SSE payloads from canUseTool don't set
+     *  `source`, while HTTP-hook prompts (PR F1) carry
+     *  `source: "http"`.
+     *  中: prompt 来源；决定 banner 上 chip 文案 + 决策走的 endpoint。 */
+    source?: "sdk" | "http";
   }>;
   // v0.11: hook-driven turn window. UserPromptSubmit sets this to
   // { startedAt: now }; Stop clears it. When non-null, the session is
@@ -447,6 +455,7 @@ export interface SessionSlice {
       decisionReason?: string;
       blockedPath?: string;
       receivedAt: number;
+      source?: "sdk" | "http";
     },
   ) => void;
   removeCanUseToolPrompt: (sessionId: string, promptId: string) => void;

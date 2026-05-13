@@ -159,7 +159,11 @@
     "allow": "Allow once",
     "allow_always": "Allow always",
     "deny": "Deny",
-    "viewer_mode": "Viewer-only mode — decisions can't be made here; resolve in terminal CC or another writer."
+    "viewer_mode": "Viewer-only mode — decisions can't be made here; resolve in terminal CC or another writer.",
+    "source_http": "terminal",
+    "source_http_tooltip": "Prompt from your terminal Claude Code session (via settings.json HTTP hook)",
+    "source_sdk": "loomscope",
+    "source_sdk_tooltip": "Prompt from a Loomscope-spawned Claude Code session (via SDK canUseTool)"
   },
   "permission_rules": {
     "section_title": "Always-allowed tools",
