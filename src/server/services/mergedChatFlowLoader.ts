@@ -45,6 +45,33 @@ import type { ChatFlow } from "@/data/types";
  */
 const closureMemberStash = new Map<string, RecordsOnlyIncrementalState>();
 
+/**
+ * EN (v2.2 PR E3): per-entry-session snapshot of the LAST merged
+ * ChatFlow + the closure shape it was built from. Lets the closure>1
+ * path feed a `BuildChatFlowReuseHint` into buildChatFlow so dirty-
+ * bucket reuse kicks in (otherwise every chokidar event rebuilds all
+ * 664 ChatNodes — ~6s on the user's main session).
+ *
+ * Cache invalidation:
+ *   • Closure shape change (member added/removed) → drop snapshot;
+ *     reuse hint is shape-dependent.
+ *   • Closure>1 → ≤1 transition → drop (caller switches to the
+ *     stash-based incremental path; merged snapshot is stale).
+ *   • Member jsonl shrunk → readRecordsIncremental falls back to
+ *     full; we drop the snapshot too because newRecords becomes
+ *     unreliable (full record set, not a delta).
+ *
+ * 中: 每个 entry session 保留上次合并 ChatFlow + closure 形状，让
+ * closure>1 路径喂 buildChatFlow reuseHint，dirty bucket 复用生效——
+ * 否则每次 chokidar 都重建所有 664 ChatNode (~6s)。closure 形状变 /
+ * shrink fallback 时 drop snapshot。
+ */
+interface MergedChatFlowSnapshot {
+  chatFlow: ChatFlow;
+  closureMemberIds: string[];
+}
+const mergedChatFlowSnapshot = new Map<string, MergedChatFlowSnapshot>();
+
 function memberStashKey(entrySid: string, memberSid: string): string {
   return `${entrySid}::${memberSid}`;
 }
@@ -58,6 +85,11 @@ export function clearClosureMemberStash(entrySid: string): void {
   for (const k of Array.from(closureMemberStash.keys())) {
     if (k.startsWith(prefix)) closureMemberStash.delete(k);
   }
+  // v2.2 PR E3: also drop the merged-chatflow snapshot; without
+  // matching member-stashes there's no usable reuseHint to derive.
+  // 中: per-member stash 清空时同时 drop 整体 snapshot（reuseHint
+  // 失去来源）。
+  mergedChatFlowSnapshot.delete(entrySid);
 }
 
 /**
@@ -90,6 +122,10 @@ export async function loadMergedChatFlowForDelta(args: {
 }): Promise<LoadMergedResult> {
   const { entryJsonlPath, entrySessionId, closure } = args;
   if (closure.length <= 1) {
+    // PR E3: drop merged snapshot if we just transitioned from
+    // closure>1 — its reuse hint is no longer applicable.
+    // 中: 形态从 closure>1 切回 ≤1 时 drop snapshot，旧 hint 失效。
+    mergedChatFlowSnapshot.delete(entrySessionId);
     const prevState = getStashedState(entrySessionId);
     const prevCount = prevState?.records.length ?? 0;
     const r = await parseJsonlFileIncremental(entryJsonlPath, prevState);
@@ -157,11 +193,11 @@ export async function loadMergedChatFlowForDelta(args: {
       merged.push(r);
     }
   }
-  const chatFlow = buildChatFlow(merged, entryJsonlPath);
-  chatFlow.id = entrySessionId;
-  chatFlow.linkedSessions = closure.map((m) => m.sessionId);
-  // Aggregate newRecords with uuid-dedup (same logic as merged).
-  // 中: newRecords 跨 member 用 uuid 去重，避免 fork closure 重复广播。
+  // Aggregate newRecords with uuid-dedup (same logic as merged). We
+  // need these BEFORE buildChatFlow so we can hand them to the
+  // reuseHint as the dirty-record list (PR E3).
+  // 中: newRecords 跨 member 去重；PR E3 把这个列表喂给 reuseHint
+  // 做 dirty bucket detection。
   const newSeen = new Set<string>();
   const aggregatedNew: RawRecord[] = [];
   for (const { newRecords } of recordsByMember) {
@@ -171,6 +207,56 @@ export async function loadMergedChatFlowForDelta(args: {
       aggregatedNew.push(r);
     }
   }
+
+  // PR E3: build reuseHint when we have a prior snapshot of the same
+  // closure shape. Without this, buildChatFlow rebuilds every bucket
+  // (~6s on 664-ChatNode sessions). With it, dirty buckets are
+  // typically 1-2 (the just-appended turn), bringing build to
+  // ~50-100ms.
+  //
+  // Shape check: closureMemberIds (in declaration order) must match.
+  // If a member was added/removed/reordered, we can't safely reuse —
+  // the merged record stream's bucket-to-promptId mapping could
+  // differ.
+  //
+  // 中: 同 closure 形状下走 reuseHint，dirty 1-2 buckets → ~50ms。
+  // member 变动则不安全，跳过 reuse。
+  const currentShape = closure.map((m) => m.sessionId);
+  const prevSnapshot = mergedChatFlowSnapshot.get(entrySessionId);
+  const shapeMatches =
+    prevSnapshot != null &&
+    prevSnapshot.closureMemberIds.length === currentShape.length &&
+    prevSnapshot.closureMemberIds.every((id, i) => id === currentShape[i]);
+  // Also: when ANY member fell back to full-read (usedIncremental=false),
+  // newRecords contains the entire member's records, so dirty-bucket
+  // detection would mark everything dirty — defeating the optimization
+  // AND producing a misleading newRecords broadcast. Drop reuseHint in
+  // that case.
+  // 中: 任一 member 落回 full-read 时 newRecords 实际是全量，dirty
+  // 检测会标全脏；reuseHint 没意义，跳过。
+  const anyMemberFellBack = recordsByMember.some(
+    (m) => m.newRecords.length > 0 && m.newRecords.length === m.records.length,
+  );
+  const reuseHint =
+    shapeMatches && prevSnapshot && !anyMemberFellBack
+      ? {
+          prevChatFlow: prevSnapshot.chatFlow,
+          prevRecordCount: 0, // unused in newRecords mode
+          newRecords: aggregatedNew,
+        }
+      : undefined;
+
+  const chatFlow = buildChatFlow(merged, entryJsonlPath, {}, reuseHint);
+  chatFlow.id = entrySessionId;
+  chatFlow.linkedSessions = closure.map((m) => m.sessionId);
+
+  // Update merged snapshot for the next call.
+  // 中: 写回 snapshot 给下次 reuseHint 用。
+  mergedChatFlowSnapshot.set(entrySessionId, {
+    chatFlow,
+    closureMemberIds: currentShape,
+  });
+
   return { chatFlow, newRecords: aggregatedNew };
 }
 
@@ -249,4 +335,5 @@ export async function peekNewRecordsForDelta(args: {
 /** Test-only: clear all per-member stashes between cases. */
 export function _resetMemberStashForTests(): void {
   closureMemberStash.clear();
+  mergedChatFlowSnapshot.clear();
 }

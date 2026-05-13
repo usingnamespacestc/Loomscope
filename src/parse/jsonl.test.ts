@@ -1712,6 +1712,59 @@ describe("buildChatFlow reuse hint (M2 — v0.10 收尾 / v0.11 prep)", () => {
     }
   });
 
+  it("PR E3 — explicit newRecords field drives dirty-bucket detection (closure>1 path)", () => {
+    // EN: when the merged record stream is NOT append-only (records
+    // from a non-last fork member land mid-stream), slice(prevCount)
+    // can't find the new records. The `newRecords` field in the
+    // reuse hint lets the caller declare the dirty records directly.
+    //
+    // We simulate this by passing the FULL record list as `records`
+    // but only the last few promptIds' worth of records as
+    // `newRecords`. The unchanged early buckets should be reused
+    // (same object identity); the dirty buckets should rebuild.
+    //
+    // 中: closure>1 合并流非追加；显式 newRecords 决定哪些 bucket
+    // 脏。这里模拟：records 全量；newRecords 只含部分。早段 bucket
+    // 应原样复用（同对象引用），新段重建。
+    const head = ALL_RECORDS.slice(0, ALL_RECORDS.length - 5);
+    const headCf = buildChatFlow(head, FIXTURE);
+    const tail = ALL_RECORDS.slice(ALL_RECORDS.length - 5);
+    const reusedCf = buildChatFlow(ALL_RECORDS, FIXTURE, undefined, {
+      prevChatFlow: headCf,
+      prevRecordCount: 0, // unused in newRecords mode
+      newRecords: tail,
+    });
+    const fullCf = buildChatFlow(ALL_RECORDS, FIXTURE);
+    // Byte-equivalence with full rebuild — the critical invariant.
+    expect(JSON.stringify(reusedCf)).toBe(JSON.stringify(fullCf));
+
+    // Object-identity reuse for buckets untouched by `tail` records.
+    // At least ONE early bucket should be a reused reference.
+    // 中: 早段 bucket 应至少有一个 ChatNode 对象引用与 headCf 一致。
+    const headById = new Map(headCf.chatNodes.map((cn) => [cn.id, cn]));
+    let reusedCount = 0;
+    for (const cn of reusedCf.chatNodes) {
+      const prev = headById.get(cn.id);
+      if (prev && prev === cn) reusedCount += 1;
+    }
+    expect(reusedCount).toBeGreaterThan(0);
+  });
+
+  it("PR E3 — newRecords mode tolerates an empty list (no dirty buckets)", () => {
+    // EN: when caller passes newRecords=[], NO buckets are marked
+    // dirty → every bucket reuses its prev ChatNode. Output must
+    // still be byte-equivalent to a full rebuild.
+    // 中: newRecords 空 → 没 dirty bucket，全 reuse；输出仍等于
+    // 全量重建。
+    const headCf = buildChatFlow(ALL_RECORDS, FIXTURE);
+    const reusedCf = buildChatFlow(ALL_RECORDS, FIXTURE, undefined, {
+      prevChatFlow: headCf,
+      prevRecordCount: 0,
+      newRecords: [],
+    });
+    expect(JSON.stringify(reusedCf)).toBe(JSON.stringify(headCf));
+  });
+
   it("appends survive a parseJsonlFileIncremental → parseJsonlFileIncremental round-trip with M2 active", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "loomscope-m2-"));
     try {

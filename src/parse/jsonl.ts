@@ -439,7 +439,25 @@ export async function parseJsonlFileIncremental(
 // ~500 ms 降到 ~100 ms 量级。
 export interface BuildChatFlowReuseHint {
   prevChatFlow: ChatFlow;
+  /** EN: total record count of the prev build, used to identify the
+   *  new-records tail via `records.slice(prevRecordCount)`. Valid
+   *  when records are append-only (closure ≤ 1 path).
+   *  中: 上次构建用的 records 总数；当 records 是纯追加序列（closure
+   *  ≤ 1）时，切片就是 dirty bucket detection 所需的新记录。 */
   prevRecordCount: number;
+  /** EN (v2.2 PR E3): explicit new-records list. When provided, dirty-
+   *  bucket detection uses THIS instead of `records.slice(prevRecordCount)`.
+   *  Required for the closure>1 path because the merged record stream
+   *  isn't strictly append-only — new records from a non-last member
+   *  land in the middle of the merged sequence, so slice(prevCount)
+   *  misses them. The fork-closure loader collects per-member
+   *  newRecords from `readRecordsIncremental` and passes them here
+   *  directly.
+   *
+   *  中: PR E3 显式 newRecords。closure>1 合并流不严格追加（非末尾
+   *  member 的新记录夹在中段），slice(prevCount) 抓不到，必须 caller
+   *  把 newRecords 列表直接传进来。 */
+  newRecords?: RawRecord[];
 }
 
 export function buildChatFlow(
@@ -706,7 +724,10 @@ export function buildChatFlow(
   const dirtyPromptIds = new Set<string>();
   let reusable: Map<string, ChatNode> | null = null;
   if (reuse) {
-    const newRecords = records.slice(reuse.prevRecordCount);
+    // PR E3: prefer the explicit newRecords list (closure>1 path);
+    // fall back to slice(prevRecordCount) for closure≤1 (append-only).
+    // 中: 优先用 caller 显式 newRecords，否则按 append-only 切片。
+    const newRecords = reuse.newRecords ?? records.slice(reuse.prevRecordCount);
     for (const r of newRecords) {
       const pid = promptIdOf(r);
       if (pid) dirtyPromptIds.add(pid);
