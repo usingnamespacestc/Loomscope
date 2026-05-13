@@ -48,7 +48,10 @@ import { loadPreferences } from "@/server/services/preferences";
 import { realSdkQuery, resolveClaudePath } from "@/server/services/sdkAdapter";
 import { SessionRegistry } from "@/server/services/sessionRegistry";
 import { setMainJsonlChangeHandler } from "@/server/services/sessionWatcher";
-import { loadMergedChatFlowForDelta } from "@/server/services/mergedChatFlowLoader";
+import {
+  loadMergedChatFlowForDelta,
+  peekNewRecordsForDelta,
+} from "@/server/services/mergedChatFlowLoader";
 import { TrashService } from "@/server/services/trash";
 import { readTrashSnapshotMeta } from "@/server/services/workspaceScanner";
 
@@ -178,24 +181,39 @@ export function createApp(opts: AppOptions) {
             projectDir,
             entrySessionId: sessionId,
           });
-          // EN (v2.2 PR E1): single load via loadMergedChatFlowForDelta
-          // — returns both the rebuilt chatFlow AND the new raw records
-          // added since the last incremental call. Broadcast the raw
-          // records immediately (fast path, ~10ms — client renders
-          // optimistic placeholder ChatNodes from them), then run
-          // processChatFlowDelta to emit ground-truth deltas (slow,
-          // ~1-2s — buildChatFlow ran inside the loader).
+          // EN (v2.2 PR E1, refactor 2026-05-13): two-phase pipeline.
+          //
+          //   Phase 1 (~5ms): peekNewRecordsForDelta does a pure
+          //     tail-read of the jsonl(s) — NO buildChatFlow — and
+          //     returns the records appended since the last call.
+          //     We broadcast `raw-records` immediately so the client
+          //     can spawn placeholder ChatNodes in <100ms of the
+          //     append.
+          //
+          //   Phase 2 (~1500-2500ms): loadMergedChatFlowForDelta does
+          //     the same tail-read (uses its own stash, ~5ms wasted
+          //     IO) plus buildChatFlow — this is the bottleneck. Then
+          //     processChatFlowDelta diffs and broadcasts the
+          //     ground-truth `delta` events that REPLACE the
+          //     placeholders.
           //
           // Cache population: we call setCached directly with the
           // rebuilt chatFlow so a concurrent GET /:id hits the cache
           // without re-running the loader. The LRU was just
           // invalidated by chokidar; this re-populates it post-load.
           //
-          // 中: 一次 load 拿 chatFlow + newRecords。raw-record 立即广
-          // 播（10ms 级，client 拿来即时渲染 placeholder）；同时跑
-          // ground-truth delta（1-2s 级，buildChatFlow 已在 loader 里
-          // 跑完）。Cache 手动 set 让并发 GET 命中。
-          const { chatFlow, newRecords } = await loadMergedChatFlowForDelta({
+          // The previous version of this handler called only
+          // loadMergedChatFlowForDelta, which made the "broadcast
+          // raw-records" happen AFTER buildChatFlow — racing
+          // ground-truth delta to within 4ms, defeating the entire
+          // optimization (live measurement 2026-05-13).
+          //
+          // 中: 两段式处理。第一段纯 tail-read 立刻广播 raw-records
+          // （~5ms），客户端占位 ChatNode 即时上屏；第二段 buildChatFlow
+          // + 算 delta，~1.5s 后广播 ground-truth。先前实现错把 raw-
+          // records 摆在 buildChatFlow 之后，跟 delta 几乎同时到，
+          // 加速失效（2026-05-13 实测确认）。
+          const newRecords = await peekNewRecordsForDelta({
             entryJsonlPath: jsonlPath,
             entrySessionId: sessionId,
             closure,
@@ -206,6 +224,11 @@ export function createApp(opts: AppOptions) {
               data: { sessionId, records: newRecords },
             });
           }
+          const { chatFlow } = await loadMergedChatFlowForDelta({
+            entryJsonlPath: jsonlPath,
+            entrySessionId: sessionId,
+            closure,
+          });
           const cacheKey = await buildCacheKey(sessionId, closure, jsonlPath);
           setCached(cacheKey, chatFlow);
           await processChatFlowDelta(sessionId, chatFlow);

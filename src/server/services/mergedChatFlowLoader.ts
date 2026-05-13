@@ -174,6 +174,78 @@ export async function loadMergedChatFlowForDelta(args: {
   return { chatFlow, newRecords: aggregatedNew };
 }
 
+/**
+ * EN (v2.2 PR E1 fix): pure tail-read fast path. Returns only the
+ * newly-appended records — does NOT run buildChatFlow (which is the
+ * 1.5-2s bottleneck). Designed to be called BEFORE
+ * loadMergedChatFlowForDelta so the mainJsonlChangeHandler can
+ * broadcast a `raw-records` SSE event immediately, then continue
+ * with the slow ground-truth build.
+ *
+ * Stash mutation: deliberately does NOT update the per-session
+ * IncrementalParseState stash (which carries the cached ChatFlow).
+ * The subsequent loadMergedChatFlowForDelta call will see the same
+ * stash, do its own (now-redundant ~3-5ms) tail-read, and produce
+ * the fresh ChatFlow. The duplicate IO is negligible vs. the
+ * buildChatFlow cost it gates.
+ *
+ * For closure>1, we DO update the per-member records stash because
+ * that one's stash-only (no chatFlow) and we want the slow path's
+ * re-read to fast-path on `byteSize == prevState.byteSize`. (The
+ * closure>1 path re-tail-reads either way; updating the stash saves
+ * the second pass.)
+ *
+ * 中: 纯 tail-read 快速通道。只返回新追加 records，不跑
+ * buildChatFlow（那是 1.5-2s 瓶颈）。主处理器先调它广播 raw-records
+ * SSE，再去做慢路径 build + delta。closure≤1 故意不写主 stash 避免
+ * 干扰后续 parseJsonlFileIncremental；closure>1 更新 per-member stash
+ * 让慢路径走"无新字节"快通道。
+ */
+export async function peekNewRecordsForDelta(args: {
+  entryJsonlPath: string;
+  entrySessionId: string;
+  closure: ClosureMember[];
+}): Promise<RawRecord[]> {
+  const { entryJsonlPath, entrySessionId, closure } = args;
+  if (closure.length <= 1) {
+    const prevState = getStashedState(entrySessionId);
+    if (!prevState) return []; // first call — no baseline to diff
+    const prevCount = prevState.records.length;
+    // readRecordsIncremental's state shape matches IncrementalParseState's
+    // record-bearing subset; the chatFlow field is irrelevant for pure
+    // tail-read. We don't write back — see docblock.
+    // 中: 用 records-only 接口做 tail-read；不回写主 stash，让 slow
+    // 路径的 parseJsonlFileIncremental 看到正确的 prevState。
+    const r = await readRecordsIncremental(entryJsonlPath, {
+      records: prevState.records,
+      parseFailures: prevState.parseFailures,
+      byteSize: prevState.byteSize,
+      mtimeMs: prevState.mtimeMs,
+      pendingFragment: prevState.pendingFragment,
+    });
+    return r.usedIncremental ? r.records.slice(prevCount) : [];
+  }
+  // closure > 1: tail-read each member's per-member stash and
+  // aggregate with uuid-dedup (matches loadMergedChatFlowForDelta).
+  const aggregated: RawRecord[] = [];
+  const seen = new Set<string>();
+  for (const m of closure) {
+    const key = memberStashKey(entrySessionId, m.sessionId);
+    const prevState = closureMemberStash.get(key);
+    if (!prevState) continue; // first call for this member — skip
+    const prevCount = prevState.records.length;
+    const r = await readRecordsIncremental(m.jsonlPath, prevState);
+    closureMemberStash.set(key, r.state);
+    if (!r.usedIncremental) continue;
+    for (const rec of r.records.slice(prevCount)) {
+      if (rec.uuid && seen.has(rec.uuid)) continue;
+      if (rec.uuid) seen.add(rec.uuid);
+      aggregated.push(rec);
+    }
+  }
+  return aggregated;
+}
+
 /** Test-only: clear all per-member stashes between cases. */
 export function _resetMemberStashForTests(): void {
   closureMemberStash.clear();
