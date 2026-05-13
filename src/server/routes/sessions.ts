@@ -37,6 +37,7 @@ import {
 // stashes now persist across SSE blips; reconciliation happens via
 // checkpoint chatNodeCount and drift-ping hash. See onAbort comment.
 // 中: snapshot reset 已移除——大 session 重连会触发 re-emit 风暴。
+import { pendingPromptsFor as httpHookPendingFor } from "@/server/services/httpHookPermissionGate";
 import { getPendingPermission } from "@/server/services/pendingPermissionTracker";
 import { findForkClosure, type ClosureMember } from "@/server/services/forkTree";
 // Read paths use the with-trash locator so a session that was soft-
@@ -334,6 +335,25 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
               data: JSON.stringify({
                 event: "PermissionRequest",
                 payload: pendingPerm,
+              }),
+            })
+            .catch(() => {});
+        }
+        // v2.3 PR F1: HTTP-hook permission-prompt catchup for late-
+        // joining tabs. The gate may be holding requests CC fired
+        // before the browser tab opened (rare unless the user kept
+        // their CC running while Loomscope's tab was closed).
+        // 中: HTTP hook 等待中的 permission-prompt 补一份给新订阅者。
+        for (const p of httpHookPendingFor(id)) {
+          await stream
+            .writeSSE({
+              event: "permission-prompt",
+              data: JSON.stringify({
+                sessionId: id,
+                promptId: p.promptId,
+                toolName: p.toolName,
+                input: p.toolInput,
+                source: "http",
               }),
             })
             .catch(() => {});

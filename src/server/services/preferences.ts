@@ -179,6 +179,28 @@ export interface LoomscopePreferences {
    * client，对不上就强制 refresh。默认 30s。
    */
   driftDetectionSec: number;
+  /**
+   * EN (v2.3 PR F1): when true, the `/api/cc-hook` route holds CC's
+   * PreToolUse HTTP hook on a long-poll until the browser resolves
+   * an allow/deny banner. Lets users decide tool permissions from
+   * Loomscope without alt-tabbing to their terminal CC. When false
+   * (default), the route stays fire-and-forget 204 — CC's own
+   * permission flow runs unaffected.
+   *
+   * Bypass-mode short-circuit always applies regardless of this
+   * flag: when CC sends `permission_mode: "bypassPermissions"` in
+   * the hook body, the gate is skipped (user explicitly opted out
+   * of permission gating).
+   *
+   * Default `false` (opt-in). The feature is brand-new; users with
+   * working terminal-CC permission flows shouldn't be hijacked
+   * without explicit consent.
+   *
+   * 中: 开启后 Loomscope 在浏览器里拦截 terminal CC 的 PreToolUse
+   * 让用户在浏览器决定，不用回 terminal。default 关。bypass 模式
+   * 短路与本 flag 无关，永远跳过 gate。
+   */
+  enableInteractivePermissions: boolean;
 }
 
 const DEFAULTS: LoomscopePreferences = {
@@ -191,6 +213,7 @@ const DEFAULTS: LoomscopePreferences = {
   interactiveMode: true,
   autoDeferOnRateLimit: false,
   driftDetectionSec: 30,
+  enableInteractivePermissions: false,
 };
 
 const PERMISSION_MODE_VALUES: LoomscopePermissionMode[] = [
@@ -274,6 +297,11 @@ function normalize(raw: unknown): LoomscopePreferences {
     typeof driftRaw === "number" && Number.isFinite(driftRaw)
       ? clamp(Math.round(driftRaw), 0, 600)
       : DEFAULTS.driftDetectionSec;
+  const interactivePermsRaw = r["enableInteractivePermissions"];
+  const enableInteractivePermissions =
+    typeof interactivePermsRaw === "boolean"
+      ? interactivePermsRaw
+      : DEFAULTS.enableInteractivePermissions;
   return {
     idleTimeoutMin: idle,
     useApiKey,
@@ -284,6 +312,7 @@ function normalize(raw: unknown): LoomscopePreferences {
     interactiveMode,
     autoDeferOnRateLimit,
     driftDetectionSec,
+    enableInteractivePermissions,
   };
 }
 

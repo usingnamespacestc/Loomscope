@@ -134,6 +134,12 @@ export function createApp(opts: AppOptions) {
                             // docs/dual-writer-race-mitigation.md
       enableHookHttpPath: true, // default; PATCH updates live
       enableHookSdkPath: true,  // default; PATCH updates live
+      // v2.3 PR F1: default OFF; PATCH /preferences updates live via
+      // setInteractivePermissionsEnabled. When OFF, /api/cc-hook's
+      // PreToolUse path stays 204 fire-and-forget identical to the
+      // v∞.0 contract — zero behavior change for existing users.
+      // 中: default 关；PATCH 切换。关时 hook 路由跟 v∞.0 完全相同。
+      enableInteractivePermissions: false,
       // v2.2 #157 (Option B): the matrix in settings.json becomes
       // single-source-of-truth for BOTH HTTP and SDK hook paths.
       // buildSdkHooksMap reads this port to identify our entries in
@@ -165,6 +171,7 @@ export function createApp(opts: AppOptions) {
       registry.setEnableHookHttpPath(p.enableHookHttpPath);
       registry.setEnableHookSdkPath(p.enableHookSdkPath);
       registry.setAutoDeferOnRateLimit(p.autoDeferOnRateLimit);
+      registry.setInteractivePermissionsEnabled(p.enableInteractivePermissions);
       // v2.1 PR D3: start the drift-detection timer at the persisted
       // period. PATCH /api/preferences switches it live without
       // restart.
@@ -268,6 +275,16 @@ export function createApp(opts: AppOptions) {
     ccHookRouter({
       getSecret: getHookSecret,
       isEnabled: () => registry.isHookHttpPathEnabled(),
+      // v2.3 PR F1: interactive permission gate. Default-OFF preference
+      // governs whether the route long-polls PreToolUse — when off,
+      // route stays fire-and-forget identical to v∞.0 behavior. The
+      // route ALSO independently short-circuits on
+      // permission_mode === "bypassPermissions".
+      // 中: 双保险——preference 默认关 + bypass 模式总是放行。
+      isInteractivePermissionsEnabled: () =>
+        registry.isInteractivePermissionsEnabled(),
+      getPermissionRules: () => registry.getPermissionRules(),
+      refreshPermissionRules: () => registry.refreshPermissionRules(),
     }),
   );
   app.route(

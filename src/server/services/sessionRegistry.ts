@@ -476,6 +476,14 @@ export interface SessionRegistryOptions {
   /** Persistence root for deferral state (~/.loomscope by default).
    *  Tests override to a temp dir to avoid touching the real home. */
   deferralStateDir?: string;
+  /** v2.3 PR F1: when true, the /api/cc-hook PreToolUse path long-
+   *  polls the HTTP response until the browser resolves an allow/deny
+   *  banner. Default false — opt-in via Settings UI. Live-flippable
+   *  via `setInteractivePermissionsEnabled`. The cc-hook route also
+   *  short-circuits on `permission_mode === "bypassPermissions"`
+   *  independently of this flag.
+   *  中: 默认 false。Settings 里 opt-in 才会长 poll PreToolUse。 */
+  enableInteractivePermissions?: boolean;
   /** v2.2 #157 (Option B): the loomscope server's listening port.
    *  Used to identify our own hook entries in `~/.claude/settings.json`
    *  so the SDK programmatic hook map respects the event matrix the
@@ -546,6 +554,30 @@ export class SessionRegistry {
     } catch (err) {
       console.warn("[sessionRegistry] permission rules reload failed:", err);
     }
+  }
+
+  /** EN (v2.3 PR F1): read-only access to the rules cache for the
+   *  HTTP hook PreToolUse fast path. cc-hook router calls this on
+   *  every PreToolUse. Returns the live array — callers MUST treat
+   *  it as read-only (mutating would also corrupt the SDK canUseTool
+   *  path).
+   *  中: cc-hook PreToolUse 走的只读访问，调用方不要改返回值。 */
+  getPermissionRules(): readonly PermissionRule[] {
+    return this.permissionRules;
+  }
+
+  /** EN (v2.3 PR F1): accessor for the `enableInteractivePermissions`
+   *  preference. Read on every PreToolUse to decide whether the
+   *  long-poll gate is active. Default false (opt-in via Settings).
+   *  中: cc-hook 看这个 flag 决定是否长 poll，默认 false。 */
+  isInteractivePermissionsEnabled(): boolean {
+    return this.opts.enableInteractivePermissions === true;
+  }
+
+  /** Live setter — PATCH /api/preferences calls this when the user
+   *  toggles the Settings checkbox. */
+  setInteractivePermissionsEnabled(value: boolean): void {
+    this.opts.enableInteractivePermissions = value;
   }
 
   /** Lookup pending prompt + resolve it. Used by the HTTP decision

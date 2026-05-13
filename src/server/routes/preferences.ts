@@ -29,6 +29,7 @@ const patchSchema = z.object({
   interactiveMode: z.boolean().optional(),
   autoDeferOnRateLimit: z.boolean().optional(),
   driftDetectionSec: z.number().optional(),
+  enableInteractivePermissions: z.boolean().optional(),
 });
 
 export interface PreferencesRouterOptions {
@@ -69,6 +70,11 @@ export function preferencesRouter(opts: PreferencesRouterOptions = {}) {
       }
       if (patch.autoDeferOnRateLimit !== undefined) {
         opts.registry.setAutoDeferOnRateLimit(merged.autoDeferOnRateLimit);
+      }
+      if (patch.enableInteractivePermissions !== undefined) {
+        opts.registry.setInteractivePermissionsEnabled(
+          merged.enableInteractivePermissions,
+        );
       }
     }
     // v2.1 PR D3: drift interval lives outside the registry (it's a
