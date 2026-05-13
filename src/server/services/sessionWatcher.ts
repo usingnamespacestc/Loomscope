@@ -116,8 +116,33 @@ export function sidecarSubagentsDir(jsonlPath: string): string {
 // parser 是行模式，最后一行 partial 会被 JSON.parse 失败丢弃，
 // 所以中间 fire 安全——下次 fire 自然接上后续完整行。
 // 详细推导见 docs/devlog.md 2026-05-11 entry。
-const THROTTLE_QUIET_MS = 80;
-const THROTTLE_MAX_WAIT_MS = 1000;
+// 2026-05-13 (PR D6 quick-win): tightened from 80/1000 to 50/250 so
+// "Loomscope as primary chat UI" is viable — the user replacing CC
+// terminal entirely. 1Hz cap during sustained writes meant the worst-
+// case delta-arrival was ~1s after CC wrote; with 4Hz cap that drops
+// to ~250ms.
+//
+// CPU trade-off: faster cadence means more reparses during a streaming
+// turn. processFresh is per-session-serialized via the promise chain,
+// so if the parse itself takes longer than 250ms, the next call just
+// waits — throughput is throttled by parse cost, not by this cap.
+// The cap only matters when parse is fast (typical case). Worst-case
+// server CPU is bounded by the parse-then-fire chain.
+//
+// Going below 50/250 doesn't help much further: the dominant remaining
+// cost is `buildChatFlow` itself (~1-2s for 650-ChatNode sessions),
+// which a future PR will address via streaming-only fast path that
+// updates the latest bucket's workflow only without re-bucketing all
+// records.
+//
+// 中: 节流参数从 80/1000 改 50/250。"用 Loomscope 替代 terminal"
+// 需要 sub-1s 反馈；1Hz cap 永远撞 ~1s 上限。4Hz cap 让最坏 delta
+// arrival ~250ms。parse 本身 1-2s 时整条链由 parse 节流，cap 收紧
+// 不会让 server 过载——promise chain 保证 per-session 串行。
+// 余下的 buildChatFlow 全量重建瓶颈留给后续 PR 用 streaming-only
+// fast path 解决（只更新 latest bucket 的 workflow，不重 bucket）。
+const THROTTLE_QUIET_MS = 50;
+const THROTTLE_MAX_WAIT_MS = 250;
 
 /**
  * EN (v2.1 PR D1): callback fired after a main-jsonl change has been
