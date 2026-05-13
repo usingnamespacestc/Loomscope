@@ -6,6 +6,79 @@
 
 ---
 
+## 2026-05-13 晚 — v2.2 raw-record 流式渲染 + buildChatFlow 真增量（E1+E2+E3）
+
+v2.1 Delta-SSE 收尾后，5s 的"卡顿感"仍然存在。playwright live SSE probe 测出来真正的大头是 server 侧 `buildChatFlow`（在 closure>1 fork session 上跑 ~5970ms）—— 即使 PR D4 stretch 的增量 jsonl tail-read 让 IO 跑到 ~5ms，整个 ChatFlow 还是会被全量重建。v2.2 三连击攻克这个瓶颈。
+
+### PR E1 — raw-record 快速通道（commit `24cb801` + fix `a8ad54b`）
+
+服务端 `mainJsonlChangeHandler` 拆成两段：第一段 `peekNewRecordsForDelta` 纯 tail-read（不跑 buildChatFlow，~5ms），立刻 `broadcastSse(raw-records)`；第二段才跑 `loadMergedChatFlowForDelta` + `processChatFlowDelta`（慢路径，~6s 后 ground-truth delta 落地）。
+
+客户端 `applyRawRecord` reducer：user 记录 → 用 `record.promptId` 当 ChatNode id 建占位 ChatNode；ground-truth delta 到达时同 id 替换（applyChatFlowDelta 现有的 `existsIdx >= 0 → replace` 路径自动处理，无 flicker）。
+
+**第一版 bug（24cb801）**：`broadcastSse(raw-records)` 摆在 `loadMergedChatFlowForDelta` 调用**之后**，但那个 loader 内部已经跑过 buildChatFlow —— raw-records 比 delta 早 4ms 到，完全没有加速。**fix a8ad54b**：抽出 `peekNewRecordsForDelta` 纯 tail-read 函数，把 broadcast 真正前置。Live probe 验证：raw-records 在 +100ms 内到达。
+
+### PR E2 — assistant text 流式 append（commit `f5749e4`）
+
+PR E1 修完后实测：60s probe 拿到 6 条 raw record，**没一条是 user record**。客户端只对 user 建占位，所以"5s 卡顿"实际上是 assistant 回复一直不显示，跟 user message 没关系。
+
+扩展 `applyRawRecord` 处理 `type=assistant`：按 `promptId` 找宿主 ChatNode，从 `message.content` 抽 text block，append 到 `workflow.summary.assistantText` + 更新 `assistantPreview`。新增 `SessionState.rawAppliedRecordUuids: Set<string>` 做幂等（chokidar 双触发 / 乱序 replay）。
+
+效果：长 assistant 回复在 5-6s buildChatFlow 窗口里一段段流式可见，跟 CC terminal 原生体验对齐。
+
+### PR E3 — closure>1 reuseHint 接入（commit `737d90c`）
+
+诊断时发现 `mergedChatFlowLoader.loadMergedChatFlowForDelta` 的 closure>1 路径调 `buildChatFlow(merged, entryJsonlPath)` **没有 reuseHint** —— fork session（用户当前 session 就是 2-member fork）每次 chokidar 触发都全量重建 664 ChatNodes，~6s。closure≤1 路径有 reuseHint（经 `parseJsonlFileIncremental`），closure>1 是历史 oversight。
+
+之前的 `BuildChatFlowReuseHint` 假设 append-only 序列（slice(prevRecordCount) 抓 tail）；merged 流不是 append-only（非最后 member 的新 records 落在中段）。给 hint 加 `newRecords?: RawRecord[]` 字段，caller 显式传 dirty records，dirty-bucket detection 用它而非 slice。
+
+`mergedChatFlowSnapshot: Map<entrySessionId, { chatFlow, closureMemberIds }>` 持久化上次 build；shape 改变（member 增删/重排）或任一 member fallback 到 full-read 时 drop snapshot 保证安全。
+
+**实测**：buildChatFlow **5970ms → 91ms (65×)**。端到端：CC terminal 写 jsonl → DOM 可见 ~91ms，跟原生 CC 体验同步。
+
+### awaySummary fork-sibling 重叠 fix（commit `5f908f2`）
+
+用户报告分支场景下"续接小节"卡片跟 sibling 节点重叠。LR 布局下 fork sibling 同 rank 同 X 列上下堆叠；awaySummary 卡是 dagre 跑完后手动放在 host 上方（host.y - 274），dagre 不知道它占了 144px → sibling 紧贴 host 上沿压到 awaySummary 上。
+
+fix: 给带 awaySummary 的 host 节点喂 dagre 一个 inflated height（`NODE_HEIGHT + 2 × (AWAY_SUMMARY_NODE_HEIGHT + AWAY_GAP_PX)`），dagre 自然把 sibling 推开 144px。symmetric 是 dagre node 中心对称的约束，wasted downward 144px 是可接受成本。
+
+### e2e regression 刷新（commit `64589ea`）
+
+E1/E2/E3 ship 后跑 `e2e/fork.spec.ts` + `e2e/compact.spec.ts`：3 passed / 5 failed。`git checkout f3ea52d`（E1 之前的 baseline）重跑 → 同样 5 failures，pre-existing。这 5 个测试都已经 stale：
+
+- DrillPanel 默认 tab 在 v0.10 polish 改成 conversation（auto-pick by viewMode），原 test 期望 detail
+- 16-session workspace 的 GET /api/sessions 比 v0.7 慢，10s timeout 撑不住
+- 1500-CN session 的 compact 卡片在 React Flow viewport 之外，per-card chrome 断言不靠谱（chrome 已被 `ChatNodeCard.test.tsx` 单测覆盖）
+
+刷新策略：fork.spec 改"4-tab strip + 默认 conversation"；compact.spec 删掉 per-card chrome 断言，改为 store-driven parser smoke（`window.useStore` dev exposure，标准 zustand escape hatch）。结果 7/7 pass。
+
+### 性能时序总结
+
+| 阶段 | pre-E3 (warm) | post-E3 (warm) |
+|---|---|---|
+| chokidar throttle | 0-50ms | 0-50ms |
+| peek tail-read | — | ~5ms |
+| broadcast raw-records | — | ~10ms |
+| buildChatFlow | ~5970ms | **~91ms** |
+| broadcast delta | ~10ms | ~10ms |
+| 客户端 React render | ~16-50ms | ~16-50ms |
+| **端到端** | **~6s** | **~200ms** |
+
+raw-records 通道更进一步：placeholder ChatNode 在 ~64-100ms 内就上屏，比 ground-truth 提前 ~5.8s 看见。
+
+### commits
+
+| Commit | 内容 |
+|---|---|
+| `24cb801` | feat(delta-sse): PR E1 — raw-record fast path（first attempt） |
+| `5f908f2` | fix(layout): reserve dagre headroom for awaySummary cards to clear fork siblings |
+| `a8ad54b` | fix(delta-sse): PR E1 — actually move raw-records broadcast BEFORE buildChatFlow |
+| `f5749e4` | feat(delta-sse): PR E2 — stream assistant text into placeholders via raw-records |
+| `737d90c` | perf(buildChatFlow): PR E3 — closure>1 reuse hint (6s → ~50ms on 664-CN sessions) |
+| `64589ea` | test(e2e): refresh stale fork + compact specs to current UI (7 passing) |
+
+---
+
 ## 2026-05-13 — v2.1 Delta-SSE 大改 ship（#184，D1+D2+D3+D4 stretch 全完成）
 
 撞 120MB session 之后定的 v2.1 主任务。原本架构是 fs.watch → SSE `invalidate` → client `GET /api/sessions/<sid>` 拉 16.8MB lite payload → store diff-merge。1Hz 节流 × 4.2s 响应在大 session 下会一直落后一个周期。设计文档 `docs/v2.1-delta-sse-design.md` 写在前面，5 个决策点用户拍板后一次性按 D1→D2→D3→D4 顺序 ship 完。

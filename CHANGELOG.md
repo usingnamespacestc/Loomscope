@@ -2,6 +2,33 @@
 
 All user-facing changes to Loomscope are noted here. v0.x history is highlights only — chronological detail in [`docs/devlog.md`](docs/devlog.md).
 
+## [2.0.0-rc.3] — 2026-05-13
+
+v2.1 Delta-SSE rewrite + v2.2 raw-record fast path land together. The combined effect on the dev's main 137 MB / 664-ChatNode session: end-to-end "CC terminal writes jsonl → DOM shows the change" went from ~6 s to ~100-200 ms.
+
+### v2.1 — Delta-SSE rewrite (`docs/v2.1-delta-sse-design.md`)
+
+- **chokidar throttle tightened 4×** (1 Hz → 4 Hz). Quiet window 80 ms → 50 ms; max wait 1 s → 250 ms.
+- **Per-session diff engine** on the server: chatnode-added / chatnode-summary-updated / chatnode-removed / checkpoint semantic SSE events replace the old "invalidate → client GETs full lite payload" round-trip.
+- **Client `applyChatFlowDelta` reducer** with strict +1 gap detection — out-of-order sequences fall back to a full `refreshSession`. Default ON; no soft-launch toggle.
+- **Drift detection** publishes a chatflow hash every 30 s (configurable, 0 = off) so silent reducer divergence is caught.
+- **Incremental jsonl tail-read** on the server: `parseJsonlFileIncremental` reads only the byte range past the prior stash; per-member stash for multi-jsonl fork closures.
+- **post-ship fix**: snapshot persists across short SSE reconnects so re-emitting 600+ chatnode-added events on every page focus is gone (was a 60 s lag bug).
+
+### v2.2 — Raw-record streaming + buildChatFlow incremental
+
+- **Raw-record fast path (PR E1)**: chokidar → `peekNewRecordsForDelta` (pure tail-read, ~5 ms, no buildChatFlow) → `broadcastSse('raw-records')` BEFORE the slow ground-truth path. Client spawns an optimistic placeholder ChatNode within ~100 ms of the jsonl append; the slower ground-truth delta ~1-2 s later replaces it in-place via the existing chatnode-added dedup. No flicker.
+- **Assistant text streaming (PR E2)**: extended the raw-record reducer to absorb `type=assistant` records — extracts text blocks from `message.content`, appends to the host ChatNode's `assistantText` / `assistantPreview`. Long agent replies stream into the canvas card during the buildChatFlow window instead of all appearing at once. Idempotency via per-session `rawAppliedRecordUuids: Set<string>` (chokidar double-fires + out-of-order replays drop at Set membership).
+- **closure>1 reuseHint (PR E3)**: `loadMergedChatFlowForDelta`'s fork-closure path skipped the M2 reuse hint, so every chokidar event on a fork session rebuilt all 664 ChatNodes from scratch (~6 s). `BuildChatFlowReuseHint` gained an optional `newRecords` field (the closure-merged stream isn't append-only — non-last-member appends land mid-stream, so slice(prevCount) misses them). Per-entry-session snapshot cache (`mergedChatFlowSnapshot`) feeds the hint. **Measured: 5970 ms → 91 ms (65×)** on a 664-ChatNode 2-member fork session.
+- **awaySummary fork-sibling overlap fix**: in LR layout, fork siblings stack at the same X column; the awaySummary card placed at host.y − 274 collided with the sibling card on top of host. Inflated host's dagre height hint by 2 × (AWAY_SUMMARY_NODE_HEIGHT + AWAY_GAP_PX) so dagre packs siblings 144 px further away.
+- **e2e regression refresh**: 5 stale specs (fork.spec.ts + compact.spec.ts) updated to current UI — DrillPanel now has 4 tabs and defaults to Conversation on ChatFlow viewMode (not Detail); compact per-card chrome assertions dropped (covered by jsdom unit tests; brittle on virtualized 1500-CN canvas). `window.useStore` exposed in dev for e2e + console debugging. 7/7 passing now (was 3/8).
+
+### Test count
+
+1013 unit tests (was 747 in rc.2).
+
+---
+
 ## [2.0.0-rc.2] — 2026-05-11
 
 Bugfix soak on rc.1 — five issues surfaced while the dev was actually using rc.1 for real work. Same feature set as rc.1; new build only because every one of these affects "is the live observation story working at all" or "does respawnPerSend=false stay usable".

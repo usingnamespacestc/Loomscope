@@ -31,8 +31,10 @@
 | **v1.6** | 启动新 session（≈ 旧 v∞.1）| sidebar"+ 新建"按钮 → SDK `query({prompt, cwd})` 不带 resume → chokidar 自动捡起新 jsonl；草稿模式（空 prompt 不真 spawn）；右键 workspace → 在此创建；viewer 模式 visible-but-disabled 统一 | ✅ shipped |
 | **v2.0.0-rc.1** | 首次公开发布 rc | v1.1→v1.6 全部内容打包为 2.0 rc，friends-only soak；soak 顺利后 promote 2.0.0 final | ✅ shipped 2026-05-11 |
 | **v2.0.0-rc.2** | soak 期 bugfix | watcher throttle / ChatNode pulse OR-multiplex / setModel force-respawn / 大 session 502 + pile-up（dedup + vite proxy timeout） | ✅ shipped 2026-05-11 |
-| ~~v2.1 任意节点 fork~~ | ❌ 关掉 — 已被 v0.8 ChatNode 级 fork 满足；message-level 没需求 | | — |
-| **v2.1** | **Delta-SSE 重构**（原 backlog 上提）| chokidar 改成读 jsonl byte-offset delta records 推 SSE；客户端 store apply delta；fs.watch 退成 drift detection。trigger: 120 MB session 实测 502 + pile-up，soak 期 mitigation 续命 | 🚧 v2.0 final 后开 |
+| **v2.0.1** | composer 富媒体 + auto-defer engine | conversation 视图 inline image / lightbox / 文件预览；/compact 卡片 chrome 升级；SSE rate_limit_event 通道；自动延迟引擎（>=90% utilization 触发 → 中断 → frozen queue → setTimeout + 持久化 → banner）；设置开关 | ✅ shipped 2026-05-12 |
+| **v2.1** | **Delta-SSE 重构**（chokidar throttle 4× 收紧 + 语义 delta 推送）| **PR D1**: server-side diff engine + chatnode-added / -summary-updated / -removed / checkpoint SSE events；**PR D2**: client `applyChatFlowDelta` + gap-detection + cutover ON；**PR D3**: drift-ping 30s 周期 + settings toggle；**PR D4 stretch**: 增量 jsonl byte-offset tail-read + per-member fork closure stash；**post-ship fix**: snapshot 持久化跨 SSE 短暂断开 + 客户端 lastDeltaSeq=null on hello | ✅ shipped 2026-05-13 |
+| **v2.2** | **Raw-record 流式渲染 + buildChatFlow 真增量** | **PR E1**: chokidar 拿到新 records 后**立刻**广播 `raw-records` SSE（绕过 ~6s buildChatFlow），客户端 user record → 占位 ChatNode；**PR E2**: assistant raw record → 增量 append `assistantText` / `assistantPreview`，长回复在 buildChatFlow 窗口里流式可见；**PR E3**: closure>1 fork session 也走 reuseHint（之前每次都全重建 664-CN），实测 buildChatFlow **5970ms → 91ms** (65×)；**layout fix**: awaySummary 卡反预留 dagre 高度防 fork sibling 重叠；**e2e refresh**: stale fork+compact 规格刷新到当前 UI（3/8→7/7 pass） | ✅ shipped 2026-05-13 |
+| **v2.0.0-rc.3** | rc.2 之后所有交付的合并 rc | v2.0.1 + v2.1 + v2.2 全打包 | ✅ shipped 2026-05-13 |
 
 ## v0.1 — parser（详细）
 

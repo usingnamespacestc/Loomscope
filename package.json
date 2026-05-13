@@ -1,7 +1,7 @@
 {
   "name": "loomscope",
   "private": true,
-  "version": "2.0.0-rc.2",
+  "version": "2.0.0-rc.3",
   "type": "module",
   "description": "Visual viewer for Claude Code session transcripts (.jsonl) — DAG canvas of turns, tool calls, and sub-agents.",
   "scripts": {

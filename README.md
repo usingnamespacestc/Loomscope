@@ -6,7 +6,7 @@
 
 ![ChatFlow canvas](docs/screenshots/02-chatflow-canvas.png)
 
-> **Status (2026-05-11)** — **v2.0.0-rc.2** ready for friends-only testing. rc.2 fixes a stack of live-update bugs found during rc.1 soak: chokidar `awaitWriteFinish` blocked all mid-turn updates, the ChatNode pulse strobed off when CC fired mid-turn Stop hooks, model/effort/fastMode changes didn't apply without a respawn, and 502s + pile-up on large sessions (~120 MB+). Same v1.1→v1.6 interactive layer as rc.1; promote to 2.0.0 final after this rc soaks.
+> **Status (2026-05-13)** — **v2.0.0-rc.3** ready for friends-only testing. rc.3 ships the v2.1 + v2.2 delta-SSE stack: chokidar throttle 4× tighter (1Hz → 4Hz), per-session diff engine pushes semantic `chatnode-added` / `summary-updated` / `removed` deltas instead of full lite payloads, plus a raw-record fast path that places optimistic placeholder ChatNodes within ~100ms of the jsonl write (assistant text streams in too). Closure>1 fork sessions now skip the per-event full rebuild — buildChatFlow on a 664-ChatNode session went from ~6s to ~91ms. Promote to 2.0.0 final after this rc soaks.
 
 ## Quickstart
 
@@ -198,7 +198,7 @@ Chrome / Firefox cap at 6 EventSource per origin under HTTP/1.1; each Loomscope 
 - **`Notification` hook is wired but has no UI consumer yet.** Configure it if you want — Loomscope will accept the events, but nothing surfaces in the UI.
 - **3 browser tabs per host max** (see above).
 - **Dual-writer race not fully fixed (v1.3+).** Once Loomscope can write turns (v1.3 onward), DON'T run a terminal `claude` and Loomscope-driven sends on the same session id at the same time. We respawn-per-send + size-based staleness check to mitigate (see `docs/dual-writer-race-mitigation.md`), but a mid-turn foreign write can still corrupt the chain. Tracked as a follow-up; pure read-only viewing is unaffected.
-- **No public release.** This is v2.0.0-rc.2 for friends to try; expect rough edges. Issues / suggestions welcome on GitHub.
+- **No public release.** This is v2.0.0-rc.3 for friends to try; expect rough edges. Issues / suggestions welcome on GitHub.
 
 ## Architecture
 
@@ -219,9 +219,23 @@ Vite 8 + React 18 + TypeScript 5.6 + Tailwind 3 + `@xyflow/react` 12 + `@dagrejs
 ## Tests
 
 ```sh
-npm test          # 747 tests
+npm test          # 1013 tests
 npm run typecheck
 ```
+
+## Updating Loomscope
+
+When new commits land upstream (e.g. v2.2 raw-record streaming + buildChatFlow incremental), pull and rebuild:
+
+```sh
+cd /path/to/Loomscope
+git pull
+npm install                        # only when package.json changed
+npm run build                      # vite build → dist/
+# restart your `npm run start` process (or just re-run it)
+```
+
+Dev mode (`npm run dev`) auto-picks up source changes via `tsx watch` + Vite HMR — no manual rebuild needed there.
 
 ## License
 

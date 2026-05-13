@@ -6,7 +6,7 @@
 
 ![ChatFlow canvas](docs/screenshots/02-chatflow-canvas.png)
 
-> **状态（2026-05-07）**：**v1.0.0-rc.1** 内部试用版本。read-only viewer + 实时 SSE 观察 + 11 个 CC hook 事件 + 4-tab DrillPanel（对话 / 详情 / 变更 / 实际上下文）已全部 ship。下一站 v∞.1（Loomscope 用 Agent SDK 起新 session + 浏览器响应权限）。
+> **状态（2026-05-13）**：**v2.0.0-rc.3** 内部试用版本。rc.3 ship 了 v2.1 + v2.2 整套 delta-SSE 改造：chokidar 节流收紧 4×（1Hz → 4Hz）、按 session 的 diff 引擎推语义 delta（chatnode-added / -summary-updated / -removed）、raw-record 快速通道在 jsonl 写入 ~100ms 内就放出占位 ChatNode（assistant 文本也是流式 append）。closure>1 fork session 也走 reuseHint —— 664-ChatNode session 上 buildChatFlow 从 ~6s 降到 ~91ms。soak 顺利后 promote 2.0.0 final。
 
 ## 快速开始
 
@@ -218,9 +218,23 @@ Vite 8 + React 18 + TypeScript 5.6 + Tailwind 3 + `@xyflow/react` 12 + `@dagrejs
 ## 测试
 
 ```sh
-npm test          # 747 tests
+npm test          # 1013 tests
 npm run typecheck
 ```
+
+## 更新 Loomscope
+
+上游有新提交（比如 v2.2 raw-record streaming + buildChatFlow incremental）时，拉取重建：
+
+```sh
+cd /path/to/Loomscope
+git pull
+npm install                        # 仅 package.json 变化时
+npm run build                      # vite build → dist/
+# 重启 `npm run start` 进程（或者直接重跑一次）
+```
+
+dev 模式（`npm run dev`）通过 `tsx watch` + Vite HMR 自动 pick up 源码改动，不需要手动 rebuild。
 
 ## License
 
