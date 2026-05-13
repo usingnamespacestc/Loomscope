@@ -15,8 +15,8 @@ separate monthly Agent SDK credit pool**:
 | Plan | Monthly SDK credit |
 |---|---|
 | Pro | $20 |
-| Max-5x | $100 |
-| **Max-20x** | **$200** |
+| **Max-5x** (this dev) | **$100** |
+| Max-20x | $200 |
 | Team (Standard) | $20 |
 | Team (Premium) | $100 |
 | Enterprise (usage-based) | $20 |
@@ -26,19 +26,42 @@ separate monthly Agent SDK credit pool**:
 - Claude Agent SDK usage in your own projects (Python or TypeScript)
 - `claude -p` (non-interactive CLI mode)
 - Claude Code GitHub Actions integration
-- **Third-party apps that authenticate with your Claude subscription
-  through the Agent SDK** ← Loomscope is exactly this category
+- **Third-party apps built on the Agent SDK** ← Loomscope is exactly
+  this category. The 2026-05-14 announcement email explicitly named
+  this scope.
 
 **Continues to use subscription quota (unchanged)**:
-- Interactive Claude Code in the terminal or IDE
+- "Interactive usage of Claude Code, Claude Cowork, and chat"
+
+**Anthropic's own framing** (verbatim from the announcement email):
+
+> "Agent SDK and other **programmatic usage** will run on this credit
+> ... Your subscription usage limits don't change. They stay reserved
+> for **interactive** usage of Claude Code, Claude Cowork, and chat."
+
+Note the **"programmatic vs interactive"** binary. This is the exact
+distinction CC's source code already encodes — `main.tsx`'s
+`isInteractive` flag derived from `isNonInteractive` (see Signal Chain
+section below). This wording alignment is the strongest available
+hint that Anthropic's server-side classifier uses essentially the
+same `cc_entrypoint` header CC binary already sends, which underwrites
+the Phase 2-A spoof hypothesis.
+
+**Caveat from the same announcement**: "*Subject to terms... eligible
+plans, amounts, and usage — may be modified or discontinued." So even
+if Phase 2-A succeeds at launch, Anthropic could plug the loophole
+later (OAuth scope tightening, SDK-library fingerprint detection,
+etc).
 
 **When SDK credit runs out**: hard stop, unless the user enables "extra
-usage" (then it falls through to standard API rates). It does NOT
-fall back to subscription quota.
+usage" (manually toggled; falls through to standard API rates after
+exhaustion). Does NOT fall back to subscription quota.
 
 **Sources**:
 - [Agent SDK overview — `code.claude.com/docs/en/agent-sdk/overview`](https://code.claude.com/docs/en/agent-sdk/overview)
 - [Use the Claude Agent SDK with your Claude plan — support article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+- 2026-05-14 announcement email to Max 5x subscribers (received by
+  this dev; quoted in this doc).
 
 ## Why this matters for Loomscope
 
