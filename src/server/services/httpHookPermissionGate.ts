@@ -81,6 +81,18 @@ export interface RequestDecisionArgs {
    *  in-memory state machine — easier to unit test.
    *  中: 注册完 pending 后调，发 SSE 让 banner 出现。 */
   onRegistered?: (promptId: string) => void;
+  /** Side-effect: invoked once when the gate settles — regardless of
+   *  whether the resolution came from /decision, signal abort, or the
+   *  internal 9-min timeout. The route handler wires this to broadcast
+   *  `permission-prompt-resolved` SSE so the client clears its pending
+   *  entry from `pendingCanUseToolPrompts`. Without this, abort/timeout
+   *  settle paths would leak a "ghost pending" banner that survives
+   *  until browser refresh.
+   *  中: gate settle 时无差别触发——/decision、abort、9min 超时
+   *  三条路径都走。caller 用它发 permission-prompt-resolved SSE
+   *  让 client 清 pending。少了它，abort/timeout 的残留 banner 永远
+   *  停留到刷新浏览器。 */
+  onSettled?: (promptId: string, decision: HttpHookDecision) => void;
 }
 
 /** EN: register a pending prompt + return a Promise that resolves
@@ -104,6 +116,17 @@ export function requestDecision(args: RequestDecisionArgs): Promise<HttpHookDeci
         } catch {
           // older AbortSignal impls may not support removeEventListener
           // for AbortSignal — ignore.
+        }
+      }
+      // Fire onSettled BEFORE resolving — observers see the resolved
+      // SSE before the route handler returns. Order matters only for
+      // tests/observers; for production both happen async.
+      // 中: 先 onSettled 再 resolve，让 SSE 顺序更接近"事件先于响应"。
+      if (args.onSettled) {
+        try {
+          args.onSettled(promptId, decision);
+        } catch {
+          /* observer error must not affect the gate */
         }
       }
       resolve(decision);

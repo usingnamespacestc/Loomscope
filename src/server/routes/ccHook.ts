@@ -271,6 +271,28 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
                 },
               });
             },
+            // EN (2026-05-14 bugfix): broadcast permission-prompt-resolved
+            // on EVERY settle path — /decision, signal abort, or the
+            // gate's 9-min internal timeout. Without this the client's
+            // pendingCanUseToolPrompts entry survives until manual
+            // browser refresh whenever CC drops the hook before the
+            // user decides (CC's 5s hook-client timeout is the common
+            // case). `behavior` reports the effective decision; an
+            // abort/timeout resolves with decision="ask" which the
+            // client surfaces as a non-decisive settle.
+            // 中: 三条 settle 路径都广播 resolved，client 不再卡幽灵
+            // pending；abort/timeout 用 ask 行为。
+            onSettled: (promptId, settled) => {
+              broadcast(body.session_id, {
+                event: "permission-prompt-resolved",
+                data: {
+                  sessionId: body.session_id,
+                  promptId,
+                  behavior: settled.decision,
+                  reason: settled.reason,
+                },
+              });
+            },
           });
           return c.json(buildHookResponse(decision));
         }
@@ -317,6 +339,11 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
         }
       }
 
+      // resolveDecision triggers gate's settle() → fires the
+      // onSettled callback wired in the PreToolUse hook route, which
+      // broadcasts `permission-prompt-resolved`. No need to broadcast
+      // here too — that would just produce a duplicate event.
+      // 中: gate settle 通过 onSettled 走 SSE，这里别重复广播。
       const resolved = resolveDecision(promptId, {
         decision: behavior,
         reason,
@@ -325,11 +352,6 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
       if (!resolved) {
         return c.json({ error: "prompt not found or already resolved" }, 404);
       }
-
-      broadcast(peek.sessionId, {
-        event: "permission-prompt-resolved",
-        data: { sessionId: peek.sessionId, promptId, behavior },
-      });
       return c.body(null, 204);
     },
   );
