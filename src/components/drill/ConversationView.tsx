@@ -31,6 +31,7 @@ import {
   useSessionLiveness,
 } from "@/store/livenessHooks";
 import { deleteQueueItem } from "@/api/turns";
+import { AskUserQuestionPanel } from "@/components/drill/AskUserQuestionPanel";
 import { Lightbox, type LightboxContent } from "@/components/Lightbox";
 import { LazyMarkdownView } from "@/components/MarkdownView";
 import {
@@ -728,6 +729,13 @@ export function ConversationView({
       {showPendingQueue && (
         <PendingQueueBlock sessionId={sessionId} />
       )}
+      {/* v2.3 PR F3 redo (2026-05-14): AskUserQuestion goes here, NOT
+          in the floating banner above the canvas. Reads the same
+          pendingCanUseToolPrompts store entries but filters to
+          toolName === "AskUserQuestion"; the banner skips those so
+          the two surfaces are mutually exclusive.
+          中: AskUserQuestion 在对话面板底部，跟 banner 互斥。 */}
+      <AskUserQuestionPanel sessionId={sessionId} />
       {/* v0.8.1 #3: scroll-to-bottom anchor. */}
       <div ref={bottomMarkerRef} data-testid="conversation-bottom-marker" />
     </div>

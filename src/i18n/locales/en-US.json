@@ -172,7 +172,8 @@
     "notes_placeholder": "Optional notes for Claude…",
     "submit": "Submit",
     "cancel": "Cancel",
-    "parse_failed": "Could not parse AskUserQuestion input — use Cancel to abort."
+    "parse_failed": "Could not parse AskUserQuestion input — use Cancel to abort.",
+    "panel_headline": "Claude is asking:"
   },
   "permission_rules": {
     "section_title": "Always-allowed tools",

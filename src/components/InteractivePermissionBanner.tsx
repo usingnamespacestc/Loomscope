@@ -28,10 +28,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import {
-  AskUserQuestionForm,
-  type AskUserQuestionFormSubmit,
-} from "@/components/AskUserQuestionForm";
 import { useStore } from "@/store/index";
 
 export function InteractivePermissionBanner({
@@ -50,8 +46,18 @@ export function InteractivePermissionBanner({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (prompts.length === 0) return null;
-  const top = prompts[0];
+  // v2.3 PR F3 redo (2026-05-14): AskUserQuestion prompts render in
+  // the conversation panel via AskUserQuestionPanel — skip them here
+  // so the banner only ever shows plain tool-permission prompts
+  // (Bash / Edit / etc). The two surfaces are mutually exclusive on
+  // the toolName=="AskUserQuestion" predicate.
+  // 中: AskUserQuestion 让给 conversation panel；banner 只服务普通
+  // tool-permission 类。
+  const nonAuqPrompts = prompts.filter(
+    (p) => p.toolName !== "AskUserQuestion",
+  );
+  if (nonAuqPrompts.length === 0) return null;
+  const top = nonAuqPrompts[0];
 
   const send = async (
     behavior: "allow" | "deny",
@@ -117,28 +123,6 @@ export function InteractivePermissionBanner({
     }
   };
 
-  // v2.3 PR F3: AskUserQuestion swaps the allow/deny button row for
-  // a multi-question form. Submit packages user-filled answers into
-  // `updatedInput` (the shape CC's AskUserQuestionTool.call() echoes
-  // back as the tool_result content).
-  // 中: AskUserQuestion 工具走表单：提交 = allow + 把答案打包成
-  // updatedInput；取消 = deny。
-  const isAskUserQuestion = top.toolName === "AskUserQuestion";
-  const handleAskUserQuestionSubmit = (
-    out: AskUserQuestionFormSubmit,
-  ): void => {
-    const updatedInput: Record<string, unknown> = {
-      // Echo the tool's questions back into updatedInput so CC's
-      // call() sees the full shape it expects (questions + answers +
-      // optional annotations).
-      // 中: questions 原样回填，CC.tool.call() 需要完整 shape。
-      questions: (top.toolInput as { questions?: unknown }).questions ?? [],
-      answers: out.answers,
-      ...(out.annotations && { annotations: out.annotations }),
-    };
-    void send("allow", false, updatedInput);
-  };
-
   // Title: SDK pre-renders a friendly string ("Claude wants to read
   // foo.txt") in `top.title` when it can; fall back to a generic
   // "<toolName> 请求权限" when missing.
@@ -187,34 +171,18 @@ export function InteractivePermissionBanner({
               {top.decisionReason}
             </div>
           )}
-          {inputPreview && !isAskUserQuestion && (
+          {inputPreview && (
             <div className="mt-1 max-h-20 overflow-y-auto rounded bg-blue-100/60 px-2 py-1 font-mono text-[10.5px] text-blue-900 break-all whitespace-pre-wrap">
               {inputPreview}
             </div>
           )}
-          {prompts.length > 1 && (
+          {nonAuqPrompts.length > 1 && (
             <div className="mt-1 text-[10px] italic text-blue-600">
               {t("permission_banner.queue_count", {
-                count: prompts.length - 1,
+                count: nonAuqPrompts.length - 1,
               })}
             </div>
           )}
-          {isAskUserQuestion && interactiveMode && (
-            <div className="mt-2">
-              <AskUserQuestionForm
-                toolInput={top.toolInput}
-                busy={busy}
-                onSubmit={handleAskUserQuestionSubmit}
-                onCancel={() => void send("deny", false)}
-              />
-              {error && (
-                <div className="mt-1 text-[10px] italic text-rose-600">
-                  ✗ {error}
-                </div>
-              )}
-            </div>
-          )}
-          {!isAskUserQuestion && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {interactiveMode ? (
               <>
@@ -264,7 +232,6 @@ export function InteractivePermissionBanner({
               </span>
             )}
           </div>
-          )}
         </div>
       </div>
     </div>

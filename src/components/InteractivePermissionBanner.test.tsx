@@ -138,7 +138,7 @@ describe("InteractivePermissionBanner — source-aware decision routing", () => 
     expect(chip.getAttribute("data-source")).toBe("http");
   });
 
-  it("AskUserQuestion: renders form instead of allow/deny buttons", () => {
+  it("AskUserQuestion: banner returns null (form rendered in conversation panel instead — F3 redo 2026-05-14)", () => {
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
       sessions.set(SID, {
@@ -186,13 +186,17 @@ describe("InteractivePermissionBanner — source-aware decision routing", () => 
       });
       return { sessions, activeSessionId: SID };
     });
-    render(<InteractivePermissionBanner sessionId={SID} />);
-    // Form rendered, allow/deny absent.
-    expect(screen.getByTestId("ask-user-question-form")).toBeTruthy();
+    const { container } = render(<InteractivePermissionBanner sessionId={SID} />);
+    // Banner renders nothing — AskUserQuestion is the conversation
+    // panel's job now (AskUserQuestionPanel). No allow/deny buttons,
+    // no form, no banner chrome.
+    expect(screen.queryByTestId("interactive-permission-banner")).toBeNull();
     expect(screen.queryByTestId("permission-banner-allow")).toBeNull();
+    expect(screen.queryByTestId("ask-user-question-form")).toBeNull();
+    expect(container.firstChild).toBeNull();
   });
 
-  it("AskUserQuestion submit POSTs updatedInput on the source-specific endpoint", async () => {
+  it.skip("AskUserQuestion submit POSTs updatedInput — covered in AskUserQuestionPanel.test.tsx after F3 redo", async () => {
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
       sessions.set(SID, {
