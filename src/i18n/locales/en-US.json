@@ -174,9 +174,9 @@
     "cancel": "Cancel",
     "parse_failed": "Could not parse AskUserQuestion input — use Cancel to abort.",
     "panel_headline": "Claude is asking:",
-    "submitted_badge": "Submitted",
-    "submitted_dismiss": "Dismiss",
-    "submitted_notes_prefix": "Notes"
+    "transcript_answered": "Answered",
+    "transcript_unanswered": "Asked",
+    "transcript_notes_prefix": "Notes"
   },
   "permission_rules": {
     "section_title": "Always-allowed tools",

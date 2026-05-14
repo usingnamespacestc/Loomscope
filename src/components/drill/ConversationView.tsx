@@ -32,6 +32,7 @@ import {
 } from "@/store/livenessHooks";
 import { deleteQueueItem } from "@/api/turns";
 import { AskUserQuestionPanel } from "@/components/drill/AskUserQuestionPanel";
+import { AskUserQuestionTranscript } from "@/components/drill/AskUserQuestionTranscript";
 import { Lightbox, type LightboxContent } from "@/components/Lightbox";
 import { LazyMarkdownView } from "@/components/MarkdownView";
 import {
@@ -1318,11 +1319,16 @@ function MessageBubbleImpl({
               {round.tools.length > 0 && (
                 <div className="mt-1.5 ml-2 border-l-2 border-gray-200 pl-2.5 space-y-1">
                   {round.tools.map((tool) => (
-                    <ToolPill
-                      key={tool.id}
-                      node={tool}
-                      sessionId={sessionId}
-                    />
+                    <Fragment key={tool.id}>
+                      <ToolPill node={tool} sessionId={sessionId} />
+                      {tool.kind === "tool_call" &&
+                        (tool as ToolCallNode).toolName ===
+                          "AskUserQuestion" && (
+                          <AskUserQuestionTranscript
+                            node={tool as ToolCallNode}
+                          />
+                        )}
+                    </Fragment>
                   ))}
                 </div>
               )}

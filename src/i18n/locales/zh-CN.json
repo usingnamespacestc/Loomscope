@@ -174,9 +174,9 @@
     "cancel": "取消",
     "parse_failed": "AskUserQuestion 输入解析失败 — 点取消放弃。",
     "panel_headline": "Claude 在询问：",
-    "submitted_badge": "已提交",
-    "submitted_dismiss": "关闭",
-    "submitted_notes_prefix": "备注"
+    "transcript_answered": "已回答",
+    "transcript_unanswered": "已询问",
+    "transcript_notes_prefix": "备注"
   },
   "permission_rules": {
     "section_title": "始终允许的工具",

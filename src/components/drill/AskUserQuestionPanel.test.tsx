@@ -1,8 +1,8 @@
-// EN (v2.3 PR F3 redo 2026-05-14): AskUserQuestionPanel — the
-// conversation-level surface for AskUserQuestion prompts. Mirrors the
-// shape of the previous in-banner integration test, but verifies the
-// conversation-panel renders + sends decisions via the source-correct
-// endpoint.
+// EN (v2.3 PR F3 redo Option C v2 — 2026-05-13): AskUserQuestionPanel
+// — pending-only AUQ surface in the conversation view. After submit
+// the entry is removed from pendingCanUseToolPrompts; the answered
+// Q+A surfaces as a transcript card next to the existing tool_call
+// chip via `AskUserQuestionTranscript`.
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -236,10 +236,10 @@ describe("AskUserQuestionPanel", () => {
     expect(body.updatedInput).toBeUndefined();
   });
 
-  it("after submit, entry moves from pending → submittedAuq (read-only history card)", async () => {
+  it("after submit, the pending entry is removed (no in-panel history)", async () => {
     seedSession([
       {
-        promptId: "pp-history",
+        promptId: "pp-removed",
         toolName: "AskUserQuestion",
         toolInput: {
           questions: [
@@ -258,30 +258,19 @@ describe("AskUserQuestionPanel", () => {
     render(<AskUserQuestionPanel sessionId={SID} />);
     fireEvent.click(screen.getAllByRole("radio")[1]); // B
     fireEvent.click(screen.getByTestId("ask-user-question-submit"));
-    // Three microtasks: fetch resolves, then setPrefs, then re-render
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
 
-    // Live form gone.
-    expect(screen.queryByTestId("ask-user-question-card-pp-history")).toBeNull();
+    // Pending card gone.
+    expect(screen.queryByTestId("ask-user-question-card-pp-removed")).toBeNull();
     expect(screen.queryByTestId("ask-user-question-form")).toBeNull();
-    // Submitted card present.
-    const submitted = screen.getByTestId(
-      "ask-user-question-submitted-pp-history",
-    );
-    expect(submitted.getAttribute("data-state")).toBe("submitted");
-    // Answer text visible.
-    expect(submitted.textContent).toContain("B");
-    // Store state reflects the move.
+    // Store state reflects the removal.
     const state = useStore.getState().sessions.get(SID)!;
     expect(state.pendingCanUseToolPrompts ?? []).toHaveLength(0);
-    expect((state.submittedAuq ?? []).map((s) => s.promptId)).toEqual([
-      "pp-history",
-    ]);
   });
 
-  it("after deny, entry is removed from pending and NOT added to submittedAuq", async () => {
+  it("after deny, entry is removed from pending", async () => {
     seedSession([
       {
         promptId: "pp-deny",
@@ -307,74 +296,6 @@ describe("AskUserQuestionPanel", () => {
     await Promise.resolve();
     const state = useStore.getState().sessions.get(SID)!;
     expect(state.pendingCanUseToolPrompts ?? []).toHaveLength(0);
-    expect(state.submittedAuq ?? []).toHaveLength(0);
-    // Panel renders nothing.
-    expect(
-      screen.queryByTestId(`ask-user-question-submitted-pp-deny`),
-    ).toBeNull();
-  });
-
-  it("dismiss button removes a submitted card", () => {
-    // Seed an already-submitted entry directly.
-    useStore.setState((s) => {
-      const sessions = new Map(s.sessions);
-      sessions.set(SID, {
-        chatFlow: null,
-        foldedNodeIds: new Set(),
-        foldedCompactIds: new Set(),
-        viewport: { x: 0, y: 0, zoom: 1 },
-        selectedNodeId: null,
-        workflowSelectedNodeId: null,
-        drillStack: [],
-        branchMemory: {},
-        subAgentCache: new Map(),
-        workflowCache: new Map(),
-        workflowViewports: new Map(),
-        pendingPermission: null,
-        pendingCanUseToolPrompts: [],
-        submittedAuq: [
-          {
-            promptId: "pp-seeded",
-            toolName: "AskUserQuestion",
-            toolInput: {
-              questions: [
-                {
-                  question: "Q?",
-                  options: [
-                    { label: "A", description: "" },
-                    { label: "B", description: "" },
-                  ],
-                },
-              ],
-            },
-            answers: { "Q?": "A" },
-            submittedAt: Date.now(),
-            source: "sdk",
-          },
-        ],
-        currentTurn: null,
-        lastTurnHookAt: 0,
-        lastTurnUserSubmittedAt: 0,
-        lastNotification: null,
-        isLoading: false,
-        error: null,
-        lastUpdated: 0,
-        lastInvalidateAt: 0,
-        lastDeltaSeq: null,
-        rawAppliedRecordUuids: new Set<string>(),
-      });
-      return { sessions, activeSessionId: SID };
-    });
-    render(<AskUserQuestionPanel sessionId={SID} />);
-    expect(
-      screen.getByTestId("ask-user-question-submitted-pp-seeded"),
-    ).toBeTruthy();
-    fireEvent.click(
-      screen.getByTestId("ask-user-question-submitted-dismiss-pp-seeded"),
-    );
-    expect(
-      screen.queryByTestId("ask-user-question-submitted-pp-seeded"),
-    ).toBeNull();
   });
 
   it("viewer-only mode renders viewer label, no form", () => {
