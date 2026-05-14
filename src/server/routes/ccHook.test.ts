@@ -322,6 +322,86 @@ describe("POST /api/cc-hook — PreToolUse interactive gate (v2.3 PR F1)", () =>
     expect(hookJson.hookSpecificOutput?.permissionDecision).toBe("allow");
   });
 
+  it("AskUserQuestion bypasses the toggle — long-polls even with preference OFF", async () => {
+    // EN (2026-05-14): AskUserQuestion is a "user question" tool, not
+    // a permission-on-side-effect tool. It always runs through the
+    // long-poll path so the conversation Panel can render the form,
+    // regardless of the enableInteractivePermissions toggle.
+    // 中: AskUserQuestion 不受 toggle 控制，永远走长 poll 让 Panel
+    // 接住答题；其他工具仍受 toggle 控制。
+    const hookPromise = postHook({
+      event: "PreToolUse",
+      body: {
+        session_id: "sid-auq-off",
+        tool_name: "AskUserQuestion",
+        tool_input: {
+          questions: [
+            {
+              question: "Color?",
+              options: [
+                { label: "blue", description: "" },
+                { label: "red", description: "" },
+              ],
+            },
+          ],
+        },
+        permission_mode: "default",
+        // NOTE: enableInteractivePermissions stays OFF (default).
+      },
+      secret: SECRET,
+    });
+
+    const { _peekPendingForTests } = await import(
+      "@/server/services/httpHookPermissionGate"
+    );
+    let promptId: string | undefined;
+    for (let i = 0; i < 50 && !promptId; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+      const pending = _peekPendingForTests();
+      promptId = pending.find((p) => p.sessionId === "sid-auq-off")?.promptId;
+    }
+    expect(
+      promptId,
+      "AskUserQuestion should register a pending prompt even with toggle OFF",
+    ).toBeTruthy();
+
+    // Resolve so the hook request returns.
+    await app.request("/api/cc-hook/decision", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Loomscope-Token": TOKEN,
+      },
+      body: JSON.stringify({
+        promptId,
+        behavior: "allow",
+        updatedInput: {
+          questions: [],
+          answers: { "Color?": "blue" },
+        },
+      }),
+    });
+    const hookRes = await hookPromise;
+    expect(hookRes.status).toBe(200);
+  });
+
+  it("non-AUQ tool with preference OFF still 204s (toggle gate honored)", async () => {
+    // Confirms the AUQ exemption is narrow — Bash with toggle OFF
+    // still passes through as 204 (no long-poll, no pending).
+    // 中: 仅 AskUserQuestion 例外；其他工具 toggle 关下仍直通。
+    const res = await postHook({
+      event: "PreToolUse",
+      body: {
+        session_id: "sid-bash-off",
+        tool_name: "Bash",
+        tool_input: { command: "ls" },
+        permission_mode: "default",
+      },
+      secret: SECRET,
+    });
+    expect(res.status).toBe(204);
+  });
+
   it("/decision returns 404 for unknown promptId", async () => {
     const res = await app.request("/api/cc-hook/decision", {
       method: "POST",

@@ -202,29 +202,44 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
 
       publishHook(event, envelope);
 
-      // v2.3 PR F1: PreToolUse interactive gate. Two gating checks
+      // v2.3 PR F1: PreToolUse interactive gate. Three gating checks
       // BEFORE entering the long-poll path:
-      //   (a) `enableInteractivePermissions` preference must be ON.
-      //       Without explicit opt-in we never intercept.
+      //   (a) `enableInteractivePermissions` preference must be ON,
+      //       OR the tool is `AskUserQuestion`.
+      //       Rationale: AskUserQuestion is a "user question" tool,
+      //       not a permission-on-side-effect tool. The user has
+      //       opted in by configuring HTTP hooks at all; intercepting
+      //       AskUserQuestion always (so the conversation Panel can
+      //       render the form) doesn't add risk and matches what users
+      //       expect when they see the new in-conversation AUQ surface.
+      //       Other tools (Bash/Read/Write/etc) still gate on the
+      //       explicit toggle — those genuinely block CC and need the
+      //       user's deliberate opt-in.
       //   (b) CC's hook MUST NOT be in `bypassPermissions` mode. The
-      //       user said "don't ask"; honoring that means hands-off.
+      //       user said "don't ask"; honoring that means hands-off
+      //       even for AskUserQuestion (CC's TUI rotate still works).
       // Either check failing → fall through to 204 (existing v∞.0
       // contract). When the gate IS active and no rule pre-matches,
       // we hold the HTTP response on a Promise; the browser POSTs
       // /decision to resolve.
       //
-      // 中: 两道闸都通过才进 long-poll；任一不过就照旧 204。
+      // 中: 闸放行条件 = interactiveOn 或 AskUserQuestion 工具
+      //（AskUserQuestion 本质是询问不是 permission），且非 bypass 模式。
       const interactiveOn =
         opts.isInteractivePermissionsEnabled?.() === true;
       const bypassMode = envelope.permission_mode === "bypassPermissions";
+      const preToolName =
+        event === "PreToolUse" && typeof extras.tool_name === "string"
+          ? extras.tool_name
+          : "";
+      const isAskUserQuestion = preToolName === "AskUserQuestion";
       if (
         event === "PreToolUse" &&
-        interactiveOn &&
+        (interactiveOn || isAskUserQuestion) &&
         !bypassMode &&
         opts.getPermissionRules
       ) {
-        const toolName =
-          typeof extras.tool_name === "string" ? extras.tool_name : "";
+        const toolName = preToolName;
         const toolUseId =
           typeof extras.tool_use_id === "string" ? extras.tool_use_id : undefined;
         const toolInput =
