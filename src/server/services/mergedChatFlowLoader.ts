@@ -268,24 +268,29 @@ export async function loadMergedChatFlowForDelta(args: {
  * broadcast a `raw-records` SSE event immediately, then continue
  * with the slow ground-truth build.
  *
- * Stash mutation: deliberately does NOT update the per-session
- * IncrementalParseState stash (which carries the cached ChatFlow).
- * The subsequent loadMergedChatFlowForDelta call will see the same
- * stash, do its own (now-redundant ~3-5ms) tail-read, and produce
- * the fresh ChatFlow. The duplicate IO is negligible vs. the
- * buildChatFlow cost it gates.
+ * Stash mutation: deliberately does NOT update any stash. The
+ * subsequent loadMergedChatFlowForDelta call needs to see the prev
+ * stash unchanged so its own tail-read produces a non-empty
+ * newRecords list — that list feeds buildChatFlow's reuse-hint
+ * dirty-bucket detection. If peek were to advance the stash, load's
+ * newRecords would be empty, dirty detection would mark nothing
+ * dirty, and ALL chatNodes (including a brand-new bucket whose
+ * tick-1 snapshot held only the user prompt with no assistant yet)
+ * would be reused from the prev snapshot indefinitely.
  *
- * For closure>1, we DO update the per-member records stash because
- * that one's stash-only (no chatFlow) and we want the slow path's
- * re-read to fast-path on `byteSize == prevState.byteSize`. (The
- * closure>1 path re-tail-reads either way; updating the stash saves
- * the second pass.)
+ * The duplicate tail-read IO (peek's + load's) costs ~3-5ms total,
+ * negligible vs. buildChatFlow's 1.5-2s and vastly cheaper than the
+ * "newly-bucketed turns lose their assistant text" bug it prevents
+ * (see mergedChatFlowLoader.test.ts).
  *
- * 中: 纯 tail-read 快速通道。只返回新追加 records，不跑
- * buildChatFlow（那是 1.5-2s 瓶颈）。主处理器先调它广播 raw-records
- * SSE，再去做慢路径 build + delta。closure≤1 故意不写主 stash 避免
- * 干扰后续 parseJsonlFileIncremental；closure>1 更新 per-member stash
- * 让慢路径走"无新字节"快通道。
+ * 中: 纯 tail-read 快速通道，故意 NOT mutate stash（包括 closure>1
+ * 的 per-member stash）。后续 loadMergedChatFlowForDelta 必须看到
+ * 原始 prevState 才能算出非空 newRecords，dirty 检测才能把刚到的
+ * 桶标脏。如果 peek 提前 advance stash，load 看到的 newRecords=[]
+ * → dirty 集为空 → 所有 chatNode 都从 prev snapshot 复用，导致
+ * 新桶（tick-1 还只有 user 没 assistant 的空 workflow）永远卡在
+ * 空状态。代价 = ~3-5ms 重复 tail-read IO，跟 1.5-2s 的
+ * buildChatFlow 相比可以忽略。
  */
 export async function peekNewRecordsForDelta(args: {
   entryJsonlPath: string;
@@ -313,6 +318,12 @@ export async function peekNewRecordsForDelta(args: {
   }
   // closure > 1: tail-read each member's per-member stash and
   // aggregate with uuid-dedup (matches loadMergedChatFlowForDelta).
+  // Read against a SHALLOW COPY of prevState so we don't advance the
+  // shared closureMemberStash; the subsequent
+  // loadMergedChatFlowForDelta needs to see prevState unchanged to
+  // compute non-empty newRecords for buildChatFlow's reuse hint.
+  // 中: 用 prevState 的浅拷贝走 readRecordsIncremental，避免回写
+  // 共享 stash 导致 slow path 看不到新 record。
   const aggregated: RawRecord[] = [];
   const seen = new Set<string>();
   for (const m of closure) {
@@ -320,8 +331,14 @@ export async function peekNewRecordsForDelta(args: {
     const prevState = closureMemberStash.get(key);
     if (!prevState) continue; // first call for this member — skip
     const prevCount = prevState.records.length;
-    const r = await readRecordsIncremental(m.jsonlPath, prevState);
-    closureMemberStash.set(key, r.state);
+    const r = await readRecordsIncremental(m.jsonlPath, {
+      records: prevState.records,
+      parseFailures: prevState.parseFailures,
+      byteSize: prevState.byteSize,
+      mtimeMs: prevState.mtimeMs,
+      pendingFragment: prevState.pendingFragment,
+    });
+    // INTENTIONALLY do NOT write r.state back. See docblock.
     if (!r.usedIncremental) continue;
     for (const rec of r.records.slice(prevCount)) {
       if (rec.uuid && seen.has(rec.uuid)) continue;
