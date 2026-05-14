@@ -43,15 +43,30 @@ export interface GitFilesSlice {
   gitFilesFetchStatus: Map<string, GitFilesFetchStatus>;
   /** Last error message per session (only when status==='error'). */
   gitFilesFetchError: Map<string, string>;
+  /** EN (2026-05-14): epoch-ms of the most recent successful commit-
+   *  files fetch per session. Used by App.tsx's invalidate-driven
+   *  refresh to debounce repeat triggers (don't re-fetch if last
+   *  successful fetch was < N seconds ago). */
+  committedFilesFetchedAt: Map<string, number>;
 
   /** Derived: ChatNode id → set of file paths still uncommitted as
    * of that ChatNode's end. Recomputed when committedFilesBySession
    * changes for the session. Empty Map means "not yet computed". */
   pendingFilesByChatNode: Map<string, Map<string, Set<string>>>;
 
-  /** Idempotent — fetches once per session. Subsequent calls return
-   * immediately if already loaded / loading. */
-  loadCommittedFiles: (sessionId: string, chatFlow: ChatFlow) => Promise<void>;
+  /** Fetches once per session unless `force` is true. Without
+   *  `force`, returns immediately when status==='loading' or
+   *  status==='loaded' (matches the lazy GitDiffPanel callsite).
+   *  With `force=true`, re-fetches regardless — used by the
+   *  invalidate-driven refresh so new commits get reflected in
+   *  📤 pending counts without requiring a Git tab toggle.
+   *  中: force=true 时跳过 "loaded" 短路，强制重拉；用于 invalidate
+   *  后刷新 📤 chip。 */
+  loadCommittedFiles: (
+    sessionId: string,
+    chatFlow: ChatFlow,
+    opts?: { force?: boolean },
+  ) => Promise<void>;
   /** Explicit recompute (called internally after fetch lands; exposed
    * for tests). */
   recomputePendingFiles: (sessionId: string, chatFlow: ChatFlow) => void;
@@ -126,11 +141,20 @@ export const createGitFilesSlice: StateCreator<
   committedFilesBySession: new Map(),
   gitFilesFetchStatus: new Map(),
   gitFilesFetchError: new Map(),
+  committedFilesFetchedAt: new Map(),
   pendingFilesByChatNode: new Map(),
 
-  loadCommittedFiles: async (sessionId, chatFlow) => {
+  loadCommittedFiles: async (sessionId, chatFlow, opts) => {
+    const force = opts?.force === true;
     const status = get().gitFilesFetchStatus.get(sessionId) ?? "idle";
-    if (status === "loading" || status === "loaded") return;
+    // EN: skip when an in-flight fetch is happening regardless of
+    // `force` — duplicate fetches would just race on the same response.
+    // `loaded` status only short-circuits without `force` (preserves
+    // the original lazy semantics for the Git tab caller; the
+    // invalidate-driven caller in App.tsx passes force=true).
+    // 中: in-flight 总是跳过；loaded 仅 non-force 跳过。
+    if (status === "loading") return;
+    if (status === "loaded" && !force) return;
     set((s) => {
       const next = new Map(s.gitFilesFetchStatus);
       next.set(sessionId, "loading");
@@ -158,9 +182,12 @@ export const createGitFilesSlice: StateCreator<
       allBySession.set(sessionId, bySha);
       const stat = new Map(s.gitFilesFetchStatus);
       stat.set(sessionId, "loaded");
+      const fetchedAt = new Map(s.committedFilesFetchedAt);
+      fetchedAt.set(sessionId, Date.now());
       return {
         committedFilesBySession: allBySession,
         gitFilesFetchStatus: stat,
+        committedFilesFetchedAt: fetchedAt,
       };
     });
     // Recompute derived map

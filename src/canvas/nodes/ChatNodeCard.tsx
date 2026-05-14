@@ -440,10 +440,10 @@ export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
         {data.fileTouchCount > 0 && (
           <span
             className="inline-flex items-center gap-0.5"
-            title={`session 触及文件 (${data.fileTouchCount} 个) — CC 这个 session 启动以来 Read/Edit/Write 等触及过的所有路径累积索引（来自 CC 内部 trackedFileBackups，不是 git 工作区状态；commit 后不会清零）`}
+            title={`session 触及索引 ${data.fileTouchCount}（含 Read 等所有路径，commit 不归零）— 这是 CC 内部 trackedFileBackups 的累积大小，跟"未提交"无关。要看真实未提交看 📤 chip。`}
             data-testid={`chat-node-${cn.id}-file-touch`}
           >
-            <span className="text-gray-400">📁</span>
+            <span className="text-gray-400">🔍</span>
             <span className="font-mono">{data.fileTouchCount}</span>
           </span>
         )}

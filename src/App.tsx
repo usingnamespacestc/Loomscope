@@ -100,6 +100,44 @@ export default function App() {
     };
   }, [activeId]);
 
+  // EN (2026-05-14, backlog B): eager-load git committed-files so the
+  // 📤 PendingFilesChip ("截止本节点累积未提交") populates immediately
+  // on session open — without this, the chip stays hidden until the
+  // user explicitly opens the Git tab, and they see only 📁 (CC
+  // trackedFileBackups cumulative index) which doesn't drop on commit.
+  // After initial load, the SSE invalidate handler below force-refreshes
+  // every 3s (debounced via committedFilesFetchedAt) so newly-detected
+  // commits flow into pending counts without a Git tab toggle.
+  // 中: 让 📤 chip 上来就有数据；后续 SSE invalidate 3s 防抖 force-
+  // refresh 让新 commit 自动归零旧 pending。
+  const committedFilesFetchedAt = useStore((s) =>
+    activeId ? s.committedFilesFetchedAt.get(activeId) ?? 0 : 0,
+  );
+  const sessionLastInvalidateAt = useStore((s) =>
+    activeId ? s.sessions.get(activeId)?.lastInvalidateAt ?? 0 : 0,
+  );
+  useEffect(() => {
+    if (!activeId || activeId.startsWith("draft-")) return;
+    if (!session?.chatFlow) return;
+    const chatFlow = session.chatFlow;
+    // Initial load (fetchedAt=0) OR invalidate > 3s past last fetch.
+    if (
+      committedFilesFetchedAt === 0 ||
+      sessionLastInvalidateAt - committedFilesFetchedAt > 3000
+    ) {
+      void useStore
+        .getState()
+        .loadCommittedFiles(activeId, chatFlow, {
+          force: committedFilesFetchedAt > 0,
+        });
+    }
+  }, [
+    activeId,
+    session?.chatFlow,
+    committedFilesFetchedAt,
+    sessionLastInvalidateAt,
+  ]);
+
   // v0.9 file-tail spike: subscribe to the active session's SSE event
   // stream. On `invalidate`, call refreshSession — re-fetches lite
   // ChatFlow + clears workflowCache so the lazy hooks pull fresh.
