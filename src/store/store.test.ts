@@ -287,6 +287,42 @@ describe("Session slice", () => {
       expect(useStore.getState().sessions.get(SID)?.pendingPermission).toBeNull();
     });
 
+    // EN (2026-05-14): bug fix — CC's TUI reject paths (handleCancel +
+    // handleRespondToClaude in AskUserQuestionPermissionRequest.tsx)
+    // call onReject without executing the tool, so no PostToolUse fires
+    // and the banner stays stuck forever. We extended the clear path
+    // to cover Stop / UserPromptSubmit / PreToolUse — three signals
+    // that mean "the previous permission ask is no longer relevant".
+    // 中: AskUserQuestion 的 TUI reject 不 fire PostToolUse；额外 3
+    // 个事件兜底清 banner。
+    it("Stop clears pendingPermission (covers TUI reject paths)", () => {
+      useStore.getState().toggleFold(SID, "_seed_");
+      useStore.getState().applyCcHookEvent(SID, "PermissionRequest", payload({ tool_name: "AskUserQuestion" }));
+      expect(useStore.getState().sessions.get(SID)?.pendingPermission).not.toBeNull();
+      useStore.getState().applyCcHookEvent(SID, "Stop", payload({}));
+      expect(useStore.getState().sessions.get(SID)?.pendingPermission).toBeNull();
+    });
+
+    it("UserPromptSubmit clears pendingPermission (next-turn cleanup)", () => {
+      useStore.getState().toggleFold(SID, "_seed_");
+      useStore.getState().applyCcHookEvent(SID, "PermissionRequest", payload({ tool_name: "Bash" }));
+      expect(useStore.getState().sessions.get(SID)?.pendingPermission).not.toBeNull();
+      useStore.getState().applyCcHookEvent(SID, "UserPromptSubmit", payload({}));
+      expect(useStore.getState().sessions.get(SID)?.pendingPermission).toBeNull();
+    });
+
+    it("PreToolUse clears stale pendingPermission from a previous tool", () => {
+      useStore.getState().toggleFold(SID, "_seed_");
+      // Tool A's permission gets stuck (e.g., user pressed cancel).
+      useStore.getState().applyCcHookEvent(SID, "PermissionRequest", payload({ tool_name: "AskUserQuestion" }));
+      // CC moves on to tool B → fires its PreToolUse.
+      useStore.getState().applyCcHookEvent(SID, "PreToolUse", payload({ tool_name: "Read" }));
+      // Stale banner cleared. (The next PermissionRequest for tool B
+      // would re-set it; that's tested in the existing
+      // PermissionRequest case.)
+      expect(useStore.getState().sessions.get(SID)?.pendingPermission).toBeNull();
+    });
+
     it("any hook event bumps lastInvalidateAt (acts as activity signal)", () => {
       useStore.getState().toggleFold(SID, "_seed_");
       const before = useStore.getState().sessions.get(SID)!.lastInvalidateAt;

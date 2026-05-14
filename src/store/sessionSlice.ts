@@ -1033,10 +1033,31 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
           receivedAt: Date.now(),
         },
       };
-    } else if (event === "PermissionDenied" || event === "PostToolUse") {
-      // PermissionDenied: explicit "user said no". PostToolUse: tool
-      // ran (= permission was granted), so any pending banner is now
-      // stale. Both clear the slot.
+    } else if (
+      event === "PermissionDenied" ||
+      event === "PostToolUse" ||
+      event === "Stop" ||
+      event === "UserPromptSubmit" ||
+      event === "PreToolUse"
+    ) {
+      // EN: clear the banner on any signal that "the previous
+      // permission ask is no longer relevant". The naive set was
+      // PostToolUse / PermissionDenied only, but CC's TUI reject paths
+      // (handleCancel + handleRespondToClaude in
+      // AskUserQuestionPermissionRequest.tsx) call onReject without
+      // executing the tool — so PostToolUse never fires and the
+      // banner stays stuck forever. The extra triggers cover that:
+      //   • Stop: assistant message ended (rejected or otherwise)
+      //   • UserPromptSubmit: user sent a new turn — any in-flight
+      //     permission from a previous turn is moot
+      //   • PreToolUse: CC moved on to a new tool. Order is fine —
+      //     PreToolUse fires BEFORE the matching PermissionRequest
+      //     so clearing here just resets stale state before the
+      //     next PermissionRequest re-sets it.
+      // 中: 仅靠 PostToolUse/PermissionDenied 清会漏 TUI reject 场景
+      //（cancel / respond-to-claude 走 onReject 不执行工具不 fire
+      //  PostToolUse）。加 Stop / UserPromptSubmit / PreToolUse 兜底：
+      //  这三个信号都意味着上一个 permission 请求"已经过期"。
       if (next.pendingPermission) next = { ...next, pendingPermission: null };
     }
     // v0.11: turn-window state. UserPromptSubmit opens it, Stop closes
