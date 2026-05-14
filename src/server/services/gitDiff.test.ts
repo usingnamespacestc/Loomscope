@@ -10,7 +10,7 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { gitShow, gitShowFiles } from "./gitDiff";
+import { expandHome, gitShow, gitShowFiles } from "./gitDiff";
 
 let tmpRepo: string;
 let firstSha: string;
@@ -119,5 +119,33 @@ describe("gitShowFiles (file list for a commit)", () => {
     const r = await gitShowFiles({ repo: tmpRepo, sha: "not-hex" });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("invalid-sha");
+  });
+});
+
+describe("expandHome (2026-05-14 bug fix)", () => {
+  it("leaves absolute paths untouched", () => {
+    expect(expandHome("/home/u/foo")).toBe("/home/u/foo");
+    expect(expandHome("/")).toBe("/");
+  });
+
+  it("expands bare `~` to homedir", () => {
+    expect(expandHome("~")).toBe(os.homedir());
+  });
+
+  it("expands `~/X` to <homedir>/X", () => {
+    expect(expandHome("~/Loomscope")).toBe(
+      path.join(os.homedir(), "Loomscope"),
+    );
+  });
+
+  it("does NOT expand `~foo` (only ~/ prefix or bare ~)", () => {
+    // Bash would interpret ~foo as another user's home; we
+    // intentionally don't — too easy to get wrong without /etc/passwd
+    // access.
+    expect(expandHome("~foo")).toBe("~foo");
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(expandHome("")).toBe("");
   });
 });

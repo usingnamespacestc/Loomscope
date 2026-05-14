@@ -1,28 +1,40 @@
-// EN (2026-05-14): regression for loadCommittedFiles force flag.
-// Without `force`, a second call after the initial `loaded` state is
-// a no-op (preserves the lazy GitDiffPanel callsite semantics). With
-// `force=true` — the path App.tsx uses on invalidate-driven refresh —
-// the second call re-fetches and re-computes pending files.
+// EN (2026-05-14): regression tests for gitFilesSlice.
+//
+// Coverage:
+//   • loadCommittedFiles force flag (non-force short-circuit,
+//     force re-fetch, in-flight skip).
+//   • Path normalization: committed paths (relative to repo) +
+//     trackedFiles (absolute) get reconciled so the diff actually
+//     subtracts. Without this, the chip showed the whole trackedFiles
+//     set as "pending" forever.
+//   • cwd subtree filter: trackedFiles entries OUTSIDE the session's
+//     cwd (e.g., /tmp/*) are dropped — those paths are never in any
+//     git repo so they'd be reported as pending forever otherwise.
+//   • Tilde expansion: `~/Loomscope` repo paths in commits get
+//     absolute-ized via $HOME recovery from trackedFiles (browser
+//     has no os.homedir; we infer from absolute trackedFiles entries).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "@/store/index";
 import type { ChatFlow } from "@/data/types";
 
-function makeChatFlow(commits: Array<{ chatNodeId: string; sha: string }>): ChatFlow {
-  // Minimal ChatFlow shape — only fields the slice's `computePending`
-  // touches are populated.
+function makeChatFlow(
+  commits: Array<{ chatNodeId: string; sha: string; repo?: string }>,
+  cwd = "/home/u/repo",
+  trackedFiles = ["/home/u/repo/a.ts", "/home/u/repo/b.ts"],
+): ChatFlow {
   return {
     id: "test-sid",
     mainJsonlPath: "/tmp/test.jsonl",
     sidecarDir: "/tmp/test",
-    cwd: "/tmp",
+    cwd,
     gitBranch: null,
     createdAt: "2026-05-14T00:00:00Z",
     lastUpdatedAt: "2026-05-14T00:00:00Z",
     trigger: "user",
     customTitle: null,
-    chatNodes: commits.map(({ chatNodeId, sha }) => ({
+    chatNodes: commits.map(({ chatNodeId, sha, repo }) => ({
       kind: "chat",
       id: chatNodeId,
       timestamp: "2026-05-14T00:00:00Z",
@@ -41,13 +53,18 @@ function makeChatFlow(commits: Array<{ chatNodeId: string; sha: string }>): Chat
       contributingSessions: ["test-sid"],
       meta: {
         fileHistorySnapshots: [
-          { uuid: "", timestamp: "2026-05-14T00:00:00Z", trackedFiles: ["a.ts", "b.ts"], isUpdate: false },
+          {
+            uuid: "",
+            timestamp: "2026-05-14T00:00:00Z",
+            trackedFiles,
+            isUpdate: false,
+          },
         ],
         commits: [
           {
             sha,
             timestamp: "2026-05-14T00:00:00Z",
-            cwd: "/tmp",
+            cwd: repo ?? cwd,
             messageFirstLine: "msg",
             commitToolUuid: null,
             via: "hook" as const,
@@ -62,7 +79,6 @@ function makeChatFlow(commits: Array<{ chatNodeId: string; sha: string }>): Chat
 const SID = "test-sid";
 
 beforeEach(() => {
-  // Reset slice state.
   useStore.setState({
     committedFilesBySession: new Map(),
     gitFilesFetchStatus: new Map(),
@@ -86,7 +102,12 @@ describe("gitFilesSlice — loadCommittedFiles force flag", () => {
         return new Response(
           JSON.stringify({
             ok: true,
-            byKey: { "cn1::aaaaaaa": { ok: true, files: [{ path: "a.ts", status: "M" }] } },
+            byKey: {
+              "/home/u/repo::aaaaaaa": {
+                ok: true,
+                files: [{ path: "a.ts", status: "M" }],
+              },
+            },
           }),
           { status: 200 },
         );
@@ -113,18 +134,17 @@ describe("gitFilesSlice — loadCommittedFiles force flag", () => {
             byKey:
               calls === 1
                 ? {
-                    "cn1::aaaaaaa": {
+                    "/home/u/repo::aaaaaaa": {
                       ok: true,
                       files: [{ path: "a.ts", status: "M" }],
                     },
                   }
                 : {
-                    // Second fetch picks up an additional commit covering b.ts
-                    "cn1::aaaaaaa": {
+                    "/home/u/repo::aaaaaaa": {
                       ok: true,
                       files: [{ path: "a.ts", status: "M" }],
                     },
-                    "cn2::bbbbbbb": {
+                    "/home/u/repo::bbbbbbb": {
                       ok: true,
                       files: [{ path: "b.ts", status: "M" }],
                     },
@@ -137,21 +157,22 @@ describe("gitFilesSlice — loadCommittedFiles force flag", () => {
     const cf1 = makeChatFlow([{ chatNodeId: "cn1", sha: "aaaaaaa" }]);
     await useStore.getState().loadCommittedFiles(SID, cf1);
     expect(calls).toBe(1);
-    // After first fetch: a.ts is committed at cn1; b.ts (in trackedFiles
-    // but not in any commit) is pending → pendingFilesByChatNode.cn1
-    // should contain b.ts only.
-    let pending = useStore.getState().pendingFilesByChatNode.get(SID)?.get("cn1");
-    expect(pending && pending.has("b.ts")).toBe(true);
-    expect(pending && pending.has("a.ts")).toBe(false);
+    // After first fetch: a.ts committed; trackedFiles has /home/u/repo/a.ts
+    // + /home/u/repo/b.ts → pending = /home/u/repo/b.ts.
+    let pending = useStore
+      .getState()
+      .pendingFilesByChatNode.get(SID)
+      ?.get("cn1");
+    expect(pending && pending.has("/home/u/repo/b.ts")).toBe(true);
+    expect(pending && pending.has("/home/u/repo/a.ts")).toBe(false);
 
-    // Force second fetch with chatFlow updated to include cn2 + its commit.
+    // Force second fetch — cn2 commit covers b.ts → cn2 pending empty.
     const cf2 = makeChatFlow([
       { chatNodeId: "cn1", sha: "aaaaaaa" },
       { chatNodeId: "cn2", sha: "bbbbbbb" },
     ]);
     await useStore.getState().loadCommittedFiles(SID, cf2, { force: true });
     expect(calls).toBe(2);
-    // After force fetch + recompute: cn2's b.ts now committed → pending(cn2) empty.
     pending = useStore.getState().pendingFilesByChatNode.get(SID)?.get("cn2");
     expect(pending?.size).toBe(0);
   });
@@ -170,7 +191,9 @@ describe("gitFilesSlice — loadCommittedFiles force flag", () => {
         return new Response(
           JSON.stringify({
             ok: true,
-            byKey: { "cn1::aaaaaaa": { ok: true, files: [] } },
+            byKey: {
+              "/home/u/repo::aaaaaaa": { ok: true, files: [] },
+            },
           }),
           { status: 200 },
         );
@@ -178,10 +201,120 @@ describe("gitFilesSlice — loadCommittedFiles force flag", () => {
     );
     const cf = makeChatFlow([{ chatNodeId: "cn1", sha: "aaaaaaa" }]);
     const p1 = useStore.getState().loadCommittedFiles(SID, cf);
-    // While first call is in-flight, a force=true call should still skip.
-    const p2 = useStore.getState().loadCommittedFiles(SID, cf, { force: true });
+    const p2 = useStore
+      .getState()
+      .loadCommittedFiles(SID, cf, { force: true });
     resolveFirst();
     await Promise.all([p1, p2]);
     expect(calls).toBe(1);
+  });
+});
+
+describe("gitFilesSlice — path-normalization regression (2026-05-14)", () => {
+  it("relative committed paths get absolute-ized via repo prefix", async () => {
+    // Mirrors real server output: trackedFiles absolute, git show
+    // emits relative paths. Without normalization the diff doesn't
+    // subtract and pending=trackedFiles full set.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            byKey: {
+              "/home/u/repo::aaaaaaa": {
+                ok: true,
+                files: [
+                  { path: "src/a.ts", status: "M" },
+                  { path: "src/b.ts", status: "M" },
+                ],
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    const cf = makeChatFlow(
+      [{ chatNodeId: "cn1", sha: "aaaaaaa" }],
+      "/home/u/repo",
+      ["/home/u/repo/src/a.ts", "/home/u/repo/src/b.ts"],
+    );
+    await useStore.getState().loadCommittedFiles(SID, cf);
+    const pending = useStore
+      .getState()
+      .pendingFilesByChatNode.get(SID)
+      ?.get("cn1");
+    expect(pending?.size).toBe(0); // both committed
+  });
+
+  it("/tmp paths in trackedFiles get filtered out (not in cwd subtree)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            byKey: {
+              "/home/u/repo::aaaaaaa": {
+                ok: true,
+                files: [{ path: "src/foo.ts", status: "M" }],
+              },
+            },
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const cf = makeChatFlow(
+      [{ chatNodeId: "cn1", sha: "aaaaaaa" }],
+      "/home/u/repo",
+      [
+        "/home/u/repo/src/foo.ts", // in cwd subtree, committed → not pending
+        "/tmp/junk.py", // outside cwd → filtered out
+        "/tmp/scratch.mjs", // outside cwd → filtered out
+      ],
+    );
+    await useStore.getState().loadCommittedFiles(SID, cf);
+    const pending = useStore
+      .getState()
+      .pendingFilesByChatNode.get(SID)
+      ?.get("cn1");
+    expect(pending?.size).toBe(0); // /tmp filtered, foo.ts committed
+  });
+
+  it("~/ in repo path gets expanded via $HOME recovered from trackedFiles", async () => {
+    // CC sometimes records cwd as `~/Loomscope` — the server already
+    // expands when spawning git, but the slice also needs to expand
+    // for the absolute-path reconciliation.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            byKey: {
+              // Repo recorded with tilde shorthand.
+              "~/repo::aaaaaaa": {
+                ok: true,
+                files: [{ path: "src/foo.ts", status: "M" }],
+              },
+            },
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const cf = makeChatFlow(
+      [{ chatNodeId: "cn1", sha: "aaaaaaa", repo: "~/repo" }],
+      "/home/u/repo",
+      ["/home/u/repo/src/foo.ts"], // absolute → $HOME = /home/u
+    );
+    await useStore.getState().loadCommittedFiles(SID, cf);
+    const pending = useStore
+      .getState()
+      .pendingFilesByChatNode.get(SID)
+      ?.get("cn1");
+    expect(pending?.size).toBe(0); // ~/repo expanded to /home/u/repo → subtracted
   });
 });

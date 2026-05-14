@@ -3,7 +3,10 @@
 // Pipeline:
 //   1. On Git tab first-open per session, batch-fetch every commit's
 //      changed-file list via `/api/sessions/:id/git/commits-files`.
-//   2. Cache `committedFilesBySession[sessionId][sha] = files[]`.
+//   2. Cache `committedFilesBySession[sessionId][sha] = { repo, files }`.
+//      (Earlier shape was just `files[]`; we now also keep `repo`
+//       so we can absolute-ize the relative paths git emits when
+//       comparing against trackedFiles in computePending.)
 //   3. Recompute `pendingFilesByChatNode[sessionId][cnId] = Set<path>`
 //      whenever the cache for a session changes:
 //        for each ChatNode in chronological order:
@@ -33,10 +36,19 @@ import type { LoomscopeStore } from "@/store/types";
 export type GitFilesFetchStatus = "idle" | "loading" | "loaded" | "error";
 
 export interface GitFilesSlice {
-  /** sha → files. Cleared per-session on session unload. */
+  /** sha → { repo, files }. Cleared per-session on session unload.
+   *  Why store `repo` alongside files: `git show --name-status`
+   *  returns paths relative to the repo root, while trackedFiles
+   *  (the other side of the pending-files diff) are absolute. The
+   *  slice's computePending needs repo to absolute-ize each
+   *  committed file before set-comparing. Earlier shape (just files)
+   *  led to the path-mismatch bug fixed 2026-05-14. */
   committedFilesBySession: Map<
     string,
-    Map<string, Array<{ path: string; status: string }>>
+    Map<
+      string,
+      { repo: string; files: Array<{ path: string; status: string }> }
+    >
   >;
   /** Per-session fetch state (so the panel knows whether to show a
    * skeleton). */
@@ -87,23 +99,78 @@ async function fetchBatch(sessionId: string): Promise<BatchResp | null> {
   return (await res.json()) as BatchResp;
 }
 
+/** EN (2026-05-14 bug fix): tilde-expand a repo path on the client too
+ *  (defense-in-depth — server.gitDiff already expands when invoking
+ *  git, but the client uses repo to join with `git show` relative
+ *  paths so trackedFiles' ABSOLUTE shape can match). The browser has
+ *  no `os.homedir()`; CC always records `~` against the user's $HOME,
+ *  so we recover it via the trackedFiles which carry the resolved
+ *  absolute path (see firstFileHome helper).
+ *  中: 浏览器无 os.homedir，用 trackedFiles 第一条绝对路径回推 ~。 */
+function expandHomeClient(repo: string, homeDir: string | null): string {
+  if (!repo) return repo;
+  if (!homeDir) return repo;
+  if (repo === "~") return homeDir;
+  if (repo.startsWith("~/")) return `${homeDir}/${repo.slice(2)}`;
+  return repo;
+}
+
+/** EN: cheapest possible $HOME recovery — find a trackedFiles entry
+ *  that starts with `/home/<user>/` or `/Users/<user>/` and slice.
+ *  Returns null when no such entry exists (chip stays approximate but
+ *  not catastrophically wrong). */
+function recoverHomeDir(allTracked: Set<string>): string | null {
+  for (const p of allTracked) {
+    const m = /^(\/home\/[^/]+|\/Users\/[^/]+)/.exec(p);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 function computePending(
   chatFlow: ChatFlow,
-  committedBySha: Map<string, Array<{ path: string; status: string }>>,
+  committedBySha: Map<
+    string,
+    { repo: string; files: Array<{ path: string; status: string }> }
+  >,
 ): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
+  const cwd = chatFlow.cwd ?? null;
+  // Gather all trackedFiles across the session so we can recover
+  // $HOME for tilde-expansion of commit repo paths.
+  // 中: 把所有 trackedFiles 汇总用于回推 ~。
+  const allTracked = new Set<string>();
+  for (const cn of chatFlow.chatNodes) {
+    for (const f of latestTrackedFiles(cn)) allTracked.add(f);
+  }
+  const homeDir = recoverHomeDir(allTracked);
   // Chronological walk — chatNodes are stored in jsonl insertion
   // order which IS chronological (parser appends as records arrive).
   // For the touched set we use CC's session-cumulative trackedFiles
   // (latest snapshot of fileHistorySnapshots — see distinctTouchedFiles
   // in layoutDag for the rationale).
+  //
+  // EN (2026-05-14 bug fix): committedSoFar now stores ABSOLUTE
+  // paths. `git show --name-status` returns paths relative to the
+  // repo root, but trackedFiles are absolute, so the set membership
+  // check needs a consistent format. We absolute-ize each committed
+  // file via `<repo>/<relPath>` with repo also tilde-expanded.
+  // 中: committedSoFar 存绝对路径——git show 返回相对，trackedFiles
+  // 是绝对，必须先规范化到同一坐标系才能减得掉。
   const committedSoFar = new Set<string>();
   for (const cn of chatFlow.chatNodes) {
     // Add this ChatNode's commits to the running committed set.
     for (const cm of cn.meta.commits ?? []) {
-      const files = committedBySha.get(cm.sha);
-      if (files) {
-        for (const f of files) committedSoFar.add(f.path);
+      const entry = committedBySha.get(cm.sha);
+      if (entry) {
+        const expandedRepo = expandHomeClient(entry.repo, homeDir);
+        for (const f of entry.files) {
+          // Strip leading "/" on relPath defense (git show never emits
+          // one but be paranoid). repo doesn't end with /.
+          // 中: 拼绝对路径；防御 relPath 多余前缀 "/"。
+          const rel = f.path.startsWith("/") ? f.path.slice(1) : f.path;
+          committedSoFar.add(`${expandedRepo}/${rel}`);
+        }
       }
     }
     const touched = latestTrackedFiles(cn);
@@ -115,8 +182,20 @@ function computePending(
       continue;
     }
     const pending = new Set<string>();
-    for (const path of touched) {
-      if (!committedSoFar.has(path)) pending.add(path);
+    for (const filePath of touched) {
+      // EN (2026-05-14 bug fix): filter trackedFiles to the session
+      // cwd subtree. trackedFiles includes paths CC has Read'd —
+      // /tmp/* and other non-git paths drift in over a long session
+      // and would be reported as "pending forever" because no commit
+      // can ever subtract them. Restricting to cwd subtree is a
+      // honest "未提交" semantic — files actually in the session's
+      // working dir.
+      // 中: 限制 trackedFiles 到 cwd 子树内；屏蔽 /tmp 等不属于本
+      // session 工作区的累积索引污染。
+      if (cwd && !filePath.startsWith(`${cwd}/`) && filePath !== cwd) {
+        continue;
+      }
+      if (!committedSoFar.has(filePath)) pending.add(filePath);
     }
     out.set(cn.id, pending);
   }
@@ -171,11 +250,23 @@ export const createGitFilesSlice: StateCreator<
       });
       return;
     }
-    // Build sha → files map (drop failed entries)
-    const bySha = new Map<string, Array<{ path: string; status: string }>>();
+    // Build sha → { repo, files } map (drop failed entries). We
+    // preserve the repo string from the key so computePending can
+    // absolute-ize relative paths to compare against trackedFiles.
+    // 中: 同时存 repo + files；computePending 把 relative path 跟 repo
+    // 拼出绝对路径才能跟 trackedFiles 比对。
+    const bySha = new Map<
+      string,
+      { repo: string; files: Array<{ path: string; status: string }> }
+    >();
     for (const [key, val] of Object.entries(resp.byKey)) {
-      const sha = key.split("::")[1];
-      if (val.ok && sha) bySha.set(sha, val.files);
+      // Key shape: `<repo>::<sha>`. repo may contain `:` (rare —
+      // Windows drive letters) so we split on the LAST `::`.
+      const idx = key.lastIndexOf("::");
+      if (idx < 0) continue;
+      const repo = key.slice(0, idx);
+      const sha = key.slice(idx + 2);
+      if (val.ok && sha) bySha.set(sha, { repo, files: val.files });
     }
     set((s) => {
       const allBySession = new Map(s.committedFilesBySession);

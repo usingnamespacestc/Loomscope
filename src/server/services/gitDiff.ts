@@ -19,6 +19,23 @@
 // 同信任，路径来自用户自己 session 的 jsonl）。
 
 import { spawn } from "node:child_process";
+import * as os from "node:os";
+import * as path from "node:path";
+
+/** EN (2026-05-14, bug fix): tilde-expand `repo` before handing it to
+ *  `git -C` via spawn. `~` is shell syntax — spawn doesn't expand it,
+ *  so `git -C ~/Loomscope` fails with "not a git repository" because
+ *  it literally looks for a directory named `~`. CC records cwd as
+ *  `~/Loomscope` in some sessions; we expand here so commit-files
+ *  fetching succeeds for those.
+ *  中: spawn 不展开 `~`，导致 `git -C ~/foo` 找不到目录；这里 expand
+ *  让 CC 用 ~/ 记的 cwd 也能跑通。 */
+export function expandHome(p: string): string {
+  if (!p) return p;
+  if (p === "~") return os.homedir();
+  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
 
 export interface GitShowResult {
   ok: true;
@@ -71,7 +88,7 @@ export async function gitShow(opts: GitShowOpts): Promise<GitShowResponse> {
   if (!isSafeFilePath(opts.file)) {
     return { ok: false, code: "invalid-file" };
   }
-  const args = ["-C", opts.repo, "show", "--no-color", opts.sha];
+  const args = ["-C", expandHome(opts.repo), "show", "--no-color", opts.sha];
   if (opts.file) args.push("--", opts.file);
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -160,7 +177,7 @@ export async function gitShowFiles(opts: {
   }
   const args = [
     "-C",
-    opts.repo,
+    expandHome(opts.repo),
     "show",
     "--no-color",
     "--name-status",
