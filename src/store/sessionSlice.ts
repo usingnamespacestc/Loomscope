@@ -29,6 +29,7 @@ function blankSessionState(): SessionState {
     workflowViewports: new Map<string, { x: number; y: number; zoom: number }>(),
     pendingPermission: null,
     pendingCanUseToolPrompts: [],
+    submittedAuq: [],
     currentTurn: null,
     lastTurnHookAt: 0,
     lastTurnUserSubmittedAt: 0,
@@ -1002,6 +1003,59 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     if ((cur.pendingCanUseToolPrompts ?? []).length === 0) return;
     const updated = new Map(sessions);
     updated.set(sessionId, { ...cur, pendingCanUseToolPrompts: [] });
+    set({ sessions: updated });
+  },
+
+  // v2.3 PR F3 Option C: move an AskUserQuestion entry from pending
+  // to "submitted" state. The panel renders both lists; submitted
+  // entries are read-only history that stick around until TTL or
+  // future tool_use_id matching dismisses them.
+  // 中: AUQ 提交后从 pending 搬到 submittedAuq，TTL 内只读留显。
+  markAuqSubmitted: (sessionId, promptId, answer) => {
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur) return;
+    const list = cur.pendingCanUseToolPrompts ?? [];
+    const matchIdx = list.findIndex((p) => p.promptId === promptId);
+    if (matchIdx < 0) return;
+    const matched = list[matchIdx]!;
+    const remainingPending = list.filter((_, i) => i !== matchIdx);
+    const submittedEntry = {
+      promptId: matched.promptId,
+      toolName: matched.toolName,
+      toolInput: matched.toolInput,
+      answers: answer.answers,
+      ...(answer.annotations && { annotations: answer.annotations }),
+      submittedAt: Date.now(),
+      ...(matched.source && { source: matched.source }),
+    };
+    const submittedList = cur.submittedAuq ?? [];
+    // Dedup: re-submitting the same promptId replaces the existing
+    // entry rather than duplicating it. Edge case but defensive.
+    // 中: 同 promptId 重复提交则替换。
+    const existing = submittedList.findIndex((s) => s.promptId === promptId);
+    const nextSubmitted =
+      existing >= 0
+        ? submittedList.map((s, i) => (i === existing ? submittedEntry : s))
+        : [...submittedList, submittedEntry];
+    const updated = new Map(sessions);
+    updated.set(sessionId, {
+      ...cur,
+      pendingCanUseToolPrompts: remainingPending,
+      submittedAuq: nextSubmitted,
+    });
+    set({ sessions: updated });
+  },
+
+  dismissSubmittedAuq: (sessionId, promptId) => {
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur) return;
+    const list = cur.submittedAuq ?? [];
+    const filtered = list.filter((s) => s.promptId !== promptId);
+    if (filtered.length === list.length) return;
+    const updated = new Map(sessions);
+    updated.set(sessionId, { ...cur, submittedAuq: filtered });
     set({ sessions: updated });
   },
 

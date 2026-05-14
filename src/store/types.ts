@@ -276,6 +276,38 @@ export interface SessionState {
      *  中: prompt 来源；决定 banner 上 chip 文案 + 决策走的 endpoint。 */
     source?: "sdk" | "http";
   }>;
+  /**
+   * EN (v2.3 PR F3 redo, Option C, 2026-05-14): AskUserQuestion
+   * prompts that have been answered (POSTed to /decision) but whose
+   * card we keep visible in `AskUserQuestionPanel` as a read-only
+   * "answer history" entry until either (a) a TTL elapses or (b) the
+   * underlying tool_call WorkNode lands in the conversation via SSE.
+   *
+   * This gives the user a clean "I see what I answered" feeling
+   * after submit — instead of the card vanishing the moment they
+   * click Submit — without long-term duplication with the eventual
+   * tool_call WorkNode rendering in workflow.
+   *
+   * Lifecycle: `markAuqSubmitted` moves an entry from
+   * `pendingCanUseToolPrompts` here. `dismissSubmittedAuq` removes
+   * it (driven by Panel's TTL setTimeout or future tool_use_id
+   * matching).
+   *
+   * 中: AskUserQuestion 已提交但仍以只读形态留在 conversation panel
+   * 一段时间。给用户"完成"反馈，TTL 后或对应 tool_use 出现时移除。
+   */
+  submittedAuq?: Array<{
+    promptId: string;
+    toolName: string;
+    toolInput: Record<string, unknown>;
+    /** User-submitted answers, packaged the same way as the
+     *  `updatedInput.answers` field sent to /decision. */
+    answers: Record<string, string>;
+    /** Optional per-question annotations (notes / preview). */
+    annotations?: Record<string, { notes?: string; preview?: string }>;
+    submittedAt: number;
+    source?: "sdk" | "http";
+  }>;
   // v0.11: hook-driven turn window. UserPromptSubmit sets this to
   // { startedAt: now }; Stop clears it. When non-null, the session is
   // canonically "running" — drives card pulse + edge dashed flow
@@ -459,6 +491,25 @@ export interface SessionSlice {
     },
   ) => void;
   removeCanUseToolPrompt: (sessionId: string, promptId: string) => void;
+  /** EN (v2.3 PR F3 Option C): mark an AskUserQuestion prompt as
+   *  submitted — move from `pendingCanUseToolPrompts` to
+   *  `submittedAuq` with the user-supplied answers. The Panel reads
+   *  both lists and renders submitted entries as read-only history.
+   *  中: AUQ 提交时从 pending 移到 submittedAuq；面板以只读形态留显
+   *  作为回答历史。 */
+  markAuqSubmitted: (
+    sessionId: string,
+    promptId: string,
+    answer: {
+      answers: Record<string, string>;
+      annotations?: Record<string, { notes?: string; preview?: string }>;
+    },
+  ) => void;
+  /** EN: dismiss a submitted-AUQ entry. Called by the Panel's TTL
+   *  effect or (future) by the SSE-side detector when the matching
+   *  tool_call WorkNode lands.
+   *  中: TTL 到了或对应 tool_call 出现时清除。 */
+  dismissSubmittedAuq: (sessionId: string, promptId: string) => void;
   /** Wipe all pending prompts for a session — used on
    *  sdk-session-closed to drop now-stale UI state. */
   clearCanUseToolPrompts: (sessionId: string) => void;
