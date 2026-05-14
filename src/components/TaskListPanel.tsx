@@ -11,9 +11,20 @@
 // most-recent-first. Mirrors `claude-code-source-code/src/components/
 // TaskListV2.tsx` priority — the user's mental model carries over.
 //
-// Hidden when the active session has no tasks bound (e.g., user never
-// invoked TaskCreate). Live updates arrive via the SSE `kind: "tasks"`
-// invalidate path, handled in App.tsx.
+// 2026-05-14: always rendered, even when the session has zero tasks
+// bound — the panel shows a "0 tasks" empty state instead of hiding.
+// Reason: CC's hide-timer auto-clears all .json files in
+// `~/.claude/tasks/<sid>/` 5s after every task reaches completed
+// (useTasksV2.ts:#onHideTimerFired). Previously the panel vanished
+// after that cleanup, which was confusing — user couldn't tell
+// whether the panel had been hidden, the session had no tasks, or
+// the panel was broken. Surfacing the empty count keeps the UI
+// affordance discoverable.
+// 中: 2026-05-14 改成永远渲染，0 任务时显示空状态。CC 自带 5s 全清行为
+// （memory: reference_cc_tasklist_auto_reset），不再显示 panel 用户分不清
+// 是没数据、被隐藏还是坏了。
+// Live updates arrive via the SSE `kind: "tasks"` invalidate path,
+// handled in App.tsx.
 
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
@@ -129,7 +140,9 @@ export function TaskListPanel({ sessionId }: Props) {
     [tasks.length, partitioned],
   );
 
-  if (counts.total === 0) return null;
+  // (early-return removed 2026-05-14 — see file header)
+  const hasAnyCounts =
+    counts.inProgress > 0 || counts.pending > 0 || counts.done > 0;
 
   if (collapsed) {
     return (
@@ -142,7 +155,7 @@ export function TaskListPanel({ sessionId }: Props) {
       >
         <span className="text-gray-500">📋</span>
         <span className="font-mono text-gray-700">{counts.total}</span>
-        <span className="text-gray-400">·</span>
+        {hasAnyCounts && <span className="text-gray-400">·</span>}
         {counts.inProgress > 0 && (
           <>
             <span className="text-amber-600">▶</span>
@@ -191,18 +204,29 @@ export function TaskListPanel({ sessionId }: Props) {
         </button>
       </header>
       <div className="flex-1 overflow-y-auto px-2 py-1">
-        {partitioned.inProgress.map((task) => (
-          <TaskRow key={task.id} task={task} blocked={false} />
-        ))}
-        {partitioned.pendingOpen.map((task) => (
-          <TaskRow key={task.id} task={task} blocked={false} />
-        ))}
-        {partitioned.pendingBlocked.map((task) => (
-          <TaskRow key={task.id} task={task} blocked={true} />
-        ))}
-        {partitioned.completed.map((task) => (
-          <TaskRow key={task.id} task={task} blocked={false} />
-        ))}
+        {counts.total === 0 ? (
+          <div
+            data-testid="task-list-panel-empty"
+            className="py-2 text-center text-[11px] italic text-gray-400"
+          >
+            {t("task_list.empty")}
+          </div>
+        ) : (
+          <>
+            {partitioned.inProgress.map((task) => (
+              <TaskRow key={task.id} task={task} blocked={false} />
+            ))}
+            {partitioned.pendingOpen.map((task) => (
+              <TaskRow key={task.id} task={task} blocked={false} />
+            ))}
+            {partitioned.pendingBlocked.map((task) => (
+              <TaskRow key={task.id} task={task} blocked={true} />
+            ))}
+            {partitioned.completed.map((task) => (
+              <TaskRow key={task.id} task={task} blocked={false} />
+            ))}
+          </>
+        )}
       </div>
     </div>
   );

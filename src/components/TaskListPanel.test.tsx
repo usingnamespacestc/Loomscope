@@ -40,10 +40,22 @@ afterEach(() => {
 });
 
 describe("TaskListPanel", () => {
-  it("renders nothing when the active session has zero tasks", () => {
+  it("renders collapsed chip showing 0 when the session has zero tasks", () => {
     render(<TaskListPanel sessionId={SID} />);
-    expect(screen.queryByTestId("task-list-panel-collapsed")).toBeNull();
-    expect(screen.queryByTestId("task-list-panel-expanded")).toBeNull();
+    const chip = screen.getByTestId("task-list-panel-collapsed");
+    expect(chip.textContent).toContain("0");
+    // 0 tasks → no separator + no sub-counts.
+    expect(chip.textContent).not.toContain("·");
+    expect(chip.textContent).not.toContain("▶");
+    expect(chip.textContent).not.toContain("○");
+    expect(chip.textContent).not.toContain("✓");
+  });
+
+  it("expanded panel shows the empty placeholder when zero tasks", () => {
+    useStore.setState({ taskListPanelCollapsed: false });
+    render(<TaskListPanel sessionId={SID} />);
+    expect(screen.getByTestId("task-list-panel-expanded")).toBeTruthy();
+    expect(screen.getByTestId("task-list-panel-empty")).toBeTruthy();
   });
 
   it("collapsed state shows total + status counts (▶/○/✓)", () => {

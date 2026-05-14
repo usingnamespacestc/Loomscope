@@ -332,7 +332,8 @@
   "task_list": {
     "title": "Tasks",
     "tooltip_expand": "Expand CC TaskList (click to collapse)",
-    "tooltip_collapse": "Collapse"
+    "tooltip_collapse": "Collapse",
+    "empty": "No tasks yet"
   },
   "hook_onboarding": {
     "title": "Loomscope wants to subscribe to Claude Code events",

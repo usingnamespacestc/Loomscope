@@ -332,7 +332,8 @@
   "task_list": {
     "title": "Tasks",
     "tooltip_expand": "展开 CC TaskList（点击收起）",
-    "tooltip_collapse": "收起"
+    "tooltip_collapse": "收起",
+    "empty": "暂无任务"
   },
   "hook_onboarding": {
     "title": "Loomscope 需要订阅 Claude Code 事件",
