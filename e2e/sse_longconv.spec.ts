@@ -224,35 +224,46 @@ test.describe("SSE auto-refresh + jank on a LONG conversation", () => {
       window.__layoutChatFlowCalls = 0;
     });
 
+    // CRITICAL measurement note (2026-05-17): latency is measured by
+    // a per-turn watcher started AT append time — NOT a sequential
+    // waitFor loop after all appends. The old loop recorded appendAt
+    // then let the test's own Phase-A 2.5s spacing + Phase-B elapse
+    // before it even began waiting on the first turn, so
+    // `Date.now()-appendAt` for early turns wrongly included the
+    // harness's own pacing (~8s) and reported ~11s when the card had
+    // actually appeared in ~3s. Each watcher resolves the instant its
+    // card is first visible → true append→visible latency.
+    // 中: 用每轮独立 watcher 在 append 时刻起测，而非全部 append 后
+    // 串行 waitFor —— 否则测的是 harness 自己的节奏不是真渲染延迟。
     const appended: Array<{ pid: string; appendAt: number }> = [];
+    const watchers: Array<Promise<{ pid: string; ms: number | null }>> = [];
+    const startWatcher = (pid: string, appendAt: number) => {
+      watchers.push(
+        page
+          .locator(`[data-testid="chat-node-${pid}"]`)
+          .waitFor({ state: "visible", timeout: 60_000 })
+          .then(() => ({ pid: pid.slice(-4), ms: Date.now() - appendAt }))
+          .catch(() => ({ pid: pid.slice(-4), ms: null })),
+      );
+    };
     // Phase A: 3 spaced.
     for (let i = 0; i < 3; i++) {
       const pid = await appendTurn();
-      appended.push({ pid, appendAt: Date.now() });
+      const appendAt = Date.now();
+      appended.push({ pid, appendAt });
+      startWatcher(pid, appendAt);
       await page.waitForTimeout(2500);
     }
     // Phase B: 3 rapid.
     for (let i = 0; i < 3; i++) {
       const pid = await appendTurn();
-      appended.push({ pid, appendAt: Date.now() });
+      const appendAt = Date.now();
+      appended.push({ pid, appendAt });
+      startWatcher(pid, appendAt);
       await page.waitForTimeout(200);
     }
 
-    // Each appended turn's card should materialise without reload.
-    // Collect (don't hard-fail yet) so end-of-test diagnostics always
-    // print even when the bug repros.
-    const latencies: Array<{ pid: string; ms: number | null }> = [];
-    for (const { pid, appendAt } of appended) {
-      const visible = await page
-        .locator(`[data-testid="chat-node-${pid}"]`)
-        .waitFor({ state: "visible", timeout: 40_000 })
-        .then(() => true)
-        .catch(() => false);
-      latencies.push({
-        pid: pid.slice(-4),
-        ms: visible ? Date.now() - appendAt : null,
-      });
-    }
+    const latencies = await Promise.all(watchers);
     const notRendered = latencies.filter((l) => l.ms === null).map((l) => l.pid);
     console.log(
       `[longconv] append→card-visible (ms, null=never): ${JSON.stringify(
@@ -390,13 +401,16 @@ test.describe("SSE auto-refresh + jank on a LONG conversation", () => {
       `full layoutChatFlow runs during append must be O(turns) not O(deltas) — got ${layoutRuns} for ${appendedTurns} turns (pre-#226 ~24)`,
     ).toBeLessThanOrEqual(appendedTurns * 2);
 
-    // Latency ceiling kept generous: wall-clock on a contended dev box
-    // (vite + hono + concurrent test runs) is noisy and inflates, so a
-    // tight bound here would be flaky. The deterministic gate above is
-    // the real proof; this just catches a catastrophic blow-up.
+    // Latency gate: with the per-turn watcher (started at append
+    // time, not after the harness's own pacing) the true
+    // append→visible worst on a 600-turn session is ~3-7s post-#226.
+    // 10s is the goal ceiling; the deterministic run-count gate above
+    // is the primary regression proof, this asserts the user-facing
+    // outcome stays well under the target.
+    // 中: 修正测量后真延迟 ~3-7s；10s 为目标上限。
     expect(
       worst,
-      `worst append→visible latency on ${SEED_TURNS}-turn session`,
-    ).toBeLessThan(45_000);
+      `worst append→visible latency on ${SEED_TURNS}-turn session must be well under 10s`,
+    ).toBeLessThan(10_000);
   });
 });
