@@ -819,10 +819,32 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         set({ sessions: updated });
         return;
       }
+      // EN (2026-05-17, #226): parent the optimistic placeholder on
+      // the current leaf (chronological tail). Previously this was
+      // `null` ("we don't know it until ground-truth lands"), but:
+      //   1. a parentless node renders as a DISCONNECTED card at the
+      //      far left in dagre — not at the conversation tail where
+      //      the user expects their just-sent turn; the placeholder
+      //      UX was already wrong.
+      //   2. it changes the layout signature to a shape the
+      //      incremental tail-append fast path can't handle (no
+      //      parent ⇒ not a linear tail), forcing a full N-node
+      //      dagre relayout for EVERY turn on a long conversation —
+      //      the dominant remaining jank after the 82ce1f8 memo.
+      // The leaf is almost always the real parent (the user sent the
+      // turn from the leaf). If ground-truth later reveals a
+      // different parent (fork / restore-from-non-leaf), the
+      // chatnode-added delta corrects it — a rare, self-correcting
+      // transient, strictly better than the disconnected-left card.
+      // 中: 占位 ChatNode 挂当前 leaf 而非 null —— 否则它渲染成最左
+      // 侧孤立卡（用户期望在对话末尾），且破坏增量尾追加快路径，
+      // 长会话每轮都全量重排。真父若不同由 chatnode-added 纠正。
+      const placeholderParent =
+        cur.chatFlow.chatNodes[cur.chatFlow.chatNodes.length - 1]?.id ?? null;
       const placeholder: ChatNode = {
         kind: "chat",
         id: record.promptId,
-        parentChatNodeId: null,
+        parentChatNodeId: placeholderParent,
         rootUserUuid: record.uuid,
         userMessage: {
           uuid: record.uuid,

@@ -41,7 +41,9 @@ import {
   NODE_HEIGHT,
   NODE_WIDTH,
   chatFlowLayoutSignature,
+  incrementalAppendLayout,
   layoutChatFlow,
+  type PrevLayout,
 } from "@/canvas/layoutDag";
 import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
 import { AwaySummaryNodeCard } from "@/canvas/nodes/AwaySummaryNodeCard";
@@ -262,11 +264,36 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     () => chatFlowLayoutSignature(chatFlow, foldedCompactIds),
     [chatFlow, foldedCompactIds],
   );
-  const { nodes, edges: rawEdges } = useMemo(
-    () => layoutChatFlow(chatFlow, foldedCompactIds),
+  // EN (2026-05-17, #226): incremental tail-append. On a topology
+  // change (layoutSig changed) try the cheap linear-tail-append path
+  // first — it reuses every existing node's dagre position and only
+  // places the appended leaf at parent + one rank. Falls back to the
+  // full dagre `layoutChatFlow` for anything non-trivial (fork, fold,
+  // awaySummary, compact, removal, reorder, relink, first build).
+  // The ref caches the last result + its signature + the chatNodes
+  // array it was built from (object-identity reuse for unchanged
+  // nodes). Mutating a ref inside useMemo is the standard
+  // memo-with-cache pattern — no observable side-effect, and the
+  // useMemo([layoutSig]) gate preserves the 82ce1f8 invariant
+  // (content-only deltas never reach here at all).
+  // 中: 拓扑变化时先试线性尾追加（复用旧坐标，仅新叶子定位），
+  // 非平凡情况回退全量 dagre。ref 缓存上次结果用于增量。
+  const prevLayoutRef = useRef<PrevLayout | null>(null);
+  const { nodes, edges: rawEdges } = useMemo(() => {
+    const incr = incrementalAppendLayout(
+      prevLayoutRef.current,
+      chatFlow,
+      foldedCompactIds,
+    );
+    const result = incr ?? layoutChatFlow(chatFlow, foldedCompactIds);
+    prevLayoutRef.current = {
+      sig: layoutSig,
+      result,
+      chatNodes: chatFlow.chatNodes,
+    };
+    return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [layoutSig],
-  );
+  }, [layoutSig]);
   // EN: v0.9.1 Task 3 — decorate the edge feeding the running
   // ChatNode with `data.running=true` so ContinuationEdge / SpawnEdge
   // render the animated dashed flow. We pass it as edge data rather

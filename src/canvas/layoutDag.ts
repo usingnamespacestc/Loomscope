@@ -212,6 +212,22 @@ export function layoutChatFlow(
   nodes: LayoutRFNode[];
   edges: RFEdge[];
 } {
+  // Permanent, ~zero-cost dev/test diagnostic (#226 regression gate).
+  // A guarded `globalThis` counter of REAL full dagre relayouts.
+  // e2e/sse_longconv.spec.ts asserts this stays O(turns) not
+  // O(deltas) — the only deterministic, machine-noise-immune signal
+  // that the incremental tail-append path is engaged (wall-clock on a
+  // contended dev box is too noisy to assert on without flaking). No
+  // observable effect in production; the increment is a single
+  // property write behind try/catch.
+  // 中: 永久零成本诊断计数器，e2e 用它做确定性回归门（墙钟太抖
+  // 不能硬断言）。生产无副作用。
+  try {
+    const w = globalThis as unknown as { __layoutChatFlowCalls?: number };
+    w.__layoutChatFlowCalls = (w.__layoutChatFlowCalls ?? 0) + 1;
+  } catch {
+    /* ignore */
+  }
   const projection = computeFoldProjection(
     chatFlow,
     foldedCompactIds ?? new Set(),
@@ -498,6 +514,243 @@ export function layoutChatFlow(
   }
 
   return { nodes: [...chatNodeRfs, ...foldRfs, ...awayRfs], edges };
+}
+
+// ─── Incremental tail-append layout (2026-05-17, #226) ──────────────
+//
+// Why: even after the 82ce1f8 signature memo (which makes content-only
+// deltas layout no-ops), EVERY appended turn is a genuine topology
+// change and re-ran a full N-node dagre layout — ~hundreds of ms on a
+// 600-ChatNode session, the dominant long-conversation append jank
+// (e2e/sse_longconv.spec.ts).
+//
+// Insight: the overwhelmingly common topology change in a live
+// conversation is "one (or a few) new ChatNode(s) appended at the
+// tail, each a child of the current single-child leaf". In a dagre LR
+// layout that does NOT move any existing node — the new node is a
+// fresh sink in its own new rightmost rank. So we can keep every
+// existing node's position verbatim and place the new node at
+// `parent + (NODE_WIDTH + RANKSEP, 0)`. Full dagre only when the
+// structure actually reshuffles.
+//
+// This is DELIBERATELY conservative: ANY deviation from "pure linear
+// tail append, no folds, no awaySummary, no compact, no removal, no
+// reorder, no parent-relink, prev had no phantom nodes" returns null
+// and the caller falls back to the full `layoutChatFlow`. Correctness
+// over cleverness — the unit tests assert incremental output is
+// byte-equal to a full relayout for the cases it claims to handle.
+//
+// 中: 长会话每次 append 仍全量 dagre 是卡顿主因。线性尾部追加在
+// dagre LR 下不移动任何已有节点 → 复用旧坐标，新节点放 parent 右侧
+// 一个 rank。任何偏离纯线性尾追加的情况一律返回 null 走全量兜底。
+
+export interface PrevLayout {
+  /** chatFlowLayoutSignature of the chatFlow this layout was built
+   *  from. */
+  sig: string;
+  result: { nodes: LayoutRFNode[]; edges: RFEdge[] };
+  /** The chatFlow.chatNodes array the result was built from — used
+   *  for per-node object-identity reuse (applyChatFlowDelta keeps
+   *  unchanged ChatNode objects by reference; only content-mutated
+   *  nodes get a fresh object). */
+  chatNodes: ChatNode[];
+}
+
+interface SigLine {
+  raw: string;
+  id: string;
+  parent: string;
+  cc: string; // isCompactSummary+hasInnerCompact, "00" when neither
+  away: string; // "1" when meta.awaySummary.content present
+}
+
+function parseSigBody(sig: string): { body: string[]; fold: string } | null {
+  const idx = sig.indexOf("\n##FOLD##");
+  if (idx < 0) return null;
+  const fold = sig.slice(idx + "\n##FOLD##".length);
+  const bodyStr = sig.slice(0, idx);
+  const body = bodyStr.length === 0 ? [] : bodyStr.split("\n");
+  return { body, fold };
+}
+
+function parseSigLine(line: string): SigLine | null {
+  // Format (chatFlowLayoutSignature): id|parent|cc|logical|preTokens|away
+  const f = line.split("|");
+  if (f.length !== 6) return null;
+  return { raw: line, id: f[0], parent: f[1], cc: f[2], away: f[5] };
+}
+
+/**
+ * Returns a fresh {nodes, edges} for the pure linear tail-append case,
+ * or null when the caller must run the full `layoutChatFlow`.
+ *
+ * Guards (all must hold for the cheap path):
+ *   - prev exists; prev produced ONLY chatNode rfNodes (no chatFold /
+ *     awaySummary phantoms)
+ *   - fold set unchanged AND empty (no active fold)
+ *   - there is a byte-identical common PREFIX of length K between
+ *     prev's signature lines and the new ones (these K nodes' dagre
+ *     positions are reused verbatim — a pure sink append doesn't move
+ *     them in dagre LR, asserted by the test gate)
+ *   - everything AFTER the common prefix forms a strictly LINEAR tail:
+ *     each tail node's parent is the immediately-preceding chatNode,
+ *     not compact, no awaySummary, and its parent has exactly one
+ *     child in the new graph (rules out fork / relink / reorder /
+ *     removal — those break "parent == preceding node" or shrink the
+ *     graph and fall through to the full layout)
+ *
+ * Generalised from a stricter "suffix-only append" because the real
+ * SSE pipeline upgrades an optimistic raw-records placeholder
+ * (parentChatNodeId=null) into the real ChatNode (parent filled in)
+ * via chatnode-added — that mutates the LAST signature line, so a
+ * strict "prefix byte-identical" guard never fired in practice. The
+ * common-prefix + linear-tail-recompute form covers placeholder→real
+ * upgrade, batch appends, and post-refresh (new object refs, same
+ * topology) all as the cheap path.
+ */
+export function incrementalAppendLayout(
+  prev: PrevLayout | null,
+  chatFlow: ChatFlow,
+  foldedCompactIds: Set<string> | undefined,
+): { nodes: LayoutRFNode[]; edges: RFEdge[] } | null {
+  if (!prev) return null;
+  // Any phantom node in prev → geometry isn't a simple chain; bail.
+  for (const n of prev.result.nodes) {
+    if (n.type !== "chatNode") return null;
+  }
+  const newSig = chatFlowLayoutSignature(chatFlow, foldedCompactIds);
+  const prevP = parseSigBody(prev.sig);
+  const newP = parseSigBody(newSig);
+  if (!prevP || !newP) return null;
+  if (prevP.fold !== newP.fold) return null;
+  if (prevP.fold !== "") return null; // active fold → has phantoms
+  const prevLines = prevP.body;
+  const newLines = newP.body;
+
+  // Longest byte-identical common prefix.
+  let K = 0;
+  const maxK = Math.min(prevLines.length, newLines.length);
+  while (K < maxK && prevLines[K] === newLines[K]) K++;
+  // Need a non-empty stable prefix (so tail parents resolve to a
+  // reused position) and at least one tail node.
+  if (K === 0) return null;
+  if (newLines.length <= K) return null; // nothing to (re)place at tail
+  if (K > chatFlow.chatNodes.length) return null;
+
+  // Child-count over the WHOLE new graph (for fork detection +
+  // detecting stable nodes whose outgoing-edge state changed).
+  const newChildCount = new Map<string, number>();
+  for (const line of newLines) {
+    const sl = parseSigLine(line);
+    if (!sl) return null;
+    if (sl.parent) {
+      newChildCount.set(sl.parent, (newChildCount.get(sl.parent) ?? 0) + 1);
+    }
+  }
+  const prevChildCount = new Map<string, number>();
+  for (const line of prevLines) {
+    const sl = parseSigLine(line);
+    if (!sl) continue;
+    if (sl.parent) {
+      prevChildCount.set(sl.parent, (prevChildCount.get(sl.parent) ?? 0) + 1);
+    }
+  }
+
+  // Validate the tail [K, newLines.length) is a strict linear chain.
+  for (let i = K; i < newLines.length; i++) {
+    const sl = parseSigLine(newLines[i]);
+    if (!sl) return null;
+    if (sl.cc !== "00") return null; // compact / inner-compact
+    if (sl.away !== "0") return null; // awaySummary host
+    if (!sl.parent) return null; // disconnected (e.g. raw placeholder)
+    const precedingId = chatFlow.chatNodes[i - 1]?.id;
+    if (sl.parent !== precedingId) return null; // not strictly linear
+    if (sl.id !== chatFlow.chatNodes[i]?.id) return null; // sig/array drift
+    if ((newChildCount.get(sl.parent) ?? 0) !== 1) return null; // fork
+  }
+
+  // ---- cheap path: reuse prefix positions, recompute the tail ----
+  const prevRfById = new Map<string, ChatNodeRFNode>();
+  for (const n of prev.result.nodes) {
+    if (n.type === "chatNode") prevRfById.set(n.id, n);
+  }
+  const prevCnById = new Map<string, ChatNode>();
+  for (const cn of prev.chatNodes) prevCnById.set(cn.id, cn);
+
+  const STEP = NODE_WIDTH + RANKSEP; // dagre LR center-to-center
+  const outNodes: ChatNodeRFNode[] = [];
+  const posById = new Map<string, { x: number; y: number }>();
+
+  // 1. Stable prefix [0,K) — reuse dagre position; reuse the rf node
+  //    verbatim unless its ChatNode object changed (content delta) or
+  //    its child-count changed (gained the first tail child →
+  //    hasOutgoingEdge/childCount must be re-derived).
+  for (let i = 0; i < K; i++) {
+    const cn = chatFlow.chatNodes[i];
+    if (!cn) return null;
+    const prevRf = prevRfById.get(cn.id);
+    if (!prevRf) return null; // shape mismatch — bail to full
+    posById.set(cn.id, prevRf.position);
+    const objSame = prevCnById.get(cn.id) === cn;
+    const ccNew = newChildCount.get(cn.id) ?? 0;
+    const ccOld = prevChildCount.get(cn.id) ?? 0;
+    if (objSame && ccNew === ccOld) {
+      outNodes.push(prevRf); // verbatim — fully unchanged
+      continue;
+    }
+    outNodes.push({
+      ...prevRf,
+      data: deriveCardData(
+        cn,
+        {
+          hasIncomingEdge: prevRf.data.hasIncomingEdge,
+          hasOutgoingEdge: ccNew > 0,
+        },
+        ccNew,
+        chatFlow,
+      ),
+    });
+  }
+
+  // 2. Tail [K, N) — strict linear chain off the last stable node.
+  for (let i = K; i < chatFlow.chatNodes.length; i++) {
+    const cn = chatFlow.chatNodes[i];
+    if (!cn || !cn.parentChatNodeId) return null;
+    const parentPos = posById.get(cn.parentChatNodeId);
+    if (!parentPos) return null; // parent not placed — bail to full
+    const pos = { x: parentPos.x + STEP, y: parentPos.y };
+    posById.set(cn.id, pos);
+    const ccNew = newChildCount.get(cn.id) ?? 0;
+    outNodes.push({
+      id: cn.id,
+      type: "chatNode",
+      position: pos,
+      data: deriveCardData(
+        cn,
+        { hasIncomingEdge: true, hasOutgoingEdge: ccNew > 0 },
+        ccNew,
+        chatFlow,
+      ),
+    });
+  }
+
+  // 3. Edges — rebuilt from chatFlow exactly as the no-fold branch of
+  //    layoutChatFlow does (cheap: no dagre). Same iteration order +
+  //    shape ⇒ byte-equal to a full relayout for this case.
+  const edges: RFEdge[] = [];
+  for (const cn of chatFlow.chatNodes) {
+    const p = cn.parentChatNodeId;
+    if (!p) continue;
+    edges.push({
+      id: `e-${p}->${cn.id}`,
+      source: p,
+      target: cn.id,
+      type: "continuation",
+      data: { targetModel: lastModelOf(cn) },
+    });
+  }
+
+  return { nodes: outNodes, edges };
 }
 
 // Re-export so consumers (tests, future tooling) can introspect the

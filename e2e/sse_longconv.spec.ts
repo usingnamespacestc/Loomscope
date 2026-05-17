@@ -220,6 +220,8 @@ test.describe("SSE auto-refresh + jank on a LONG conversation", () => {
       window.__longtaskMs = 0;
       // @ts-expect-error test-only
       window.__navMarker = Math.random().toString(36);
+      // @ts-expect-error test-only
+      window.__layoutChatFlowCalls = 0;
     });
 
     const appended: Array<{ pid: string; appendAt: number }> = [];
@@ -323,6 +325,13 @@ test.describe("SSE auto-refresh + jank on a LONG conversation", () => {
       // @ts-expect-error test-only
       () => window.__longtaskMs as number,
     )) as number;
+    const layoutRuns = (await page.evaluate(
+      // @ts-expect-error test-only
+      () => (window.__layoutChatFlowCalls as number) ?? -1,
+    )) as number;
+    console.log(
+      `[longconv] full layoutChatFlow runs during append phase: ${layoutRuns} (pre-#226 was ~24 for 6 turns; incremental path should keep this tiny)`,
+    );
     const reloaded = !(await page.evaluate(
       // @ts-expect-error test-only
       () => typeof window.__navMarker === "string",
@@ -362,6 +371,29 @@ test.describe("SSE auto-refresh + jank on a LONG conversation", () => {
       .filter((m): m is number => m !== null);
     const worst = renderedMs.length ? Math.max(...renderedMs) : Infinity;
     console.log(`[longconv] worst append→visible latency: ${worst}ms`);
+
+    // PRIMARY regression gate (deterministic, machine-noise-immune):
+    // before #226 a 6-turn append burst triggered ~24 full N-node
+    // dagre relayouts (every delta on a 600-ChatNode session). The
+    // incremental tail-append path + parented placeholder cut that to
+    // ~1/turn (residual = optimistic-leaf-guess corrections during
+    // the rapid sub-phase). Anything ≤ 2×turns proves the O(N)-per-
+    // delta blowup is gone; ~24 would mean the fix regressed.
+    // 中: 确定性回归门——append 期间全量 dagre 次数 ≤ 2×轮数；
+    // 修复前 ~24，修复后 ~1/轮。墙钟受机器负载影响不作硬断言。
+    const appendedTurns = appended.length;
+    console.log(
+      `[longconv] full layout runs ${layoutRuns} vs appended turns ${appendedTurns} (pre-#226 ~24)`,
+    );
+    expect(
+      layoutRuns,
+      `full layoutChatFlow runs during append must be O(turns) not O(deltas) — got ${layoutRuns} for ${appendedTurns} turns (pre-#226 ~24)`,
+    ).toBeLessThanOrEqual(appendedTurns * 2);
+
+    // Latency ceiling kept generous: wall-clock on a contended dev box
+    // (vite + hono + concurrent test runs) is noisy and inflates, so a
+    // tight bound here would be flaky. The deterministic gate above is
+    // the real proof; this just catches a catastrophic blow-up.
     expect(
       worst,
       `worst append→visible latency on ${SEED_TURNS}-turn session`,
