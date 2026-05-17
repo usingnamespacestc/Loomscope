@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  chatFlowLayoutSignature,
   distinctToolUseFiles,
   distinctTouchedFiles,
   layoutChatFlow,
@@ -1035,5 +1036,88 @@ describe("layoutChatFlow — awaySummary synthetic nodes (v1.2 R5)", () => {
     expect(
       nodes.filter((n) => n.id.startsWith("awaySummary-")).length,
     ).toBe(0);
+  });
+});
+
+describe("chatFlowLayoutSignature (2026-05-16 perf)", () => {
+  it("is stable when only content (workflow/summary) changes", () => {
+    const a = makeChatFlow([
+      makeChatNode({ id: "p1" }),
+      makeChatNode({ id: "p2", parentChatNodeId: "p1" }),
+    ]);
+    const b = makeChatFlow([
+      makeChatNode({ id: "p1" }),
+      makeChatNode({
+        id: "p2",
+        parentChatNodeId: "p1",
+        // content-only mutation: assistant text streamed in
+        workflow: {
+          nodes: [],
+          edges: [],
+          summary: {
+            assistantPreview: "hello",
+            assistantText: ["a big assistant reply"],
+            hasInFlightWork: false,
+            llmCount: 3,
+            chainCount: 1,
+            toolCount: 2,
+            totalThinkingChars: 99,
+            contextTokens: 1234,
+            maxContextTokens: 200000,
+            inputTokens: 5,
+            outputTokens: 6,
+            durationMs: 100,
+            toolUseFilePaths: [],
+          },
+        },
+      }),
+    ]);
+    expect(chatFlowLayoutSignature(b)).toBe(chatFlowLayoutSignature(a));
+  });
+
+  it("changes when a ChatNode is added (topology)", () => {
+    const a = makeChatFlow([makeChatNode({ id: "p1" })]);
+    const b = makeChatFlow([
+      makeChatNode({ id: "p1" }),
+      makeChatNode({ id: "p2", parentChatNodeId: "p1" }),
+    ]);
+    expect(chatFlowLayoutSignature(b)).not.toBe(chatFlowLayoutSignature(a));
+  });
+
+  it("changes when parent link changes (topology)", () => {
+    const a = makeChatFlow([
+      makeChatNode({ id: "p1" }),
+      makeChatNode({ id: "p2", parentChatNodeId: "p1" }),
+    ]);
+    const b = makeChatFlow([
+      makeChatNode({ id: "p1" }),
+      makeChatNode({ id: "p2", parentChatNodeId: null }),
+    ]);
+    expect(chatFlowLayoutSignature(b)).not.toBe(chatFlowLayoutSignature(a));
+  });
+
+  it("changes when fold set changes; order-independent otherwise", () => {
+    const cf = makeChatFlow([
+      makeChatNode({ id: "p1", isCompactSummary: true }),
+      makeChatNode({ id: "p2", parentChatNodeId: "p1" }),
+    ]);
+    const noFold = chatFlowLayoutSignature(cf, new Set());
+    const folded = chatFlowLayoutSignature(cf, new Set(["p1"]));
+    expect(folded).not.toBe(noFold);
+    // Same members, different insertion order → same signature.
+    const s1 = chatFlowLayoutSignature(cf, new Set(["p1", "p2"]));
+    const s2 = chatFlowLayoutSignature(cf, new Set(["p2", "p1"]));
+    expect(s1).toBe(s2);
+  });
+
+  it("changes when awaySummary presence flips (height hint)", () => {
+    const a = makeChatFlow([makeChatNode({ id: "p1" })]);
+    const b = makeChatFlow([
+      makeChatNode({
+        id: "p1",
+        meta: { awaySummary: { uuid: "as-1", content: "recap" } },
+      }),
+    ]);
+    expect(chatFlowLayoutSignature(b)).not.toBe(chatFlowLayoutSignature(a));
   });
 });

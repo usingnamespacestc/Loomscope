@@ -37,7 +37,12 @@ import {
   useLatestChatNodeId,
   useSessionLiveness,
 } from "@/store/livenessHooks";
-import { NODE_HEIGHT, NODE_WIDTH, layoutChatFlow } from "@/canvas/layoutDag";
+import {
+  NODE_HEIGHT,
+  NODE_WIDTH,
+  chatFlowLayoutSignature,
+  layoutChatFlow,
+} from "@/canvas/layoutDag";
 import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
 import { AwaySummaryNodeCard } from "@/canvas/nodes/AwaySummaryNodeCard";
 import { ChatFoldNodeCard } from "@/canvas/nodes/ChatFoldNodeCard";
@@ -238,9 +243,29 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
   const foldedCompactIds = useStore(
     (s) => s.sessions.get(sessionId)?.foldedCompactIds,
   );
+  // EN (2026-05-16 perf): memoise the dagre layout on a structural
+  // SIGNATURE, not the `chatFlow` object reference. Node positions
+  // depend only on topology + fold state (dagre uses fixed size
+  // hints); the frequent `chatnode-summary-updated` deltas (assistant
+  // text streaming in) mint a fresh chatFlow object but do NOT move
+  // any node. Re-running a 600-node dagre layout for every such delta
+  // was the long-conversation jank (>12 s main-thread block / 10 s+
+  // append latency, measured in e2e/sse_longconv.spec.ts). With the
+  // signature key, content-only deltas are layout no-ops; we only
+  // re-layout when topology / fold actually changes (chatnode-added,
+  // -removed, fold toggle). chatFlow/foldedCompactIds are read inside
+  // but intentionally NOT in the deps — layoutSig is their complete
+  // structural digest.
+  // 中: layout memo 改依赖结构指纹而非 chatFlow 引用。内容 delta 不
+  // 动布局，避免长会话每条 delta 全量重排导致的卡顿。
+  const layoutSig = useMemo(
+    () => chatFlowLayoutSignature(chatFlow, foldedCompactIds),
+    [chatFlow, foldedCompactIds],
+  );
   const { nodes, edges: rawEdges } = useMemo(
     () => layoutChatFlow(chatFlow, foldedCompactIds),
-    [chatFlow, foldedCompactIds],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [layoutSig],
   );
   // EN: v0.9.1 Task 3 — decorate the edge feeding the running
   // ChatNode with `data.running=true` so ContinuationEdge / SpawnEdge

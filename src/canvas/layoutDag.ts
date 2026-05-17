@@ -144,6 +144,67 @@ const AWAY_GAP_PX = 64;
 // When ``foldedCompactIds`` is empty (or nullish) the function
 // degenerates to its v0.7 layout — no chatFold phantoms, no
 // edge reroute.
+/**
+ * EN (2026-05-16 perf): a cheap structural digest of everything
+ * `layoutChatFlow` + `computeFoldProjection` actually read to decide
+ * node POSITIONS. Deliberately excludes ALL content fields
+ * (workflow.summary, assistantText, tokens, llmCount, …) because
+ * dagre uses fixed NODE_WIDTH/NODE_HEIGHT hints — node coordinates
+ * do not move when a ChatNode's assistant text streams in.
+ *
+ * Why this exists: ChatFlowCanvas previously memoised the layout on
+ * the `chatFlow` object reference. Every SSE delta — including the
+ * frequent `chatnode-summary-updated` (assistant text filling in) —
+ * mints a fresh chatFlow object, forcing a full dagre re-layout of
+ * EVERY ChatNode. On a 600-ChatNode session that's ~hundreds of ms
+ * of main-thread block per delta; a burst of deltas stacked >12 s of
+ * long-task jank (measured via e2e/sse_longconv.spec.ts) and made
+ * appended turns take 10 s+ to show. Keying the memo on this
+ * signature instead means content-only deltas are layout no-ops.
+ *
+ * Fields included (must match every chatFlow read in layoutChatFlow
+ * + computeFoldProjection + computeCompactRange):
+ *   - id, parentChatNodeId            (dagre nodes + edges)
+ *   - isCompactSummary, hasInnerCompact (fold projection gating)
+ *   - compactMetadata.logicalParentChatNodeId (fold range walk)
+ *   - compactMetadata.preTokens       (chatFold phantom badge)
+ *   - meta.awaySummary.content present (host height-hint inflation)
+ *   - foldedCompactIds membership     (fold input)
+ *
+ * 中: layout 位置的结构指纹。故意不含任何内容字段——dagre 用固定
+ * 尺寸 hint，助手文本流入不会移动坐标。之前 memo 依赖 chatFlow 对象
+ * 引用，每条 delta（尤其 summary-updated）都触发 600 节点全量重排，
+ * 长会话 >12s 主线程卡顿。改 memo 这个指纹后内容 delta = 布局 no-op。
+ */
+export function chatFlowLayoutSignature(
+  chatFlow: ChatFlow,
+  foldedCompactIds?: Set<string>,
+): string {
+  const parts: string[] = [];
+  for (const cn of chatFlow.chatNodes) {
+    parts.push(
+      cn.id +
+        "|" +
+        (cn.parentChatNodeId ?? "") +
+        "|" +
+        (cn.isCompactSummary ? "1" : "0") +
+        (cn.hasInnerCompact ? "1" : "0") +
+        "|" +
+        (cn.compactMetadata?.logicalParentChatNodeId ?? "") +
+        "|" +
+        (cn.compactMetadata?.preTokens ?? "") +
+        "|" +
+        (cn.meta?.awaySummary?.content ? "1" : "0"),
+    );
+  }
+  // Fold set: order-independent (sort) so set re-creation with the
+  // same members doesn't churn the signature.
+  const fold = foldedCompactIds
+    ? Array.from(foldedCompactIds).sort().join(",")
+    : "";
+  return parts.join("\n") + "\n##FOLD##" + fold;
+}
+
 export function layoutChatFlow(
   chatFlow: ChatFlow,
   foldedCompactIds?: Set<string>,
