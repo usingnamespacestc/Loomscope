@@ -164,6 +164,22 @@ export default function App() {
     useStore.getState().setLiveStatus("session", "connecting");
     const url = `/api/sessions/${activeId}/events`;
     const es = new EventSource(url);
+    // EN (2026-05-16 fix): explicit reconnect detection. The previous
+    // heuristic ("reconnect == cur.chatFlow truthy") had a hole: when
+    // the SSE reconnects WHILE the initial GET /:id is still in-flight
+    // (cur.chatFlow still null), the hello handler classified it as
+    // "initial mount" and SKIPPED the recovery refreshSession — but
+    // the disconnect window had already dropped that session's
+    // chatnode-added delta (broadcast() only reaches live subscribers;
+    // a reconnecting client misses in-flight events). Result: the
+    // ChatNode stayed unfilled until the 30 s drift-ping — the user's
+    // intermittent "发消息后有时候不自动刷出来". This flag classifies
+    // by connection history, not by load state: the FIRST hello on
+    // this EventSource is the initial connect (loadSession covers it);
+    // every subsequent hello is a genuine reconnect → always recover.
+    // 中: 用连接历史判定重连，不再用 chatFlow 是否加载来猜。第一个
+    // hello = 初连（loadSession 兜底）；之后每个 hello = 重连，必 refresh。
+    let helloSeen = false;
     es.onopen = () => useStore.getState().setLiveStatus("session", "open");
     es.addEventListener("invalidate", (ev) => {
       try {
@@ -588,23 +604,35 @@ export default function App() {
       // snapshot，因此 disconnect 期间漏掉的 chatnode-added 不会重
       // 发——只能靠主动 refresh 补。初挂载（chatFlow==null）跳过，
       // loadSession 已经在做了；重连时强制 refresh 修补 stale。
+      // First hello on this EventSource = initial connect. loadSession
+      // (the activeId effect) is already fetching the baseline, so a
+      // refresh here would be redundant. Mark + return.
+      // 中: 本 EventSource 的第一个 hello = 初连，loadSession 在跑，
+      // 不重复 refresh。
+      if (!helloSeen) {
+        helloSeen = true;
+        return;
+      }
+      // Any subsequent hello = genuine reconnect. The disconnect
+      // window may have dropped delta/raw-records broadcasts (the
+      // server only writes to live subscribers; it does NOT replay on
+      // resubscribe — see PR D5/58b1fd2). Reset the delta-seq baseline
+      // so post-refresh deltas don't gap-detect against a stale seq,
+      // then force a full refresh to backfill whatever was missed.
+      // refreshSession is dedup'd (concurrent in-flight collapses);
+      // cost is one extra GET per reconnect, far cheaper than a
+      // ChatNode silently missing its assistant content until the
+      // 30 s drift-ping.
+      // 中: 之后每个 hello = 真重连。重连窗口可能丢了 delta；重置
+      // seq baseline + 强制 refresh 补全。refreshSession 自带去重。
       const sessions = useStore.getState().sessions;
       const cur = sessions.get(activeId);
-      if (cur) {
-        if (cur.lastDeltaSeq != null) {
-          const next = new Map(sessions);
-          next.set(activeId, { ...cur, lastDeltaSeq: null });
-          useStore.setState({ sessions: next });
-        }
-        // Reconnect path — chatFlow already loaded means SSE just
-        // came back from a disconnect (initial mount is chatFlow=null
-        // because loadSession hasn't populated yet).
-        // 中: cur.chatFlow 已存在说明是重连，初次 mount 时 chatFlow=null
-        // 由 loadSession 兜底，这里就不要重复发 refresh。
-        if (cur.chatFlow) {
-          void useStore.getState().refreshSession(activeId);
-        }
+      if (cur && cur.lastDeltaSeq != null) {
+        const next = new Map(sessions);
+        next.set(activeId, { ...cur, lastDeltaSeq: null });
+        useStore.setState({ sessions: next });
       }
+      void useStore.getState().refreshSession(activeId);
     });
     es.addEventListener("ping", () => {
       // Heartbeat — no-op.
