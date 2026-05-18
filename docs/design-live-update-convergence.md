@@ -244,3 +244,137 @@ in PR-3 + PR-4.
   `onlyRenderVisibleElements`. Batched with the live-update rework
   per user; plan A→B→C in #230. Listed here only so the rework picks
   it up alongside (the "one bounded store shape" principle wants it).
+- 2026-05-18: design discussion converged the correlation-identity +
+  unified-signal model. Captured authoritatively in **§9**, which
+  **supersedes §3.2 and §5 where they differ** (§3.2's
+  reconcile-only model lacked a stable per-node key + a retract arm;
+  §9 adds both). §1–§8 kept as rationale/history.
+
+---
+
+## 9. Resolved design — correlation id + unified signal taxonomy (2026-05-18)
+
+Authoritative outcome of the backend→SSE→frontend walk-through with
+the user. **Supersedes §3.2 / §5 where they differ.** Still
+design-only; implementation gated on explicit approval.
+
+### 9.1 The locked statement (confirmed)
+
+> Replace "recovery = 5 holey, event-driven triggers all falling back
+> to a ~5 s full GET" with **one** convergent path that is
+> **version-driven, debounce-coalesced, fires even during quiescence
+> (turn-end / silence), and reconciles incrementally — not a full
+> GET**.
+
+### 9.2 `loomId` — a Loomscope-owned correlation id
+
+The single node identity for all client classification. Properties:
+
+- **Minted by Loomscope**, front+back unified, **independent of CC's
+  `promptId`/`uuid`/file structure**, and **never displayed** (pure
+  internal identity for ①②③ + retract — answers the user's earlier
+  temp-id→real-id concern: the node is keyed by a stable `loomId`
+  from birth, so ground truth merges in place, no remap, no
+  duplicate).
+- Required because optimistic create/patch/**retract** must locate a
+  node from **t=0**, before any CC id exists — and CC gives no usable
+  one (9.3).
+
+### 9.3 CC-source evidence (verified, decisive)
+
+`~/claude-code-source-code/src/utils/hooks.ts:3841` —
+`UserPromptSubmit` hook input is:
+
+```
+{ ...createBaseHookInput(), hook_event_name:'UserPromptSubmit', prompt }
+createBaseHookInput (:308) = { session_id, transcript_path, cwd, permission_mode? }
+```
+
+**No `uuid`, no `promptId`, no message id** (the `toolUseID:
+randomUUID()` passed to `executeHooks` is ephemeral, unrelated to the
+persisted record). Correlatable terminal-side only by
+`session_id + cwd + raw prompt text + time-order` → heuristic →
+ghost/duplicate hazard. This fact splits the design by path (9.5).
+
+### 9.4 Unified signal + one classifier
+
+Every inbound signal (file `delta`, `raw-records`, hook-forwarded,
+SDK lifecycle, `drift-ping`, `hello`, `ping`, `invalidate`) is
+normalised to:
+
+```
+{ loomId, version, partialContent?, lifecycle? }
+```
+
+Client runs ONE classifier per signal:
+
+- **① create** — `loomId` unseen → spawn provisional node from
+  `partialContent` (revocable optimistic).
+- **② patch** — `loomId` seen, new content fields → merge.
+- **③ ack-only** — `loomId` seen, `version ≤ appliedVersion`, no new
+  content → advance watermark, no render (the "redundant confirm"
+  case the user named).
+- **④ retract** — lifecycle/ground-truth says this `loomId` is gone
+  or changed → remove or mutate the provisional node.
+
+Reconcile (incremental, version-driven, debounce-coalesced,
+quiescence-capable) remains the correctness backbone; the classifier
+is how each signal is folded in without a full GET. ④ is the
+genuinely new arm — today optimistic things are only ever
+created/patched, **never revoked** (a bubble auto-vanishes; a real
+node had no retract path). This is the highest-risk, most-tested arm.
+
+### 9.5 Per-path `loomId`↔`promptId` binding (the only path difference; invisible to the client)
+
+- **Loomscope-sent** (the P1 ~60 s pain path): mint `loomId` at
+  `POST /turns`; server binds it to the resulting jsonl `promptId`
+  by **dispatch-order correlation on the SDK Query we own** (we sent
+  exactly this prompt; the next user record on that Query is it) —
+  **not heuristic**. Hook here is **BOTH lifecycle/retract AND an
+  optimistic content source** (`loomId` exists at t=0).
+- **Terminal-CC**: server mints `loomId` and binds it to the real
+  `promptId` at the **first `raw-records`** (file tail-read ~5 ms,
+  already carries `promptId`). Hook here is **lifecycle/retract
+  ONLY** — CC gives no correlatable id (9.3), so hook-as-content
+  would force heuristic correlation (the ghost hazard). Terminal
+  optimistic content stays `raw-records` (already keyed; ~5 ms vs
+  hook's ~immediate = negligible loss).
+
+The client only ever sees `loomId`; where/when the binding was
+established is server-internal → "structurally consistent" holds.
+
+### 9.6 Retract-arm semantics + required e2e matrix (user's verification demand)
+
+Ground truth (file reconcile) is authoritative. Hook lifecycle
+signals drive **immediate** optimistic retraction; file reconcile
+**confirms or corrects** it. Mandatory e2e matrix (large real
+session + artificially dropped/late events — the recurring lesson):
+
+| Scenario | Expected |
+|---|---|
+| turn interrupted (Stop/abort mid-stream) | provisional node kept but marked incomplete; reconcile fills or removes |
+| send cancelled before dispatch | provisional node removed; no ghost |
+| turn deleted backend-side | reconcile removes the node; no orphan edge |
+| message re-edited / re-sent | old `loomId` retracted or remapped; exactly one node, no duplicate |
+| redundant/duplicate signal (③) | watermark advances, zero DOM change |
+
+### 9.7 Revised PR breakdown (supersedes §5)
+
+1. **PR-1** — `loomId` minting + `appliedVersion` watermark; server
+   binding table (POST-dispatch + first-raw-records). Lite GET + every
+   signal expose `loomId` + `version`. Pure plumbing.
+2. **PR-2** — unified signal normaliser + the ①②③ classifier +
+   coalesced/quiescence reconcile (debounce + max-wait + re-entrancy +
+   version-equal short-circuit; deterministic clock-injected).
+3. **PR-3** — ④ retract arm + the 9.6 e2e matrix. Fixes the
+   screenshot summary-divergence bug and P1 as falls-out cases.
+4. **PR-4** — single store shape / selectors (canvas + conversation +
+   drill read one source).
+5. **PR-5** — delete band-aids (watchdog special-casing, `helloSeen`,
+   `sentTextByItemId` crutch, scattered refreshes); net-negative diff;
+   full e2e 4×.
+
+Risk budget unchanged from §6 (recovery-storm on huge sessions is
+why §9.4 reconcile stays incremental + coalesced + version-short-
+circuited — `d50bfe0` already proved "recovery heavier than the
+disease" is real).
