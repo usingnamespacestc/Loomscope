@@ -12,7 +12,7 @@
 //
 // Visual chrome per `design-visual-language.md` 视觉 token 章节.
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { CanvasPanProvider } from "@/canvas/CanvasPanContext";
@@ -31,6 +31,11 @@ import { PermissionBanner } from "@/components/PermissionBanner";
 import { TrashedSessionBanner } from "@/components/TrashedSessionBanner";
 import { Sidebar } from "@/components/Sidebar";
 import { useKeyboardNav } from "@/hooks/useKeyboardNav";
+import {
+  SSE_STALE_MS,
+  SSE_WATCHDOG_TICK_MS,
+  createSseWatchdog,
+} from "@/sse/stalenessWatchdog";
 import { useStore } from "@/store/index";
 import { chatFlowHash } from "@/utils/chatFlowSig";
 import {
@@ -40,6 +45,11 @@ import {
 
 export default function App() {
   useKeyboardNav();
+  // P5/P2/P3 (2026-05-17): bumping this forces the session
+  // EventSource effect to tear down + recreate when the SSE
+  // staleness watchdog detects a half-open (silently dead) socket.
+  // 中: watchdog 检测到 SSE 半开时 +1，强制重建 EventSource。
+  const [sseEpoch, setSseEpoch] = useState(0);
   const activeId = useStore((s) => s.activeSessionId);
   const session = useStore((s) => (activeId ? s.sessions.get(activeId) : null));
   // v0.8.1 #7: when the drill panel is in fullscreen mode, <main>
@@ -180,7 +190,36 @@ export default function App() {
     // 中: 用连接历史判定重连，不再用 chatFlow 是否加载来猜。第一个
     // hello = 初连（loadSession 兜底）；之后每个 hello = 重连，必 refresh。
     let helloSeen = false;
-    es.onopen = () => useStore.getState().setLiveStatus("session", "open");
+    // P5/P2/P3 (2026-05-17): SSE staleness watchdog. A half-open
+    // socket (proxy idle-kill / NAT / sleep / starved upstream) fires
+    // NO EventSource `error`, so the #327995e hello-reconnect never
+    // triggers and `drift-ping` (itself an SSE event) is silent too —
+    // the whole session freezes (stale content + stuck banner + stuck
+    // running-time) until a manual refresh. The server pings every
+    // 25 s; we wrap addEventListener so EVERY event (incl. ping/hello)
+    // re-arms the watchdog, and a periodic tick force-reconnects +
+    // resyncs when nothing has arrived for SSE_STALE_MS.
+    // 中: SSE 半开时浏览器不报 error → 不重连。包裹 addEventListener
+    // 让任何事件都喂 watchdog；超时强制重连 + 重新同步。
+    const watchdog = createSseWatchdog({ staleMs: SSE_STALE_MS });
+    const rawAdd = es.addEventListener.bind(es);
+    es.addEventListener = ((
+      type: string,
+      cb: EventListenerOrEventListenerObject,
+      o?: boolean | AddEventListenerOptions,
+    ) =>
+      rawAdd(
+        type,
+        (ev: Event) => {
+          watchdog.noteEvent();
+          return (cb as EventListener)(ev);
+        },
+        o,
+      )) as typeof es.addEventListener;
+    es.onopen = () => {
+      watchdog.noteEvent();
+      useStore.getState().setLiveStatus("session", "open");
+    };
     es.addEventListener("invalidate", (ev) => {
       try {
         const payload = JSON.parse((ev as MessageEvent).data) as {
@@ -644,11 +683,52 @@ export default function App() {
       // eslint-disable-next-line no-console
       console.warn("[loomscope] sse error (EventSource will auto-retry)");
     };
+    // P5/P2/P3 (2026-05-17): watchdog poll. On a detected half-open
+    // socket: do the SAME resync #327995e does on a real reconnect
+    // (this connection is dead and the browser won't tell us), then
+    // recreate the EventSource via the epoch bump so future live
+    // events resume. We clear pendingPermission + currentTurn because
+    // their clearing cc-hook events (PostToolUse/Stop/Denied) may
+    // have been the ones missed while the socket was dark — leaving
+    // them would keep the banner / running-time stuck. Genuinely-
+    // still-pending prompts are re-pushed by the NEW connection's
+    // subscribe-time catchup (sessions.ts replays getPendingPermission
+    // + httpHookPendingFor), so clearing is safe.
+    // 中: 半开时做 #327995e 同款重同步（连接已死浏览器不报）+ 清掉
+    // pendingPermission/currentTurn（它们的清除事件可能正是漏掉的），
+    // 再通过 epoch 重建 EventSource；真未决 prompt 由新连接订阅期
+    // catchup 重新推回，清掉是安全的。
+    const watchdogTimer = window.setInterval(() => {
+      if (!watchdog.check()) return;
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[loomscope] SSE silent > ${SSE_STALE_MS}ms — assuming half-open, force reconnect + resync`,
+      );
+      const st = useStore.getState();
+      const sessions = st.sessions;
+      const cur = sessions.get(activeId);
+      if (cur) {
+        const next = new Map(sessions);
+        next.set(activeId, {
+          ...cur,
+          lastDeltaSeq: null,
+          pendingPermission: null,
+          currentTurn: null,
+        });
+        useStore.setState({ sessions: next });
+      }
+      st.setLiveStatus("session", "error");
+      void st.refreshSession(activeId);
+      watchdog.reset();
+      es.close();
+      setSseEpoch((e) => e + 1); // re-run effect → fresh EventSource
+    }, SSE_WATCHDOG_TICK_MS);
     return () => {
+      window.clearInterval(watchdogTimer);
       es.close();
       useStore.getState().setLiveStatus("session", "idle");
     };
-  }, [activeId]);
+  }, [activeId, sseEpoch]);
 
   // v0.9.1: workspace-level SSE. Single global connection (lifetime =
   // app lifetime), independent of activeSession. On workspace-changed,
