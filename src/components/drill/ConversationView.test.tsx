@@ -762,3 +762,102 @@ describe("ConversationView — focusLock (workflow drill read-only mode)", () =>
     expect(centerCall).toBeTruthy();
   });
 });
+
+// P1 (2026-05-17): optimistic "running turn" bubble. Reproduces the
+// report: Loomscope-composer send → running-time stat is instant but
+// the user-message bubble + ChatNode only appear ~60 s later (the SDK
+// subprocess flushes the user record to jsonl that late). The
+// conversation must show the just-sent message IMMEDIATELY from the
+// retained `runningPromptText`, then drop it the moment the real turn
+// materialises (its text becomes the newest ChatNode's userMessage —
+// raw-records optimistic placeholder OR ground-truth). Asserted via
+// store state + rendered DOM, fully deterministic (no wall-clock).
+describe("ConversationView — P1 optimistic running-turn bubble", () => {
+  function setInflight(inf: {
+    state: "idle" | "running";
+    runningPromptText: string | null;
+    promptItemId?: string;
+  }): void {
+    useStore.setState((s) => {
+      const m = new Map(s.inflightBySession);
+      m.set(SID, {
+        state: inf.state,
+        currentRun:
+          inf.state === "running"
+            ? { promptItemId: inf.promptItemId ?? "p1", startedAt: 1 }
+            : null,
+        pendingPrompts: [],
+        lastError: null,
+        respawnNotice: null,
+        runningPromptText: inf.runningPromptText,
+      });
+      return { inflightBySession: m };
+    });
+  }
+
+  afterEach(() => {
+    useStore.setState({ inflightBySession: new Map() });
+  });
+
+  it("renders the just-sent prompt as a dashed bubble while running, before any ChatNode exists", () => {
+    // The SDK turn is executing but jsonl hasn't flushed → empty
+    // chatFlow. Without this the user sees ONLY the running-time stat.
+    const cf = flow([]);
+    seed(cf, null);
+    setInflight({ state: "running", runningPromptText: "deploy the staging build" });
+    render(
+      <ConversationView sessionId={SID} chatFlow={cf} showPendingQueue />,
+    );
+    const bubble = screen.getByTestId("running-turn-bubble");
+    expect(bubble).toBeTruthy();
+    expect(bubble.textContent).toContain("deploy the staging build");
+  });
+
+  it("auto-hides the optimistic bubble once the real turn materialises (tail ChatNode text matches)", () => {
+    // Raw-records / ground-truth landed: newest ChatNode's
+    // userMessage.content === runningPromptText → no duplicate.
+    const cf = flow([cn("a", null, "earlier turn"), cn("b", "a", "deploy the staging build")]);
+    seed(cf, "b");
+    setInflight({ state: "running", runningPromptText: "deploy the staging build" });
+    render(
+      <ConversationView sessionId={SID} chatFlow={cf} showPendingQueue />,
+    );
+    expect(screen.queryByTestId("running-turn-bubble")).toBeNull();
+    // The real bubble is the one showing it, exactly once.
+    expect(screen.getByTestId("conversation-bubble-b").textContent).toContain(
+      "deploy the staging build",
+    );
+  });
+
+  it("does NOT render the optimistic bubble when the session is idle (no in-flight turn)", () => {
+    // Stale runningPromptText must not leak a ghost bubble once idle.
+    const cf = flow([cn("a", null, "hello")]);
+    seed(cf, "a");
+    setInflight({ state: "idle", runningPromptText: "a finished prompt" });
+    render(
+      <ConversationView sessionId={SID} chatFlow={cf} showPendingQueue />,
+    );
+    expect(screen.queryByTestId("running-turn-bubble")).toBeNull();
+  });
+
+  it("keeps the optimistic bubble while running even if an OLDER unrelated ChatNode is the tail", () => {
+    // A prior turn's node is the tail; the just-sent prompt's node
+    // hasn't flushed yet → tail text ≠ runningPromptText → still show.
+    const cf = flow([cn("a", null, "an unrelated previous prompt")]);
+    seed(cf, "a");
+    setInflight({ state: "running", runningPromptText: "the brand new prompt" });
+    render(
+      <ConversationView sessionId={SID} chatFlow={cf} showPendingQueue />,
+    );
+    const bubble = screen.getByTestId("running-turn-bubble");
+    expect(bubble.textContent).toContain("the brand new prompt");
+  });
+
+  it("is suppressed when showPendingQueue is false (only the live path opts in)", () => {
+    const cf = flow([]);
+    seed(cf, null);
+    setInflight({ state: "running", runningPromptText: "should not show here" });
+    render(<ConversationView sessionId={SID} chatFlow={cf} />);
+    expect(screen.queryByTestId("running-turn-bubble")).toBeNull();
+  });
+});

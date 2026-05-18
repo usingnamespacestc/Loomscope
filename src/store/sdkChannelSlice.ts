@@ -88,6 +88,19 @@ export interface SdkInflight {
    *  fresh Query produced output) or by a 10s timeout, whichever
    *  fires first. Null when no respawn is in flight. */
   respawnNotice: { startedAt: number; reason: RespawnReason } | null;
+  /** P1 (2026-05-17): text of the prompt currently EXECUTING
+   *  (currentRun), retained across the pending→running transition.
+   *  When a Loomscope-composer prompt is dequeued to run it leaves
+   *  `pendingPrompts` (its PendingBubble vanishes), but the SDK
+   *  subprocess only flushes the user record to jsonl ~tens of
+   *  seconds later — so for that whole window there is NO ChatNode
+   *  and NO pending bubble, only the running-time stat (P1 report).
+   *  The conversation renders an optimistic "running turn" bubble
+   *  from this so the user's just-sent message shows immediately.
+   *  null when nothing is executing.
+   *  中: 正在执行的 prompt 文本，跨 pending→running 保留，供对话面板
+   *  在 jsonl 落盘前即时显示"运行中的这一轮"。 */
+  runningPromptText: string | null;
 }
 
 const EMPTY_INFLIGHT: SdkInflight = {
@@ -96,6 +109,7 @@ const EMPTY_INFLIGHT: SdkInflight = {
   pendingPrompts: [],
   lastError: null,
   respawnNotice: null,
+  runningPromptText: null,
 };
 
 export interface SdkChannelSlice {
@@ -163,12 +177,27 @@ export const createSdkChannelSlice: StateCreator<
 
   applySdkQueueState: (sessionId, payload) => {
     const cur = get().inflightBySession.get(sessionId) ?? EMPTY_INFLIGHT;
+    // P1: resolve the running prompt's text across pending→running.
+    // Priority: still-listed in this payload → the item that just
+    // left cur.pendingPrompts to run → keep prior text if the SAME
+    // item is still currentRun (no pendings to re-derive from) →
+    // null. Cleared whenever nothing is executing.
+    // 中: 解析正在执行 prompt 的文本，跨 pending→running 保留。
+    let runningPromptText: string | null = null;
+    if (payload.currentRun) {
+      const id = payload.currentRun.promptItemId;
+      runningPromptText =
+        payload.pendingPrompts.find((p) => p.id === id)?.text ??
+        cur.pendingPrompts.find((p) => p.id === id)?.text ??
+        (cur.currentRun?.promptItemId === id ? cur.runningPromptText : null);
+    }
     const next: SdkInflight = {
       state: payload.state,
       currentRun: payload.currentRun,
       pendingPrompts: payload.pendingPrompts,
       lastError: cur.lastError, // queue-state events don't override errors
       respawnNotice: cur.respawnNotice, // ditto for the race banner
+      runningPromptText,
     };
     const m = new Map(get().inflightBySession);
     m.set(sessionId, next);
@@ -205,6 +234,10 @@ export const createSdkChannelSlice: StateCreator<
         pendingPrompts: cur.pendingPrompts,
         lastError: null,
         respawnNotice: cur.respawnNotice,
+        // P1: a mid-respawn close is transient — the same turn keeps
+        // running after the fresh spawn; retain its text so the
+        // optimistic running bubble doesn't flicker off.
+        runningPromptText: cur.runningPromptText,
       });
       set({ inflightBySession: m });
       return;

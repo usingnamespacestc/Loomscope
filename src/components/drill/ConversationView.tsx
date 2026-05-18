@@ -641,12 +641,22 @@ export function ConversationView({
   }, [setConversationHovered, isLocked]);
 
   if (!chatFlow || path.length === 0) {
+    // P1: a session with NO committed ChatNodes yet (first-ever
+    // message, or all prior on another branch) can still have an
+    // in-flight SDK turn whose user record hasn't flushed. Don't
+    // dead-end on the empty hint — surface the optimistic bubble +
+    // the AskUserQuestion panel (a question can arrive before the
+    // first node exists) so the live path is never blank.
     return (
       <div
         data-testid="conversation-empty"
-        className="flex h-full items-center justify-center text-[12px] text-gray-400 italic"
+        className="flex h-full flex-col"
       >
-        还没有消息可显示
+        {showPendingQueue && <PendingQueueBlock sessionId={sessionId} />}
+        <AskUserQuestionPanel sessionId={sessionId} />
+        <div className="flex flex-1 items-center justify-center text-[12px] text-gray-400 italic">
+          还没有消息可显示
+        </div>
       </div>
     );
   }
@@ -755,7 +765,14 @@ function PendingQueueBlock({ sessionId }: { sessionId: string }) {
   const pending = useStore(
     (s) => s.inflightBySession.get(sessionId)?.pendingPrompts ?? EMPTY_PENDING,
   );
-  if (pending.length === 0) return null;
+  // P1 (2026-05-17): optimistic "running turn" bubble — see
+  // selectOptimisticRunningText. Shows the just-sent prompt while it
+  // executes but before its jsonl flush; auto-hides the instant the
+  // real turn materialises.
+  const runningText = useStore((s) =>
+    selectOptimisticRunningText(s, sessionId),
+  );
+  if (pending.length === 0 && !runningText) return null;
   return (
     <div
       data-testid="pending-queue"
@@ -772,11 +789,52 @@ function PendingQueueBlock({ sessionId }: { sessionId: string }) {
           t={t}
         />
       ))}
+      {runningText && (
+        <div
+          data-testid="running-turn-bubble"
+          className="flex items-start justify-end gap-1.5"
+        >
+          <div className="max-w-[85%] rounded-2xl border border-dashed border-blue-300 bg-blue-50 px-3 py-2 text-[12px] text-blue-700 whitespace-pre-wrap break-words">
+            <span className="mr-1 inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-blue-400">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" />
+              {t("composer.running_label")}
+            </span>
+            {runningText}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 const EMPTY_PENDING: ReadonlyArray<never> = Object.freeze([]);
+
+// P1 (2026-05-17): resolve the optimistic "running turn" text — the
+// just-sent Loomscope-composer prompt that is EXECUTING but whose
+// user record hasn't flushed to jsonl yet (so no ChatNode, no
+// pending bubble — only the running-time stat without this). Returns
+// the text to show, or null once it must NOT show: not running, no
+// retained text, or the real turn already materialised (its text is
+// the newest ChatNode's userMessage — raw-records placeholder OR
+// ground-truth → avoid a duplicate). O(1): only the tail node can be
+// the just-sent turn. Shared by the empty-state guard + the queue
+// block so both agree on visibility.
+// 中: 解析"运行中这一轮"的乐观文本；真节点一出现（尾节点文本匹配）
+// 立刻返回 null，空状态守卫与队列块共用，保持一致。
+function selectOptimisticRunningText(
+  s: ReturnType<typeof useStore.getState>,
+  sessionId: string,
+): string | null {
+  const inf = s.inflightBySession.get(sessionId);
+  if (!inf || inf.state !== "running" || !inf.runningPromptText) return null;
+  const nodes = s.sessions.get(sessionId)?.chatFlow?.chatNodes;
+  const last = nodes && nodes.length > 0 ? nodes[nodes.length - 1] : null;
+  const lastContent = last?.userMessage?.content;
+  if (typeof lastContent === "string" && lastContent === inf.runningPromptText) {
+    return null;
+  }
+  return inf.runningPromptText;
+}
 
 function PendingBubble({
   itemId,

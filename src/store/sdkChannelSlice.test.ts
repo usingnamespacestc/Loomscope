@@ -205,3 +205,131 @@ describe("sdkChannelSlice — rate-limit events (v2.0.1 PR A)", () => {
     expect(useStore.getState().rateLimitBySession.has(SID_A)).toBe(false);
   });
 });
+
+describe("sdkChannelSlice — P1 running-prompt text (optimistic SDK turn)", () => {
+  // P1: Loomscope-composer send → sdk-queue-state shows the prompt
+  // pending (PendingBubble), then it's dequeued to run (currentRun
+  // set, pendingPrompts no longer lists it). The SDK subprocess only
+  // flushes the user record to jsonl ~60s later, so for that whole
+  // window NO PendingBubble (it's running not pending) and NO
+  // ChatNode (jsonl unwritten) — only the running-time stat shows.
+  // Fix: retain the running prompt's text so the conversation can
+  // render an optimistic "running turn" bubble immediately.
+  const SID = "33333333-3333-4000-8000-000000000ccc";
+
+  it("retains runningPromptText across the pending→running transition", () => {
+    // Enqueue: prompt is pending.
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: null,
+      pendingPrompts: [
+        {
+          id: "q1",
+          text: "请帮我重构这个模块",
+          imageCount: 0,
+          priority: "now",
+          createdAt: 1,
+        },
+      ],
+    });
+    expect(getInflight(useStore.getState(), SID).runningPromptText).toBeNull();
+
+    // Dequeued to run: currentRun set, pendingPrompts no longer has it.
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: { promptItemId: "q1", startedAt: 2 },
+      pendingPrompts: [],
+    });
+    expect(getInflight(useStore.getState(), SID).runningPromptText).toBe(
+      "请帮我重构这个模块",
+    );
+  });
+
+  it("resolves running text from payload.pendingPrompts if still listed", () => {
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: { promptItemId: "q9", startedAt: 5 },
+      pendingPrompts: [
+        {
+          id: "q9",
+          text: "still listed while running",
+          imageCount: 0,
+          priority: "now",
+          createdAt: 5,
+        },
+      ],
+    });
+    expect(getInflight(useStore.getState(), SID).runningPromptText).toBe(
+      "still listed while running",
+    );
+  });
+
+  it("keeps runningPromptText while the same prompt stays currentRun", () => {
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: null,
+      pendingPrompts: [
+        { id: "qX", text: "long task", imageCount: 0, priority: "now", createdAt: 1 },
+      ],
+    });
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: { promptItemId: "qX", startedAt: 2 },
+      pendingPrompts: [],
+    });
+    // A later queue-state still running the SAME item, no pendings to
+    // re-derive from → text must persist (not flicker to null).
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: { promptItemId: "qX", startedAt: 2 },
+      pendingPrompts: [],
+    });
+    expect(getInflight(useStore.getState(), SID).runningPromptText).toBe(
+      "long task",
+    );
+  });
+
+  it("clears runningPromptText when the turn goes idle", () => {
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: null,
+      pendingPrompts: [
+        { id: "qz", text: "x", imageCount: 0, priority: "now", createdAt: 1 },
+      ],
+    });
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: { promptItemId: "qz", startedAt: 2 },
+      pendingPrompts: [],
+    });
+    expect(getInflight(useStore.getState(), SID).runningPromptText).toBe("x");
+    useStore.getState().applySdkQueueState(SID, {
+      state: "idle",
+      currentRun: null,
+      pendingPrompts: [],
+    });
+    expect(getInflight(useStore.getState(), SID).runningPromptText).toBeNull();
+  });
+
+  it("clearSdkSession mid-respawn preserves runningPromptText", () => {
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: null,
+      pendingPrompts: [
+        { id: "qr", text: "respawn me", imageCount: 0, priority: "now", createdAt: 1 },
+      ],
+    });
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: { promptItemId: "qr", startedAt: 2 },
+      pendingPrompts: [],
+    });
+    useStore
+      .getState()
+      .setRespawnNotice(SID, { startedAt: 3, reason: "per-send" });
+    useStore.getState().clearSdkSession(SID);
+    expect(getInflight(useStore.getState(), SID).runningPromptText).toBe(
+      "respawn me",
+    );
+  });
+});

@@ -200,6 +200,7 @@
     "stop_tooltip": "中断当前 turn",
     "stop_and_send_tooltip": "中断并立刻发送（now 优先级）",
     "pending_label": "排队",
+    "running_label": "运行中",
     "pending_image_only": "(仅图片)",
     "queue_cancel_tooltip": "取消这条排队",
     "priority_now_tooltip": "now 优先级 — 中断当前 turn",

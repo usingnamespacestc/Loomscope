@@ -200,6 +200,7 @@
     "stop_tooltip": "Stop the current turn",
     "stop_and_send_tooltip": "Stop and send immediately (now priority)",
     "pending_label": "queued",
+    "running_label": "running",
     "pending_image_only": "(image only)",
     "queue_cancel_tooltip": "Cancel this queued item",
     "priority_now_tooltip": "now priority — interrupts the current turn",
