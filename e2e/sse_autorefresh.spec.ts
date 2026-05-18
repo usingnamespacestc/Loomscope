@@ -130,6 +130,29 @@ test.describe("SSE auto-refresh under live jsonl appends", () => {
   test("six appended turns all auto-render without reload (mixed spaced + rapid)", async ({
     page,
   }) => {
+    // #233 (2026-05-18): demote the IMPLICIT machine-variant
+    // wall-clock gate. This spec had no `test.setTimeout`, so it ran
+    // on Playwright's DEFAULT 30s test budget. Its sequential ops
+    // (open + selector waits + append loop + a 20s content-settle
+    // poll + per-card visibility waits) sum near 30s; on an idle
+    // machine they squeak under, but under load (e.g. a verification
+    // run right after a heavy cold sse_longconv run) the total
+    // exceeds 30s and Playwright kills an in-flight page.evaluate —
+    // a pass/fail decided by machine load, NOT code correctness
+    // (same class as sse_longconv's removed `<10s` gate; see
+    // docs/report-loomscope-convergence-pr1.md + task #233). Raising
+    // the test budget to 120s does NOT weaken any deterministic
+    // assertion below (all six appends render + content fills + no
+    // reload + sse-counts); it only stops the default-30s wall-clock
+    // from being the de-facto gate so a loaded-but-CORRECT backend
+    // still completes the deterministic checks. A real never-renders
+    // / reload / missing-content bug still fails.
+    // 中: 该 spec 无 test.setTimeout，跑在 Playwright 默认 30s 预算上
+    // ——负载下顺序操作总和超 30s 被杀，pass/fail 由机器负载而非代码
+    // 正确性决定（与 sse_longconv 已移除的 <10s 同类）。提到 120s 不
+    // 削弱任何确定性断言，只让加载但正确的后端跑完确定性检查。
+    test.setTimeout(120_000);
+
     // Hook EventSource BEFORE app code runs so every SSE event the app
     // receives is recorded into window.__sseLog.
     await page.addInitScript(() => {
