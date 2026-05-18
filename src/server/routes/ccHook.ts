@@ -215,16 +215,28 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
       //       Other tools (Bash/Read/Write/etc) still gate on the
       //       explicit toggle — those genuinely block CC and need the
       //       user's deliberate opt-in.
-      //   (b) CC's hook MUST NOT be in `bypassPermissions` mode. The
-      //       user said "don't ask"; honoring that means hands-off
-      //       even for AskUserQuestion (CC's TUI rotate still works).
-      // Either check failing → fall through to 204 (existing v∞.0
+      //   (b) For PERMISSION tools (Bash/Read/Write/…): CC's hook MUST
+      //       NOT be in `bypassPermissions` mode. The user said
+      //       "don't ask me to approve tool calls"; honoring that
+      //       means hands-off.
+      //   (c) EXCEPTION — AskUserQuestion is NOT a permission gate, it
+      //       is the agent asking the *user a question*.
+      //       `bypassPermissions` ("don't prompt me to approve tools")
+      //       has nothing to say about answering a question, and CC
+      //       still surfaces AUQ in bypass mode (it's not a perm
+      //       prompt). So AUQ enters the long-poll regardless of
+      //       BOTH the toggle AND bypass mode — otherwise the user
+      //       sees the PermissionRequest banner but no in-conversation
+      //       answer Panel and is forced back to the terminal (P4,
+      //       2026-05-17). Real permission tools keep the full
+      //       `interactiveOn && !bypassMode` gate (P4 guard test).
+      // Failing the gate → fall through to 204 (existing v∞.0
       // contract). When the gate IS active and no rule pre-matches,
       // we hold the HTTP response on a Promise; the browser POSTs
       // /decision to resolve.
       //
-      // 中: 闸放行条件 = interactiveOn 或 AskUserQuestion 工具
-      //（AskUserQuestion 本质是询问不是 permission），且非 bypass 模式。
+      // 中: 闸放行 = AskUserQuestion（问问题，不受 toggle/bypass 限制）
+      //   或 (interactiveOn 且 非 bypass)（真权限工具）。
       const interactiveOn =
         opts.isInteractivePermissionsEnabled?.() === true;
       const bypassMode = envelope.permission_mode === "bypassPermissions";
@@ -235,8 +247,7 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
       const isAskUserQuestion = preToolName === "AskUserQuestion";
       if (
         event === "PreToolUse" &&
-        (interactiveOn || isAskUserQuestion) &&
-        !bypassMode &&
+        (isAskUserQuestion || (interactiveOn && !bypassMode)) &&
         opts.getPermissionRules
       ) {
         const toolName = preToolName;

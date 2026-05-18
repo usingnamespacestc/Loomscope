@@ -402,6 +402,88 @@ describe("POST /api/cc-hook — PreToolUse interactive gate (v2.3 PR F1)", () =>
     expect(res.status).toBe(204);
   });
 
+  // P4 (2026-05-17): AskUserQuestion must enter the long-poll even
+  // under permission_mode="bypassPermissions". bypassPermissions
+  // means "don't ask me to APPROVE tool calls" — it must NOT suppress
+  // answering the agent's QUESTION. Before the fix the gate's
+  // `&& !bypassMode` killed AUQ too: user saw the PermissionRequest
+  // banner but never the in-conversation AskUserQuestionPanel, and
+  // had to answer in the terminal.
+  // 中: bypassPermissions 是"别让我批工具"，不该闷掉"回答提问"。
+  it("P4: AskUserQuestion long-polls even under bypassPermissions", async () => {
+    const hookPromise = postHook({
+      event: "PreToolUse",
+      body: {
+        session_id: "sid-auq-bypass",
+        tool_name: "AskUserQuestion",
+        tool_input: {
+          questions: [
+            {
+              question: "Ship it?",
+              options: [
+                { label: "yes", description: "" },
+                { label: "no", description: "" },
+              ],
+            },
+          ],
+        },
+        permission_mode: "bypassPermissions",
+        // enableInteractivePermissions stays OFF (default) — AUQ must
+        // still long-poll regardless of toggle AND bypass.
+      },
+      secret: SECRET,
+    });
+
+    const { _peekPendingForTests } = await import(
+      "@/server/services/httpHookPermissionGate"
+    );
+    let promptId: string | undefined;
+    for (let i = 0; i < 50 && !promptId; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+      const pending = _peekPendingForTests();
+      promptId = pending.find(
+        (p) => p.sessionId === "sid-auq-bypass",
+      )?.promptId;
+    }
+    expect(
+      promptId,
+      "AskUserQuestion must register a pending prompt even in bypassPermissions",
+    ).toBeTruthy();
+
+    await app.request("/api/cc-hook/decision", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Loomscope-Token": TOKEN,
+      },
+      body: JSON.stringify({
+        promptId,
+        behavior: "allow",
+        updatedInput: { questions: [], answers: { "Ship it?": "yes" } },
+      }),
+    });
+    const hookRes = await hookPromise;
+    expect(hookRes.status).toBe(200);
+  });
+
+  it("P4 guard: non-AUQ tool under bypassPermissions still 204s (bypass contract intact)", async () => {
+    // The AUQ exemption must NOT leak: a real permission tool in
+    // bypass mode must still pass straight through (the user said
+    // "don't ask me to approve tools").
+    // 中: 例外只给 AUQ；真权限工具 bypass 下仍直通。
+    const res = await postHook({
+      event: "PreToolUse",
+      body: {
+        session_id: "sid-bash-bypass",
+        tool_name: "Bash",
+        tool_input: { command: "rm -rf /tmp/x" },
+        permission_mode: "bypassPermissions",
+      },
+      secret: SECRET,
+    });
+    expect(res.status).toBe(204);
+  });
+
   it("/decision returns 404 for unknown promptId", async () => {
     const res = await app.request("/api/cc-hook/decision", {
       method: "POST",
