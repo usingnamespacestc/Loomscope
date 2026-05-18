@@ -1,9 +1,34 @@
 # PR-1 report — loomId + version watermark plumbing
 
 Companion to `docs/handoff-loomscope-convergence-pr1.md`. Status:
-**code-complete + deterministically proven zero-behaviour-change;
-e2e same-range gate BLOCKED by a pre-existing red baseline unrelated
-to PR-1 (tracked as task #232).**
+**PR-1 code-complete + deterministically proven zero-behaviour-change
+(91dac34, 22f7e6a). The pre-PR-1-baseline-red was traced to a real
+regression #232 (my own c864efe/05795b8) — now FIXED + verified
+(bdf6165). The e2e "4 consecutive pass" gate's only residual blocker
+is the spec's tight worst-append<10s threshold being flaky on a
+multi-hour-stale tsx-watch dev server — an environment precondition
+(the DoD itself says "dev server restarted then e2e") I cannot
+perform autonomously.**
+
+### Final e2e evidence (8 idle runs, identical code bdf6165)
+
+| | open→first-card | 6 appends | worst-append | pass |
+|---|---|---|---|---|
+| Batch 1 ×4 | 4544 / 6072 / 6067 / 4501 ms | all render every run | 7420 / 7322 / **11406** / 7331 | 3/4 |
+| Batch 2 ×4 | 4587 / 4563 / 4494 / 4507 ms | all render every run | **11487 / 11198 / 11275 / 11262** | 0/4 |
+
+- **#232 regression eliminated, rock-solid across all 8**:
+  open→first-card 4.5–6 s (was 8475 ms broken); all 6 appends render
+  every single run (was all-null). This is the substantive fix.
+- worst-append: batch 1 ~7.3 s (passing), batch 2 consistently
+  ~11.2 s (failing) — **same code, same idle machine, ~10 min
+  apart**. Not code, not the regression, not a load spike (batch 2
+  is consistent, not variance): the long-running `tsx watch` dev
+  server has degraded over this multi-hour session (the documented
+  stale-dev-server landmine). A server restart — which the DoD
+  explicitly lists as a precondition ("dev server restarted then
+  e2e") — is required and is the user's action (their terminal
+  process; agent must not kill it).
 
 ## Commits (pushed to origin/main)
 
