@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  NODE_HEIGHT,
+  NODE_WIDTH,
   chatFlowLayoutSignature,
   distinctToolUseFiles,
   distinctTouchedFiles,
   layoutChatFlow,
   lastAssistantPreview,
   maxContextForModel,
+  nodeCenterPoint,
   nodeOwnFileChanges,
   previewUserContent,
 } from "@/canvas/layoutDag";
@@ -1119,5 +1122,48 @@ describe("chatFlowLayoutSignature (2026-05-16 perf)", () => {
       }),
     ]);
     expect(chatFlowLayoutSignature(b)).not.toBe(chatFlowLayoutSignature(a));
+  });
+});
+
+describe("nodeCenterPoint — NaN-position guard (2026-05-18)", () => {
+  it("returns the geometric centre for a laid-out node", () => {
+    const c = nodeCenterPoint({
+      position: { x: 100, y: 200 },
+      measured: { width: 208, height: 260 },
+    });
+    expect(c).toEqual({ cx: 100 + 208 / 2, cy: 200 + 260 / 2 });
+  });
+
+  it("falls back to NODE_WIDTH/HEIGHT when not measured yet", () => {
+    const c = nodeCenterPoint({ position: { x: 0, y: 0 } });
+    expect(c).toEqual({ cx: NODE_WIDTH / 2, cy: NODE_HEIGHT / 2 });
+  });
+
+  it("returns null when position is NaN (placeholder appended ahead of layout)", () => {
+    // The reported bug: an optimistic / raw-records placeholder
+    // ChatNode is in the RF store with a NaN position; feeding that
+    // into setCenter spammed dozens of `Received NaN for the y
+    // attribute` / `<circle> cx "NaN"` console errors.
+    expect(
+      nodeCenterPoint({ position: { x: NaN, y: NaN } }),
+    ).toBeNull();
+    expect(nodeCenterPoint({ position: { x: 10, y: NaN } })).toBeNull();
+    expect(nodeCenterPoint({ position: { x: NaN, y: 10 } })).toBeNull();
+  });
+
+  it("returns null when position is missing entirely", () => {
+    expect(nodeCenterPoint({})).toBeNull();
+    expect(
+      nodeCenterPoint({ measured: { width: 10, height: 10 } }),
+    ).toBeNull();
+  });
+
+  it("returns null for non-finite Infinity positions too", () => {
+    expect(
+      nodeCenterPoint({ position: { x: Infinity, y: 0 } }),
+    ).toBeNull();
+    expect(
+      nodeCenterPoint({ position: { x: 0, y: -Infinity } }),
+    ).toBeNull();
   });
 });

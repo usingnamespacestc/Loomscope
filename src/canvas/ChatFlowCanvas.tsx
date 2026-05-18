@@ -43,6 +43,7 @@ import {
   chatFlowLayoutSignature,
   incrementalAppendLayout,
   layoutChatFlow,
+  nodeCenterPoint,
   type PrevLayout,
 } from "@/canvas/layoutDag";
 import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
@@ -209,17 +210,20 @@ interface CanvasInnerProps extends ChatFlowCanvasProps {
 // 首屏 + 点击 focus 两条路径共用此 bias，消除刷新前后视觉漂移。
 const CANVAS_FOCUS_BIAS_Y_PX = 16;
 
+// Returns false (no-op) when the node has no finite dagre position
+// yet — see nodeCenterPoint. Callers with a pending-pan retry should
+// keep the target pending so the post-layout drain re-attempts.
 function panToNodeCenter(
   rf: ReturnType<typeof useReactFlow>,
   node: { position: { x: number; y: number }; measured?: { width?: number; height?: number } },
   opts: { duration?: number } = {},
-): void {
-  const w = node.measured?.width ?? NODE_WIDTH;
-  const h = node.measured?.height ?? NODE_HEIGHT;
+): boolean {
+  const c = nodeCenterPoint(node);
+  if (!c) return false;
   const vp = rf.getViewport();
   rf.setCenter(
-    node.position.x + w / 2,
-    node.position.y + h / 2 + CANVAS_FOCUS_BIAS_Y_PX / vp.zoom,
+    c.cx,
+    c.cy + CANVAS_FOCUS_BIAS_Y_PX / vp.zoom,
     {
       zoom: vp.zoom,
       // Default 200ms for click-focus animation; first-paint passes 0
@@ -229,6 +233,7 @@ function panToNodeCenter(
       duration: opts.duration ?? 200,
     },
   );
+  return true;
 }
 
 function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasInnerProps) {
@@ -647,11 +652,18 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     const zoomX = rfPixelW / (w * (1 + padding));
     const zoomY = rfPixelH / (h * (1 + padding));
     const zoom = Math.max(0.5, Math.min(1.0, Math.min(zoomX, zoomY)));
-    rf.setCenter(
-      node.position.x + w / 2,
-      node.position.y + h / 2 + CANVAS_FOCUS_BIAS_Y_PX / zoom,
-      { zoom, duration: 0 },
-    );
+    // Same NaN guard as panToNodeCenter: skip the setCenter when the
+    // latest node has no finite position yet (avoids unblurring the
+    // canvas onto a NaN viewport). Still mark first-paint ready so the
+    // canvas is never stuck behind the opacity gate; the pending-pan /
+    // selection effects re-pan once dagre assigns a coordinate.
+    const c = nodeCenterPoint(node);
+    if (c) {
+      rf.setCenter(c.cx, c.cy + CANVAS_FOCUS_BIAS_Y_PX / zoom, {
+        zoom,
+        duration: 0,
+      });
+    }
     setFirstPaintReady(true);
   }, [chatFlow.id, latestNodeId, latestNodeMeasured, rfPixelW, rfPixelH, rf]);
 
@@ -698,8 +710,15 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
       pendingPanRef.current = targetId;
       if (chain.length === 0) {
         const node = rf.getNode(targetId);
-        if (node) panToNodeCenter(rf, node);
-        pendingPanRef.current = null;
+        // Only clear the pending target if the pan actually landed.
+        // If the node exists but has no finite position yet (optimistic
+        // / placeholder appended ahead of layout), panToNodeCenter
+        // no-ops → keep it pending so the post-layout drain effect
+        // re-attempts once dagre assigns a real coordinate (instead of
+        // feeding NaN into setCenter and spamming the console).
+        if (node && panToNodeCenter(rf, node)) {
+          pendingPanRef.current = null;
+        }
       }
       if (mode === "click") return; // persistent: no release
       // EN (hover preview release): caller (ConversationView's
@@ -733,8 +752,10 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     if (!target) return;
     const node = rf.getNode(target);
     if (!node) return; // Still hidden — wait for the next layout.
-    panToNodeCenter(rf, node);
-    pendingPanRef.current = null;
+    // Keep pending if the node exists but isn't laid out yet; this
+    // effect re-runs on every `nodes` (layout) commit, so it converges
+    // once dagre assigns the placeholder a finite position.
+    if (panToNodeCenter(rf, node)) pendingPanRef.current = null;
   }, [nodes, rf]);
 
   // EN (v0.9.1): canvas-pan-on-selection-change. selectedNodeId can

@@ -43,6 +43,30 @@ export const NODE_HEIGHT = 260;
 export const RANKSEP = 90;
 export const NODESEP = 24;
 
+// EN (2026-05-18): geometric centre of a React Flow node, or null if
+// the node has NO finite dagre position yet. A ChatNode can exist in
+// the RF store (optimistic / raw-records placeholder appended ahead
+// of the next layout commit) with `position = {x:NaN,y:NaN}`. Feeding
+// that into `setCenter` spams the console with dozens of
+// `Received NaN for the y attribute` / `<circle> cx "NaN"` errors and
+// corrupts the viewport (the bug this guards). Returning null lets
+// callers treat "exists but not laid out" the same as "not found" —
+// the post-layout pending-pan drain retries once dagre assigns a
+// real coordinate. Pure (no RF dep) so it is unit-testable.
+// 中: 节点几何中心；dagre 还没给有限坐标(乐观/占位节点抢在 layout
+// 前)就返回 null,避免把 NaN 喂进 setCenter 刷爆 console + 毁视口。
+export function nodeCenterPoint(node: {
+  position?: { x: number; y: number };
+  measured?: { width?: number; height?: number };
+}): { cx: number; cy: number } | null {
+  const px = node.position?.x;
+  const py = node.position?.y;
+  if (!Number.isFinite(px) || !Number.isFinite(py)) return null;
+  const w = node.measured?.width ?? NODE_WIDTH;
+  const h = node.measured?.height ?? NODE_HEIGHT;
+  return { cx: (px as number) + w / 2, cy: (py as number) + h / 2 };
+}
+
 export interface ChatNodeRFData extends Record<string, unknown> {
   chatNode: ChatNode;
   // Pre-computed previews so the card doesn't repeat work each render.
