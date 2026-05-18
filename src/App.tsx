@@ -33,6 +33,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { useKeyboardNav } from "@/hooks/useKeyboardNav";
 import {
   SSE_STALE_MS,
+  SSE_WATCHDOG_COOLDOWN_MS,
   SSE_WATCHDOG_TICK_MS,
   createSseWatchdog,
 } from "@/sse/stalenessWatchdog";
@@ -201,7 +202,17 @@ export default function App() {
     // resyncs when nothing has arrived for SSE_STALE_MS.
     // 中: SSE 半开时浏览器不报 error → 不重连。包裹 addEventListener
     // 让任何事件都喂 watchdog；超时强制重连 + 重新同步。
-    const watchdog = createSseWatchdog({ staleMs: SSE_STALE_MS });
+    const watchdog = createSseWatchdog({
+      staleMs: SSE_STALE_MS,
+      cooldownMs: SSE_WATCHDOG_COOLDOWN_MS,
+    });
+    // Non-reentrancy guard. The recovery awaits a full refreshSession
+    // (heavy on a huge session); a plain effect-local flag is enough
+    // because the sseEpoch bump re-runs the whole effect → a fresh
+    // closure with recovering=false for the new connection.
+    // 中: recovery 期间禁止再次触发；epoch 重建 effect 时新闭包自动
+    // 复位，不需要 useRef。
+    let recovering = false;
     const rawAdd = es.addEventListener.bind(es);
     es.addEventListener = ((
       type: string,
@@ -684,25 +695,39 @@ export default function App() {
       console.warn("[loomscope] sse error (EventSource will auto-retry)");
     };
     // P5/P2/P3 (2026-05-17): watchdog poll. On a detected half-open
-    // socket: do the SAME resync #327995e does on a real reconnect
-    // (this connection is dead and the browser won't tell us), then
-    // recreate the EventSource via the epoch bump so future live
-    // events resume. We clear pendingPermission + currentTurn because
-    // their clearing cc-hook events (PostToolUse/Stop/Denied) may
-    // have been the ones missed while the socket was dark — leaving
-    // them would keep the banner / running-time stuck. Genuinely-
-    // still-pending prompts are re-pushed by the NEW connection's
-    // subscribe-time catchup (sessions.ts replays getPendingPermission
-    // + httpHookPendingFor), so clearing is safe.
-    // 中: 半开时做 #327995e 同款重同步（连接已死浏览器不报）+ 清掉
-    // pendingPermission/currentTurn（它们的清除事件可能正是漏掉的），
-    // 再通过 epoch 重建 EventSource；真未决 prompt 由新连接订阅期
-    // catchup 重新推回，清掉是安全的。
+    // socket, recover in this strict order — REFRESH FIRST, then
+    // recreate — and make the whole thing non-reentrant + awaited:
+    //
+    //   1. clear pendingPermission + currentTurn — their clearing
+    //      cc-hook events (PostToolUse/Stop/Denied) may be exactly
+    //      what was missed in the dark window; leaving them keeps the
+    //      banner / running-time stuck (the core P5 symptom). Cheap.
+    //   2. await refreshSession — pull ground truth (incl. any turns
+    //      whose deltas were missed). This RECONCILES; we deliberately
+    //      do NOT null lastDeltaSeq (the old code did): the explicit
+    //      refresh already gets ground truth, and the natural seq-gap
+    //      detector elsewhere will refresh again if a later delta
+    //      still doesn't line up — nulling just FORCED a second heavy
+    //      rebuild, compounding jank on huge sessions.
+    //   3. only AFTER the refresh resolves: close + recreate the ES
+    //      (epoch bump) so live events resume on a fresh socket.
+    //
+    // `recovering` makes this run AT MOST ONCE until it completes, and
+    // the watchdog's own cooldownMs bars another trip for 60 s. On a
+    // genuine half-open socket the server is idle so refreshSession
+    // returns fast (one-time cost). On a huge BUSY session a misfire
+    // costs exactly one extra refresh — bounded, never a storm. This
+    // is the fix for the sse_longconv regression where the recovery
+    // janked → re-tripped → storm → all appends lost.
+    // 中: 半开恢复严格顺序——先 await refreshSession 补全（不再清
+    // lastDeltaSeq，避免二次重建），再重建 EventSource；recovering +
+    // cooldown 保证一次 trip 最多一次 recovery，杜绝大 session 风暴。
     const watchdogTimer = window.setInterval(() => {
-      if (!watchdog.check()) return;
+      if (recovering || !watchdog.check()) return;
+      recovering = true;
       // eslint-disable-next-line no-console
       console.warn(
-        `[loomscope] SSE silent > ${SSE_STALE_MS}ms — assuming half-open, force reconnect + resync`,
+        `[loomscope] SSE silent > ${SSE_STALE_MS}ms — assuming half-open, refresh-then-reconnect`,
       );
       const st = useStore.getState();
       const sessions = st.sessions;
@@ -711,17 +736,22 @@ export default function App() {
         const next = new Map(sessions);
         next.set(activeId, {
           ...cur,
-          lastDeltaSeq: null,
           pendingPermission: null,
           currentTurn: null,
         });
         useStore.setState({ sessions: next });
       }
       st.setLiveStatus("session", "error");
-      void st.refreshSession(activeId);
-      watchdog.reset();
-      es.close();
-      setSseEpoch((e) => e + 1); // re-run effect → fresh EventSource
+      void st
+        .refreshSession(activeId)
+        .catch(() => {
+          /* refreshSession swallows its own errors; ignore */
+        })
+        .finally(() => {
+          watchdog.reset();
+          es.close();
+          setSseEpoch((e) => e + 1); // re-run effect → fresh EventSource
+        });
     }, SSE_WATCHDOG_TICK_MS);
     return () => {
       window.clearInterval(watchdogTimer);

@@ -2,16 +2,22 @@
 // silently-dead (half-open) session SSE socket is detected and
 // recovered WITHOUT a manual page refresh.
 //
-// Reproduces the report: while the EventSource is silently dead
-// (no events — not even the 25 s ping; browser fires no `error`),
-// the session is frozen — pendingPermission (banner) + currentTurn
-// (running-time) stuck, content stale. Asserts the watchdog:
-//   1. closes the dead EventSource and recreates it (reconnect)
-//   2. calls refreshSession (re-pull ground-truth chatflow)
-//   3. clears pendingPermission + currentTurn (their clearing
-//      cc-hook events were the ones missed in the dark window)
-// All asserted via STORE STATE + mock-EventSource bookkeeping —
-// no wall-clock, fully deterministic (fake timers).
+// Faithful repro: the connection OPENS (fires `hello`/onopen → the
+// watchdog arms — v2 only counts staleness after the first event so
+// a slow cold-open of a huge session can't false-trip), THEN goes
+// dark — no further events, not even the 25 s ping; the browser
+// fires no `error`. The session is frozen: pendingPermission (banner)
+// + currentTurn (running-time) stuck, content stale. Asserts the
+// hardened watchdog:
+//   1. clears the stuck pendingPermission + currentTurn (their
+//      clearing cc-hook events were the ones missed in the dark)
+//   2. awaits refreshSession (ground-truth resync) FIRST
+//   3. THEN closes the dead EventSource and recreates it (reconnect)
+//   4. does NOT null lastDeltaSeq (the explicit refresh reconciles;
+//      nulling forced a second heavy rebuild — the sse_longconv
+//      regression) — it must survive unchanged
+// All asserted via STORE STATE + mock-EventSource bookkeeping — no
+// wall-clock, fully deterministic (fake timers).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render } from "@testing-library/react";
@@ -107,7 +113,9 @@ beforeEach(() => {
     "fetch",
     vi.fn(async () => new Response("[]", { status: 200 })),
   );
-  // Controllable mock EventSource that NEVER delivers events (the
+  // Controllable mock EventSource: it OPENS (fires onopen on the next
+  // macrotask — arming the watchdog, faithful to a real connection
+  // that delivered `hello`) then NEVER delivers another event (the
   // half-open / silently-dead socket the watchdog must catch).
   vi.stubGlobal(
     "EventSource",
@@ -120,6 +128,8 @@ beforeEach(() => {
         this.url = url;
         this.#self = { url, closed: false };
         esInstances.push(this.#self);
+        // Defer so App has assigned `es.onopen` by the time it fires.
+        setTimeout(() => this.onopen?.(), 0);
       }
       addEventListener() {}
       removeEventListener() {}
@@ -145,43 +155,57 @@ describe("App — SSE staleness watchdog (P5/P2/P3)", () => {
     expect(sessionInstances().length).toBe(1);
     expect(sessionInstances()[0].closed).toBe(false);
 
-    // Simulate a long silence: no SSE events at all (not even ping).
-    // Advance past the stale threshold + one watchdog tick.
+    // Let the deferred onopen fire (arms the watchdog), then a long
+    // silence: no SSE events at all (not even ping). Advance past the
+    // stale threshold + one watchdog tick. The recovery awaits
+    // refreshSession then recreates the ES — flush microtasks so the
+    // .finally (close + epoch bump → effect re-run) lands.
     await act(async () => {
+      vi.advanceTimersByTime(1);
       vi.advanceTimersByTime(SSE_STALE_MS + SSE_WATCHDOG_TICK_MS + 1_000);
     });
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(1);
+    });
 
-    // 1. dead socket closed + a fresh EventSource created (reconnect)
+    // 1. ground-truth resync requested
+    expect(useStore.getState().refreshSession).toHaveBeenCalledWith(SID);
+
+    // 2. dead socket closed + a fresh EventSource created (reconnect)
     const inst = sessionInstances();
     expect(inst.length).toBeGreaterThanOrEqual(2);
     expect(inst[0].closed).toBe(true);
     expect(inst[inst.length - 1].closed).toBe(false);
 
-    // 2. ground-truth resync requested
-    expect(useStore.getState().refreshSession).toHaveBeenCalledWith(SID);
-
-    // 3. stuck hook-driven state cleared (banner + running-time +
-    //    delta baseline) so they don't linger forever
+    // 3. stuck hook-driven state cleared (banner + running-time) so
+    //    they don't linger forever …
     const s = useStore.getState().sessions.get(SID)!;
     expect(s.pendingPermission).toBeNull();
     expect(s.currentTurn).toBeNull();
-    expect(s.lastDeltaSeq).toBeNull();
+    // 4. … but lastDeltaSeq is NOT nulled — the explicit
+    //    refreshSession reconciles ground truth; nulling only forced
+    //    a second heavy rebuild (the sse_longconv regression).
+    expect(s.lastDeltaSeq).toBe(42);
   });
 
   it("does NOT reconnect before the stale threshold (no premature trip)", async () => {
     // App-wiring assertion: the watchdog must not fire-reconnect
-    // until SSE_STALE_MS of silence has actually elapsed (a server
-    // ping arrives every 25 s, so a sub-threshold gap is normal).
-    // The "events keep the socket alive indefinitely" property is
-    // owned deterministically by stalenessWatchdog.test.ts at the
-    // unit level (no DOM/timer fragility).
+    // until SSE_STALE_MS of silence has actually elapsed AFTER the
+    // connection armed (a server ping arrives every 25 s, so a
+    // sub-threshold gap is normal). The "events keep the socket
+    // alive indefinitely" + "cold open never trips" + cooldown
+    // properties are owned deterministically by
+    // stalenessWatchdog.test.ts at the unit level.
     render(<App />);
     expect(sessionInstances().length).toBe(1);
 
     await act(async () => {
+      vi.advanceTimersByTime(1); // fire onopen (arm)
       // Just under the threshold (still well past several watchdog
       // ticks) → check() returns false every tick → no reconnect.
       vi.advanceTimersByTime(SSE_STALE_MS - SSE_WATCHDOG_TICK_MS);
+      await Promise.resolve();
     });
 
     expect(sessionInstances().length).toBe(1);
