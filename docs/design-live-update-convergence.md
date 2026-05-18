@@ -249,6 +249,13 @@ in PR-3 + PR-4.
   **supersedes §3.2 and §5 where they differ** (§3.2's
   reconcile-only model lacked a stable per-node key + a retract arm;
   §9 adds both). §1–§8 kept as rationale/history.
+- 2026-05-18: per user "mirror CC, don't invent semantics" — verified
+  CC transcript is strictly append-only (interrupt = persist
+  user+partial+marker; edit/rewind = new branch; no in-place delete).
+  §9.6 rewritten: the retract arm **collapses** to the single
+  "drop a never-persisted provisional node after a bounded window"
+  case; everything else is plain CC-aligned convergence. PR-3 scope
+  shrank accordingly.
 
 ---
 
@@ -343,20 +350,48 @@ node had no retract path). This is the highest-risk, most-tested arm.
 The client only ever sees `loomId`; where/when the binding was
 established is server-internal → "structurally consistent" holds.
 
-### 9.6 Retract-arm semantics + required e2e matrix (user's verification demand)
+### 9.6 Retract-arm semantics — mirror CC (verified), which collapses it
 
-Ground truth (file reconcile) is authoritative. Hook lifecycle
-signals drive **immediate** optimistic retraction; file reconcile
-**confirms or corrects** it. Mandatory e2e matrix (large real
-session + artificially dropped/late events — the recurring lesson):
+Principle (user): **don't invent delete/mutate semantics — mirror how
+CC itself displays and persists these.** Verified from CC source
+(`~/claude-code-source-code`):
 
-| Scenario | Expected |
-|---|---|
-| turn interrupted (Stop/abort mid-stream) | provisional node kept but marked incomplete; reconcile fills or removes |
-| send cancelled before dispatch | provisional node removed; no ghost |
-| turn deleted backend-side | reconcile removes the node; no orphan edge |
-| message re-edited / re-sent | old `loomId` retracted or remapped; exactly one node, no duplicate |
-| redundant/duplicate signal (③) | watermark advances, zero DOM change |
+- **Session transcript is strictly append-only.**
+  `speculation.ts:790` `appendFile(getTranscriptPath(), …)`;
+  `compact.ts:342` "Preserved messages keep their original parentUuids
+  on disk". CC **never deletes or rewrites** transcript records.
+- **Interrupt** (`REPL.tsx:2112-2126`, `messages.ts:207`): CC keeps
+  and persists `[user, partial-assistant, "[Request interrupted by
+  user]"]` — a complete record with partial content + a synthetic
+  marker. The turn is **not** removed.
+- **Edit / re-send / rewind** (`/rewind`; `QueryEngine.ts:777`
+  "forking the chain and orphaning the conversation"): append a **new
+  branch** (new records, `parentUuid` → earlier point); the abandoned
+  tail is **orphaned, not deleted** — records stay on disk.
+- **In-place delete**: does not exist in CC's model. The only
+  ChatNode removals are **Loomscope-initiated** (fork-purge /
+  trash-session) which Loomscope already drives synchronously in its
+  own store — not a CC signal.
+
+**Therefore the retract arm collapses to ONE real case.** Reconcile to
+append-only ground truth handles everything else:
+
+| Scenario | CC behaviour | Loomscope (mirror CC) |
+|---|---|---|
+| turn interrupted | persists user + partial-assistant + interrupt marker | **no retract** — converge to that; render partial + an "interrupted" indicator (from the persisted marker message) |
+| edit / re-send / rewind | append new branch, old tail orphaned on disk | **no retract** — existing `parentUuid` branch model (BranchSelector) |
+| backend "delete" | does not exist in CC | only Loomscope-initiated purge/trash — already self-managed in store |
+| **sole true retract** | turn persisted **nothing** (cancelled pre-dispatch / aborted before first append) | `loomId`↔`promptId` binding never forms → after a bounded reconcile window, **drop** the provisional node |
+| redundant/duplicate signal (③) | — | watermark advances, zero DOM change |
+
+So "④ retract" is really **"drop a provisional node that never
+persisted, after a bounded window"** — narrow, well-defined, and the
+rest is plain CC-aligned convergence. Mandatory e2e matrix = the five
+rows above on a large real session + artificially dropped/late events
+(the recurring lesson). Open implementation detail (not blocking the
+design): surface the `[Request interrupted by user]` marker as a
+distinct node affordance vs. just rendering CC's message text —
+decide at PR-3.
 
 ### 9.7 Revised PR breakdown (supersedes §5)
 
@@ -366,8 +401,12 @@ session + artificially dropped/late events — the recurring lesson):
 2. **PR-2** — unified signal normaliser + the ①②③ classifier +
    coalesced/quiescence reconcile (debounce + max-wait + re-entrancy +
    version-equal short-circuit; deterministic clock-injected).
-3. **PR-3** — ④ retract arm + the 9.6 e2e matrix. Fixes the
+3. **PR-3** — ④ retract = the single "drop never-persisted
+   provisional node after a bounded window" case + CC-mirror render
+   of interrupt (partial + marker) + the 9.6 e2e matrix. Fixes the
    screenshot summary-divergence bug and P1 as falls-out cases.
+   (Smaller than originally scoped — CC's append-only model means
+   edit/delete are branch/no-op, not retract.)
 4. **PR-4** — single store shape / selectors (canvas + conversation +
    drill read one source).
 5. **PR-5** — delete band-aids (watchdog special-casing, `helloSeen`,
