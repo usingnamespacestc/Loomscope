@@ -256,6 +256,12 @@ in PR-3 + PR-4.
   "drop a never-persisted provisional node after a bounded window"
   case; everything else is plain CC-aligned convergence. PR-3 scope
   shrank accordingly.
+- 2026-05-18: frontend as-built walk found 3 unsynchronised state
+  planes (content / hook-ephemeral / SDK-channel) + a cross-plane
+  "is running" OR = P5 root. User chose **A — unify the logic**:
+  lifecycle becomes server-held, versioned, reconcilable on the same
+  contract as content. Captured in **§9.8**; new **PR-2.5** in §9.7.
+  Three-segment (backend / SSE / frontend) design walk now complete.
 
 ---
 
@@ -401,19 +407,96 @@ decide at PR-3.
 2. **PR-2** — unified signal normaliser + the ①②③ classifier +
    coalesced/quiescence reconcile (debounce + max-wait + re-entrancy +
    version-equal short-circuit; deterministic clock-injected).
-3. **PR-3** — ④ retract = the single "drop never-persisted
+3. **PR-2.5** — server-held versioned **lifecycle snapshot** + its
+   inclusion in subscribe catch-up and the reconcile GET; generalise
+   `pendingPermissionTracker` into a full hook→lifecycle reducer
+   (§9.8). Carries on the same version watermark as content.
+4. **PR-3** — ④ retract = the single "drop never-persisted
    provisional node after a bounded window" case + CC-mirror render
    of interrupt (partial + marker) + the 9.6 e2e matrix. Fixes the
    screenshot summary-divergence bug and P1 as falls-out cases.
    (Smaller than originally scoped — CC's append-only model means
    edit/delete are branch/no-op, not retract.)
-4. **PR-4** — single store shape / selectors (canvas + conversation +
-   drill read one source).
-5. **PR-5** — delete band-aids (watchdog special-casing, `helloSeen`,
-   `sentTextByItemId` crutch, scattered refreshes); net-negative diff;
-   full e2e 4×.
+5. **PR-4** — single store shape / selectors (canvas + conversation +
+   drill read one source); **collapse the cross-plane "is running"
+   OR** to the one reconciled lifecycle field (§9.8).
+6. **PR-5** — delete band-aids (watchdog special-casing, `helloSeen`,
+   `sentTextByItemId` crutch, scattered refreshes, the 3-plane OR,
+   `lastTurnHookAt`/`session.live` decay heuristic, the standalone
+   `pendingPermissionTracker`); net-negative diff; full e2e 4×.
 
 Risk budget unchanged from §6 (recovery-storm on huge sessions is
 why §9.4 reconcile stays incremental + coalesced + version-short-
 circuited — `d50bfe0` already proved "recovery heavier than the
-disease" is real).
+disease" is real). §9.8 adds bounded server surface — see its own
+risk note.
+
+### 9.8 Unified plane — lifecycle is versioned + reconcilable too (user: "A, 逻辑要统一", 2026-05-18)
+
+**Decision.** The ephemeral planes are folded into the SAME
+version-reconcile contract as content. There is ONE authoritative
+per-session state; "is a turn running / pending permission / queue"
+become **reconcilable, server-held, versioned facts** — not
+best-effort hook side-effects composited by a cross-plane OR.
+
+**Why (as-built finding, §segment-3).** The frontend today has THREE
+unsynchronised planes — content (`chatFlow`, file-backed),
+hook-ephemeral (`currentTurn`/`pendingPermission`/…, NO backing),
+SDK-channel (`inflightBySession`/…, NO backing) — and the UI derives
+"running" as `currentTurn` **OR** `hasInFlightWork` **OR**
+`session.live` 5 s-decay. A lost Stop/PostToolUse hook strands the
+ephemeral plane forever (no backing, no catch-up except
+`pendingPermissionTracker` for PermissionRequest only). This is the
+**root** of P5's three-freeze and the flaky running-time — a
+multi-source OR where any one source's clear-event loss sticks.
+
+**Mechanism.**
+- Server holds a per-session **`lifecycleSnapshot`** =
+  `{ turnRunning: {since} | null, pendingPermission | null, queue /
+  inflight, respawn / deferral / rate-limit }`, stamped with the
+  **same monotonic version** as content (one watermark for both).
+- **Where the server gets the truth**:
+  - SDK / Loomscope path — *already server-side fact*:
+    `sessionRegistry` literally owns the Query state machine
+    (idle/running/queue/respawn/deferral/rate-limit). Today it
+    broadcasts these fire-and-forget; the work is **hold + version +
+    snapshot + replay**, not a new state machine.
+  - Terminal-CC path — a small **server-side hook→lifecycle
+    reducer**: UserPromptSubmit→`running{since}`,
+    Stop→clear, PermissionRequest→`pendingPermission`,
+    PostToolUse/Denied/Stop→clear. This is exactly
+    `pendingPermissionTracker` **generalised** from the permission
+    sub-case to the whole lifecycle (the pattern already exists and
+    is proven). Lost-Stop robustness: the reducer cross-checks the
+    transcript append (turn-end ≈ final assistant record + no further
+    activity) and a TTL, so a missed Stop still converges to `idle`
+    on the next reconcile — **the structural P5 cure** (the watchdog's
+    "guess-clear `currentTurn`" becomes "reconcile to the
+    authoritative snapshot", no guessing).
+- **Catch-up + reconcile**: subscribe-time replay and the coalesced
+  reconcile GET both carry `lifecycleSnapshot` alongside content. A
+  missed lifecycle hook self-heals on the same path a missed delta
+  does. `pendingPermissionTracker`'s replay generalises to the whole
+  snapshot.
+- **Unified signal**: §9.4's `{loomId, version, partialContent?,
+  lifecycle?}` — `lifecycle` is now a first-class **versioned** field,
+  not a side-channel. One classifier, one watermark, content +
+  lifecycle together.
+
+**Frontend collapse.** `useIsChatNodeRunning` / running-time / pulse /
+banner read ONE field of the ONE reconciled session state. Deleted:
+the cross-plane OR, `lastTurnHookAt` + `session.live` 5 s-decay
+liveness heuristic, the P5 watchdog's bespoke
+clear-`pendingPermission`+`currentTurn` special-case, the standalone
+`pendingPermissionTracker` (subsumed). Net-simplifying on the client.
+
+**Scope / risk (the cost the user accepted).** Expands the server
+surface: `sessionRegistry` must hold+version+snapshot+replay
+lifecycle, plus the generalised hook→lifecycle reducer, plus
+reconcile/​catch-up must include the snapshot. Bounded —
+`sessionRegistry` already owns the SDK lifecycle facts and
+`pendingPermissionTracker` already proves "hook-derived state with
+catch-up". The only genuinely new subtlety is **reliably deriving
+turn-end server-side when the Stop hook is lost** (transcript-append
+cross-check + TTL); flagged for empirical validation in PR-2.5.
+Sequenced as **PR-2.5** in §9.7.
