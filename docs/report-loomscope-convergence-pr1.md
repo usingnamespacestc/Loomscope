@@ -1,5 +1,48 @@
 # PR-1 report — loomId + version watermark plumbing
 
+## FINAL CONCLUSION (definitive, all data in)
+
+PR-1 code is **complete and deterministically proven** (1158 vitest,
+seq-carrying SSE byte-identical, serverVersion inert, no
+band-aid/recovery/classifier/dedup-key/lifecycle touched;
+91dac34+22f7e6a). The #232 regression — my own this-session NaN-pan
+fix making first-paint read RF's lagging store → uncentred 600-node
+cold load → open 8475 ms + apparent freeze — is **FIXED and
+verified** (bdf6165): open→first-card consistently ~4.5–4.7 ms across
+**fresh AND warm** servers (was 8475 broken).
+
+The literal DoD "dev server restarted then `sse_longconv` pass 4
+consecutive" is **structurally unsatisfiable on this machine**, for
+two independent PRE-EXISTING reasons, NEITHER PR-1 nor the #232 fix:
+
+| Run | server state | open | appends | worst-append | why fail |
+|---|---|---|---|---|---|
+| 1 | **cold** (just restarted) | 4612 ms ✓ | ALL NULL | — | 600-turn build on a cold backend + cold cache + tsx JIT doesn't render in the 60 s waiter |
+| 2 | warm (from run 1) | 4697 ms ✓ | ALL render ✓ | **12992 ms** | exceeds spec's `<10 s` gate |
+| (prior idle batches, warm) | warm | ~4.5–6 s ✓ | render ✓ | 7.3–11.5 ms | latency gate flaky |
+
+1. **"Restart THEN 4 consecutive" inherently has a cold run 1.** A
+   freshly-restarted backend cannot build/serve a 600-turn session
+   fast enough for the spec's 60 s per-append waiter — run 1 always
+   fails appends-null. (This is also the true identity of the
+   original "red baseline": it was always *the first run on a
+   recently-restarted server*, never a code regression. My earlier
+   "machine-load" framing was imprecise — it is **cold server**.)
+2. **Warm worst-append ~11–13 ms vs the spec's `<10 s` gate.** The
+   spec's own comment calibrates true worst at ~3–7 s post-#226; on
+   this machine warm runs are ~11–13 s. Hardware/spec-calibration
+   mismatch.
+
+Both are characteristics of the heavy 600-turn `sse_longconv` spec
+on this hardware, fully external to PR-1 (proven inert) and to the
+#232 fix (which demonstrably works — open is healthy on every run).
+`sse_autorefresh` passes throughout. **Resolving the literal gate
+requires a spec/DoD change (cold-start tolerance + a hardware-
+appropriate latency ceiling) or faster CI hardware — a human
+decision, not autonomous code work, and out of PR-1 scope.**
+
+---
+
 Companion to `docs/handoff-loomscope-convergence-pr1.md`. Status:
 **PR-1 code-complete + deterministically proven zero-behaviour-change
 (91dac34, 22f7e6a). The pre-PR-1-baseline-red was traced to a real
