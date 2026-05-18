@@ -256,6 +256,7 @@ export function Composer({
   // running) and surfaces lastError as an inline message.
   const inflight = useStore((s) => getInflight(s, sessionId));
   const setSdkError = useStore((s) => s.setSdkError);
+  const noteSdkSentPrompt = useStore((s) => s.noteSdkSentPrompt);
   const isRunning = inflight.state === "running";
 
   // v1.6 #182: draft mode detection. When activeSessionId is "draft-
@@ -415,6 +416,15 @@ export function Composer({
         );
         return;
       }
+      // P1 robustness: record the just-sent text keyed by the itemId
+      // the server assigned, the instant the POST succeeds. This is
+      // the SSE-timing-independent source for the optimistic
+      // running-turn bubble — it no longer depends on receiving the
+      // (broadcast-only, often-missed-on-large-sessions) `pending`
+      // SSE event to know what the user typed.
+      // 中: POST 一成功就按 itemId 记下刚发的文本，乐观气泡不再依赖
+      // 可能丢的 pending SSE 事件。
+      noteSdkSentPrompt(sessionId, r.itemId, snapshotText);
     },
     [
       canSend,
@@ -423,6 +433,7 @@ export function Composer({
       sessionId,
       cwd,
       setSdkError,
+      noteSdkSentPrompt,
       isDraft,
       settings.model,
       settings.effort,

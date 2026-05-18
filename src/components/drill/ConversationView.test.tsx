@@ -790,6 +790,7 @@ describe("ConversationView — P1 optimistic running-turn bubble", () => {
         lastError: null,
         respawnNotice: null,
         runningPromptText: inf.runningPromptText,
+        sentTextByItemId: new Map(),
       });
       return { inflightBySession: m };
     });

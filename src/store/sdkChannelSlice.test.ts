@@ -333,3 +333,87 @@ describe("sdkChannelSlice — P1 running-prompt text (optimistic SDK turn)", () 
     );
   });
 });
+
+describe("sdkChannelSlice — P1 robustness: SSE-timing-independent sent text", () => {
+  // Reproduces the LIVE large-session failure: SSE is broadcast-only
+  // with NO replay, so on a slow/large session the early
+  // `pending=[X]` queue-state is often MISSED (subscribe-time race,
+  // same root as 327995e/P5). The client then only sees
+  // `running, currentRun={X}, pendingPrompts=[]` — the old resolution
+  // chain (payload pendings → cur pendings → same-currentRun) all
+  // yield null, so runningPromptText was null and NO bubble showed
+  // even though the running-time stat appeared (state DID reach
+  // running). Tiny fresh test sessions never hit this because their
+  // events arrive fast + in order — exactly why unit/e2e missed it.
+  // Fix: the composer records the text by itemId at send time
+  // (noteSdkSentPrompt); resolution falls back to it.
+  const SID = "44444444-4444-4000-8000-000000000ddd";
+
+  it("resolves runningPromptText from sent text when the pending event was missed", () => {
+    // Client recorded what it POSTed (itemId from postTurn).
+    useStore.getState().noteSdkSentPrompt(SID, "item-X", "大对话里发的这条");
+    // The ONLY queue-state the client receives: already running, no
+    // pending ever seen (its broadcast was missed).
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: { promptItemId: "item-X", startedAt: 10 },
+      pendingPrompts: [],
+    });
+    expect(getInflight(useStore.getState(), SID).runningPromptText).toBe(
+      "大对话里发的这条",
+    );
+  });
+
+  it("survives a respawn between send and the (missed-pending) running event", () => {
+    useStore.getState().noteSdkSentPrompt(SID, "item-Y", "respawn-safe text");
+    // Respawn fires before any running event: notice set, then close.
+    useStore
+      .getState()
+      .setRespawnNotice(SID, { startedAt: 1, reason: "per-send" });
+    useStore.getState().clearSdkSession(SID);
+    // Fresh spawn dispatches; pending broadcast still missed.
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: { promptItemId: "item-Y", startedAt: 20 },
+      pendingPrompts: [],
+    });
+    expect(getInflight(useStore.getState(), SID).runningPromptText).toBe(
+      "respawn-safe text",
+    );
+  });
+
+  it("prefers the live pending text over the stored one (no staleness)", () => {
+    useStore.getState().noteSdkSentPrompt(SID, "item-Z", "stale typed text");
+    // The pending event DID arrive (small/fast session) with the
+    // authoritative text — it must win over the stored copy.
+    useStore.getState().applySdkQueueState(SID, {
+      state: "running",
+      currentRun: { promptItemId: "item-Z", startedAt: 30 },
+      pendingPrompts: [
+        {
+          id: "item-Z",
+          text: "authoritative server text",
+          imageCount: 0,
+          priority: "now",
+          createdAt: 30,
+        },
+      ],
+    });
+    expect(getInflight(useStore.getState(), SID).runningPromptText).toBe(
+      "authoritative server text",
+    );
+  });
+
+  it("FIFO-caps stored sent text at 16 entries (memory bound)", () => {
+    for (let i = 0; i < 20; i++) {
+      useStore.getState().noteSdkSentPrompt(SID, `id-${i}`, `text-${i}`);
+    }
+    const map = getInflight(useStore.getState(), SID).sentTextByItemId;
+    expect(map.size).toBe(16);
+    // Oldest 4 evicted; newest retained.
+    expect(map.has("id-0")).toBe(false);
+    expect(map.has("id-3")).toBe(false);
+    expect(map.get("id-4")).toBe("text-4");
+    expect(map.get("id-19")).toBe("text-19");
+  });
+});

@@ -101,7 +101,28 @@ export interface SdkInflight {
    *  中: 正在执行的 prompt 文本，跨 pending→running 保留，供对话面板
    *  在 jsonl 落盘前即时显示"运行中的这一轮"。 */
   runningPromptText: string | null;
+  /** P1 robustness (2026-05-17): client-known prompt text keyed by
+   *  the itemId `postTurn` returns at SEND time. The original P1
+   *  resolution derived runningPromptText ONLY from the SSE-delivered
+   *  pending list — but SSE is broadcast-only with NO replay, so on a
+   *  large/slow session the early `pending=[X]` event is often missed
+   *  (subscribe-time race; same root as 327995e/P5) and the text
+   *  resolved to null → no bubble, even though the running-time stat
+   *  showed (state did reach running). Optimistic UI must NOT depend
+   *  on the server echo: the client already knows the text it just
+   *  POSTed. This is the SSE-timing-independent source of truth.
+   *  FIFO-capped; stale entries are inert (the selector hides the
+   *  bubble via tail-node match once the real ChatNode lands).
+   *  中: 发送时 postTurn 返回 itemId，客户端本就知道文本——不依赖
+   *  SSE 回声（broadcast-only 无 replay，大会话常丢早期 pending
+   *  事件）。SSE 时序无关的权威来源，FIFO 限长，旧条目无害。 */
+  sentTextByItemId: Map<string, string>;
 }
+
+// Bounds `sentTextByItemId` growth. Far more than any realistic
+// in-flight queue depth; stale entries are inert (see field doc) so
+// the only cost of keeping them is memory — a small FIFO cap suffices.
+const SENT_TEXT_CAP = 16;
 
 const EMPTY_INFLIGHT: SdkInflight = {
   state: "idle",
@@ -110,6 +131,7 @@ const EMPTY_INFLIGHT: SdkInflight = {
   lastError: null,
   respawnNotice: null,
   runningPromptText: null,
+  sentTextByItemId: new Map(),
 };
 
 export interface SdkChannelSlice {
@@ -133,6 +155,15 @@ export interface SdkChannelSlice {
     },
   ) => void;
   clearSdkSession: (sessionId: string) => void;
+  /** P1 robustness: record the prompt text the client just POSTed,
+   *  keyed by the itemId `postTurn` returned. Called from the
+   *  composer the instant a send succeeds — SSE-timing-independent
+   *  source for the optimistic running-turn bubble. */
+  noteSdkSentPrompt: (
+    sessionId: string,
+    itemId: string,
+    text: string,
+  ) => void;
   // Set/clear an inline error message after a failed API call.
   setSdkError: (sessionId: string, message: string | null) => void;
   // Race-mitigation respawn notice (see docs/dual-writer-race-
@@ -189,7 +220,15 @@ export const createSdkChannelSlice: StateCreator<
       runningPromptText =
         payload.pendingPrompts.find((p) => p.id === id)?.text ??
         cur.pendingPrompts.find((p) => p.id === id)?.text ??
-        (cur.currentRun?.promptItemId === id ? cur.runningPromptText : null);
+        (cur.currentRun?.promptItemId === id ? cur.runningPromptText : null) ??
+        // P1 robustness: SSE-timing-independent fallback. If the early
+        // `pending=[X]` event was missed (broadcast-only, no replay —
+        // common on a large/slow session), the chain above yields
+        // null even though state reached running (the bug: timer
+        // showed, bubble didn't). The client recorded this text at
+        // send time keyed by itemId — use it.
+        cur.sentTextByItemId.get(id) ??
+        null;
     }
     const next: SdkInflight = {
       state: payload.state,
@@ -198,6 +237,7 @@ export const createSdkChannelSlice: StateCreator<
       lastError: cur.lastError, // queue-state events don't override errors
       respawnNotice: cur.respawnNotice, // ditto for the race banner
       runningPromptText,
+      sentTextByItemId: cur.sentTextByItemId, // carried; FIFO-capped on add
     };
     const m = new Map(get().inflightBySession);
     m.set(sessionId, next);
@@ -238,6 +278,10 @@ export const createSdkChannelSlice: StateCreator<
         // running after the fresh spawn; retain its text so the
         // optimistic running bubble doesn't flicker off.
         runningPromptText: cur.runningPromptText,
+        // P1 robustness: a respawn between send and the running event
+        // is exactly when the SSE-derived text is lost — the
+        // client-known map MUST survive it.
+        sentTextByItemId: cur.sentTextByItemId,
       });
       set({ inflightBySession: m });
       return;
@@ -255,6 +299,26 @@ export const createSdkChannelSlice: StateCreator<
     const d = new Map(get().deferralBySession);
     d.delete(sessionId);
     set({ inflightBySession: m, rateLimitBySession: r, deferralBySession: d });
+  },
+
+  noteSdkSentPrompt: (sessionId, itemId, text) => {
+    const cur = get().inflightBySession.get(sessionId) ?? EMPTY_INFLIGHT;
+    // Clone + re-insert (Map preserves insertion order) so the FIFO
+    // cap drops the OLDEST entry. Deleting an existing key first keeps
+    // a re-sent itemId fresh in the order.
+    const sentTextByItemId = new Map(cur.sentTextByItemId);
+    sentTextByItemId.delete(itemId);
+    sentTextByItemId.set(itemId, text);
+    while (sentTextByItemId.size > SENT_TEXT_CAP) {
+      const oldest = sentTextByItemId.keys().next().value as
+        | string
+        | undefined;
+      if (oldest === undefined) break;
+      sentTextByItemId.delete(oldest);
+    }
+    const m = new Map(get().inflightBySession);
+    m.set(sessionId, { ...cur, sentTextByItemId });
+    set({ inflightBySession: m });
   },
 
   setSdkError: (sessionId, message) => {

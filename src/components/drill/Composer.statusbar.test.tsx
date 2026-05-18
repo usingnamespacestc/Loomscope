@@ -56,6 +56,8 @@ function setInflight(state: "idle" | "running", startedAt: number | null) {
     pendingPrompts: [],
     lastError: null,
     respawnNotice: null,
+    runningPromptText: null,
+    sentTextByItemId: new Map(),
   });
   useStore.setState({ inflightBySession: next });
 }
