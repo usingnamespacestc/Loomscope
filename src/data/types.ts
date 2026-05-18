@@ -396,6 +396,14 @@ export interface ChatNode extends NodeBase {
   kind: "chat";
   // = promptId (the cluster key for v0.1 bucketing).
   id: string;
+  /** PR-1 (2026-05-18, convergence rework §9.2): Loomscope-minted
+   *  correlation id, server-bound to this node's `promptId`.
+   *  PARALLEL, NON-KEY field in PR-1 — carried end-to-end but the
+   *  dedup/identity key is still `id` (=promptId). It becomes the
+   *  primary identity in a later PR (§9.7). Optional: present only
+   *  once the server binding table has resolved it; absent on
+   *  fixtures / pre-binding signals. Never displayed. */
+  loomId?: string;
   parentChatNodeId: string | null;
   rootUserUuid: string;
   userMessage: ChatNodeUserMessage;
@@ -480,6 +488,15 @@ export interface ChatFlow {
   // Top-level events not bound to a single ChatNode. ScheduleWakeup fires,
   // standalone permission-mode flips, etc.
   flowEvents: FlowEvent[];
+  /** PR-1 (2026-05-18, convergence rework §9): server-authoritative
+   *  monotonic version (= chatFlowDeltaEngine snapshot seq) at the
+   *  time this lite payload was built. PLUMBING ONLY in PR-1 — the
+   *  client records it (`SessionState.serverVersion`) but NOTHING
+   *  consumes it for control flow yet; the gap detector still uses
+   *  the unchanged `appliedVersion` null-seeding contract.
+   *  Consumption is PR-2. Optional so older payloads / fixtures
+   *  stay valid. */
+  version?: number;
 }
 
 export interface OrphanRecord {

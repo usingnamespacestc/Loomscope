@@ -12,6 +12,12 @@ interface TurnPayload {
   cwd: string;
   images?: { mediaType: string; base64: string }[];
   priority?: "now" | "next" | "later";
+  /** PR-1 (2026-05-18, convergence rework §9.5): client-minted
+   *  correlation id for the Loomscope-sent path. The server binds it
+   *  to the resulting jsonl `promptId` (dispatch-order correlation).
+   *  PLUMBING ONLY in PR-1 — carried + bound, but the dedup/identity
+   *  key stays `promptId`. */
+  loomId?: string;
   // v∞.2 auto-fork: when present, the server forks the session up to
   // `upToMessageId` (slicing the transcript) before enqueueing. The
   // returned `sessionId` reflects the post-fork session; clients

@@ -36,6 +36,22 @@ export interface SseMessage {
 
 const subscribers = new Map<string, Set<SseSubscriber>>();
 
+// PR-1 (2026-05-18, convergence rework §9.4): every outbound SSE
+// signal carries a top-level `version` so the client has ONE place
+// to read the server-authoritative monotonic seq regardless of event
+// type (delta/raw-records/cc-hook/sdk-*/invalidate/…). Injected via a
+// resolver rather than importing `getCurrentSeq` directly, because
+// `chatFlowDeltaEngine` already imports `broadcast` from here — a
+// direct import would be circular. Wired at `createApp`. Default 0
+// so tests / pre-wire boot don't crash. PLUMBING ONLY: nothing
+// consumes `version` for control flow in PR-1.
+let versionResolver: (sessionId: string) => number = () => 0;
+export function setSseVersionResolver(
+  fn: (sessionId: string) => number,
+): void {
+  versionResolver = fn;
+}
+
 export function subscribe(sessionId: string, sub: SseSubscriber): () => void {
   let set = subscribers.get(sessionId);
   if (!set) {
@@ -54,12 +70,33 @@ export function subscribe(sessionId: string, sub: SseSubscriber): () => void {
 export function broadcast(sessionId: string, msg: SseMessage): void {
   const set = subscribers.get(sessionId);
   if (!set) return;
+  // PR-1: stamp a top-level `version` on the payload when it's an
+  // object and doesn't already carry one (delta/checkpoint/drift-ping
+  // already embed seq — leave their shape, just add the uniform
+  // top-level field too so the client reads `version` consistently).
+  // Additive; recorded-not-consumed client-side in PR-1.
+  let outMsg = msg;
+  if (msg.data && typeof msg.data === "object" && !Array.isArray(msg.data)) {
+    const d = msg.data as Record<string, unknown>;
+    // Stamp ONLY events that carry NEITHER `version` NOR `seq`.
+    // delta / checkpoint / drift-ping already convey the version via
+    // `seq` — leaving their shape byte-identical keeps PR-1 a true
+    // zero-wire-change for every already-versioned payload (and keeps
+    // their exact-shape unit tests green). Only the seq-less signals
+    // (raw-records / cc-hook / sdk-* / invalidate) gain `version`.
+    if (d.version === undefined && d.seq === undefined) {
+      outMsg = {
+        event: msg.event,
+        data: { ...d, version: versionResolver(sessionId) },
+      };
+    }
+  }
   // Snapshot — `send` may indirectly trigger unsubscribe (e.g. write
   // failure tearing down the stream); iterating the live Set would skip
   // entries.
   for (const sub of [...set]) {
     try {
-      sub.send(msg);
+      sub.send(outMsg);
     } catch (err) {
       console.error("[sseHub] subscriber send threw:", err);
     }

@@ -38,6 +38,7 @@ function blankSessionState(): SessionState {
     lastUpdated: 0,
     lastInvalidateAt: 0,
     appliedVersion: null,
+    serverVersion: null,
     rawAppliedRecordUuids: new Set<string>(),
   };
 }
@@ -339,6 +340,10 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         // get treated as a gap (it sets the new baseline).
         // 中: 全量 load 后重置 appliedVersion，让下一条 delta 重起 baseline。
         appliedVersion: null,
+        // PR-1: record the server version from the GET. RECORDED ONLY
+        // — nothing consumes it; appliedVersion stays null-seeded so
+        // the gap detector is byte-identical to pre-PR-1.
+        serverVersion: cf.version ?? null,
       });
       set({ sessions: updated });
     } catch (err) {
@@ -561,6 +566,10 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         // false-positive gap.
         // 中: 全量 refresh 后重置 delta seq baseline。
         appliedVersion: null,
+        // PR-1: record server version from the refresh GET. RECORDED
+        // ONLY — appliedVersion stays null-seeded; gap detector
+        // unchanged.
+        serverVersion: cf.version ?? null,
       });
       set({ sessions: updated });
     } catch (err) {
@@ -753,6 +762,10 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       foldedCompactIds,
       selectedNodeId: nextSelected,
       appliedVersion: delta.seq,
+      // PR-1: mirror the applied seq into the recorded server
+      // version. RECORDED ONLY — no consumer; appliedVersion above
+      // remains the sole gap-detection input (unchanged contract).
+      serverVersion: delta.seq,
       lastUpdated: Date.now(),
     });
     set({ sessions: updated });

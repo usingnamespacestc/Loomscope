@@ -70,6 +70,14 @@ export interface PromptItem {
   priority: Priority;
   /** Wall clock when enqueue was received. */
   createdAt: number;
+  /** PR-1 (2026-05-18, convergence rework §9.5): client-minted
+   *  Loomscope correlation id (Loomscope-sent path). Stored on the
+   *  queued item so a later PR can bind it to the resulting jsonl
+   *  promptId by dispatch-order correlation. PLUMBING ONLY in PR-1 —
+   *  carried, not yet consumed for binding/stamping (that wiring is
+   *  the human-gated remainder, see docs/report-loomscope-
+   *  convergence-pr1.md). Optional: absent for terminal-CC turns. */
+  loomId?: string;
 }
 
 export type SessionState = "idle" | "running";

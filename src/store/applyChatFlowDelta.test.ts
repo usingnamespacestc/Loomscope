@@ -76,6 +76,7 @@ function seed(chatFlow: ChatFlow, appliedVersion: number | null = null): void {
       lastUpdated: 0,
       lastInvalidateAt: 0,
       appliedVersion,
+      serverVersion: null,
       rawAppliedRecordUuids: new Set<string>(),
     });
     return { sessions, activeSessionId: SID };
@@ -322,6 +323,59 @@ describe("applyChatFlowDelta", () => {
       type: "chatnode-added",
       seq: 1,
       chatNode: cn("a"),
+    });
+    expect(useStore.getState().refreshSession).toHaveBeenCalledWith(SID);
+  });
+});
+
+describe("PR-1: serverVersion is RECORDED but NEVER consumed (inertness)", () => {
+  // Proves the convergence-rework PR-1 invariant: the new
+  // `serverVersion` field mirrors the seq but the gap detector still
+  // uses ONLY `appliedVersion`'s unchanged null-seeding contract — so
+  // behaviour is byte-identical to pre-PR-1.
+  it("records serverVersion from the delta seq without affecting gap detection", () => {
+    // Fresh baseline (appliedVersion=null). A delta with an ARBITRARY
+    // high seq must be accepted as the new baseline (no gap → no
+    // refresh) exactly as before, AND serverVersion must mirror it.
+    seed(flow([cn("a")]));
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 99,
+      chatNode: cn("b", "a"),
+    });
+    expect(useStore.getState().refreshSession).not.toHaveBeenCalled();
+    let st = useStore.getState().sessions.get(SID)!;
+    expect(st.appliedVersion).toBe(99);
+    expect(st.serverVersion).toBe(99);
+    expect(st.chatFlow!.chatNodes.map((n) => n.id)).toEqual(["a", "b"]);
+
+    // Next contiguous delta: still no gap; both mirror.
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 100,
+      chatNode: cn("c", "b"),
+    });
+    expect(useStore.getState().refreshSession).not.toHaveBeenCalled();
+    st = useStore.getState().sessions.get(SID)!;
+    expect(st.appliedVersion).toBe(100);
+    expect(st.serverVersion).toBe(100);
+  });
+
+  it("a stale serverVersion does NOT suppress real gap detection", () => {
+    // serverVersion present (e.g. seeded high) must not change the
+    // fact that a NON-contiguous seq still triggers the refresh — the
+    // gap detector reads appliedVersion only.
+    seed(flow([cn("a")]), 5); // appliedVersion=5
+    useStore.setState((s) => {
+      const sessions = new Map(s.sessions);
+      const cur = sessions.get(SID)!;
+      sessions.set(SID, { ...cur, serverVersion: 9999 });
+      return { sessions };
+    });
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 7, // expected 6 (appliedVersion 5 +1) → gap regardless of serverVersion
+      chatNode: cn("b", "a"),
     });
     expect(useStore.getState().refreshSession).toHaveBeenCalledWith(SID);
   });

@@ -63,6 +63,10 @@ const turnSchema = z.object({
   model: z.string().optional(),
   effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
   fastMode: z.boolean().optional(),
+  // PR-1 (2026-05-18, convergence rework §9.5): client-minted
+  // Loomscope correlation id. Stored on the queued item; binding to
+  // the resulting promptId is the human-gated remainder.
+  loomId: z.string().optional(),
 });
 
 export interface TurnsRouterOptions {
@@ -158,6 +162,9 @@ export function turnsRouter(opts: TurnsRouterOptions) {
         text: body.text,
         images: body.images ?? [],
         priority: body.priority ?? "next",
+        // PR-1: carry the client-minted correlation id onto the
+        // queued item (plumbing only — not yet bound/stamped).
+        loomId: body.loomId,
       });
       return c.json({
         itemId,

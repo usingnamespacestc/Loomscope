@@ -347,6 +347,14 @@ export interface SessionState {
    *  load）；下一条直接当 baseline。gap 检测发现错位时强制 full refresh。
    */
   appliedVersion: number | null;
+  /** PR-1 (2026-05-18, convergence rework §9): server-authoritative
+   *  monotonic `version` last reported (GET `version` / every SSE
+   *  signal's top-level `version` / a delta's seq). RECORDED ONLY in
+   *  PR-1 — NOTHING reads it for control flow; the gap detector still
+   *  uses `appliedVersion`'s unchanged null-seeding contract. This is
+   *  the watermark PR-2's convergent reconcile will consume.
+   *  null = none reported yet. */
+  serverVersion: number | null;
   /** EN (v2.2 PR E2): UUIDs of jsonl records already absorbed via the
    *  raw-record fast path. Idempotency guard so chokidar double-fires
    *  or out-of-order replay don't double-apply assistant text to a

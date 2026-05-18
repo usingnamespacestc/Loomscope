@@ -38,8 +38,14 @@ import {
   buildCacheKey,
   setCached,
 } from "@/server/services/chatFlowCache";
-import { processFresh as processChatFlowDelta } from "@/server/services/chatFlowDeltaEngine";
-import { broadcast as broadcastSse } from "@/server/services/sseHub";
+import {
+  processFresh as processChatFlowDelta,
+  getCurrentSeq,
+} from "@/server/services/chatFlowDeltaEngine";
+import {
+  broadcast as broadcastSse,
+  setSseVersionResolver,
+} from "@/server/services/sseHub";
 import { setDriftDetectionInterval } from "@/server/services/driftDetection";
 import { findForkClosure } from "@/server/services/forkTree";
 import { locateSessionJsonl } from "@/server/services/locateJsonl";
@@ -97,6 +103,11 @@ export function createApp(opts: AppOptions) {
   // v∞.0 PR 2: idempotent — bridges hookEventBus → sseHub so CC
   // hook fires reach SSE-subscribed browser clients.
   initHookSseForwarder();
+  // PR-1 (2026-05-18, convergence rework §9.4): make every outbound
+  // SSE signal carry the server-authoritative monotonic version.
+  // Injected (not imported into sseHub) to avoid the
+  // chatFlowDeltaEngine↔sseHub circular import. Plumbing only.
+  setSseVersionResolver(getCurrentSeq);
   // v∞.0 hook catchup: idempotent — server-side per-session memory
   // of unresolved PermissionRequest fires. SSE route reads this
   // on subscribe to send a snapshot to late-joining clients.

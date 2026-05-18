@@ -59,6 +59,7 @@ import {
 import { readTasksForSession } from "@/server/services/taskList";
 import { gitShow, gitShowFiles } from "@/server/services/gitDiff";
 import { searchSessionContent } from "@/server/services/searchContent";
+import { getCurrentSeq } from "@/server/services/chatFlowDeltaEngine";
 import type { ChatFlow } from "@/data/types";
 
 // Heartbeat cadence. Two reasons it exists:
@@ -155,7 +156,13 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
             closure,
           }),
       });
-      return c.json(wantsFull ? chatFlow : stripChatFlowToLite(chatFlow));
+      // PR-1: expose the server-authoritative monotonic version
+      // (chatFlowDeltaEngine snapshot seq; 0 when no snapshot yet).
+      // Additive — client records it as `serverVersion`; the gap
+      // detector still uses the unchanged `appliedVersion` contract.
+      const version = getCurrentSeq(id);
+      const base = wantsFull ? chatFlow : stripChatFlowToLite(chatFlow);
+      return c.json({ ...base, version });
     },
   );
 

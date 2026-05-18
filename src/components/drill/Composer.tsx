@@ -390,6 +390,14 @@ export function Composer({
       // Always sends to the active session's leaf — no fork
       // semantics. composerBlock above guarantees we only get here
       // when selection is null or === leaf.
+      // PR-1 (2026-05-18, convergence rework §9.5): mint the
+      // Loomscope correlation id here (the origin we own) so the
+      // server can bind it to the resulting jsonl promptId by
+      // dispatch order. PLUMBING ONLY — nothing consumes it yet.
+      const loomId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `loom-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const r = await postTurn(sessionId, {
         text: snapshotText,
         cwd,
@@ -398,6 +406,7 @@ export function Composer({
           base64: a.base64,
         })),
         priority,
+        loomId,
         // v1.3 R2: Composer settings (model / effort / fastMode) are
         // localStorage-persisted on the client; passed per-turn so the
         // server can sync them onto SessionRegistry before dispatch.
