@@ -231,3 +231,16 @@ in PR-3 + PR-4.
   (If the user later wants interim relief before the rework lands,
   the minimal stopgap is: on SDK `idle`, unconditionally fire one
   `refreshSession` — ~3 lines, but it is a stopgap, tracked here.)
+- 2026-05-18: the NaN-pan console flood (panToNodeCenter fed
+  NaN node-position / measured-size / viewport-zoom) was an
+  **independent input-validation gap**, NOT this contract — fixed
+  outright (c864efe + 05795b8, `safePanTarget`), not deferred.
+- 2026-05-18: unbounded frontend memory (≈1.5 GB observed) — tracked
+  separately as **task #230**, NOT part of this redesign. It is
+  orthogonal (cache lifecycle + canvas virtualisation, not the
+  SSE→store data contract): `subAgentCache`/`workflowCache` were
+  shipped with eviction explicitly deferred to a never-built v0.10
+  (`types.ts:180,220`), plus `<ReactFlow>` has no
+  `onlyRenderVisibleElements`. Batched with the live-update rework
+  per user; plan A→B→C in #230. Listed here only so the rework picks
+  it up alongside (the "one bounded store shape" principle wants it).
