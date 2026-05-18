@@ -632,7 +632,10 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     if (focusedSessionRef.current === chatFlow.id) return;
     const node = rf.getNode(latestNodeId);
     if (!node) return;
-    focusedSessionRef.current = chatFlow.id;
+    // NOTE: focusedSessionRef is set ONLY after a successful center
+    // (below), not here — so if `nodes` doesn't yet contain the laid
+    // position on this tick, the effect re-runs (nodes dep) and
+    // retries instead of gating itself out uncentred (the #232 trap).
     // Single setCenter — NO fitView.
     //
     // Why drop fitView: even with `duration: 0`, xyflow v12's fitView
@@ -658,20 +661,46 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     const zoomX = rfPixelW / (w * (1 + padding));
     const zoomY = rfPixelH / (h * (1 + padding));
     const zoom = Math.max(0.5, Math.min(1.0, Math.min(zoomX, zoomY)));
-    // Same NaN guard as panToNodeCenter: skip the setCenter when the
-    // latest node has no finite position yet (avoids unblurring the
-    // canvas onto a NaN viewport). Still mark first-paint ready so the
-    // canvas is never stuck behind the opacity gate; the pending-pan /
-    // selection effects re-pan once dagre assigns a coordinate.
-    const c = nodeCenterPoint(node);
-    if (c) {
-      rf.setCenter(c.cx, c.cy + CANVAS_FOCUS_BIAS_Y_PX / zoom, {
-        zoom,
-        duration: 0,
-      });
+    // #232 fix (2026-05-18): center from OUR dagre layout position,
+    // not `rf.getNode().position`. The NaN-pan guard (05795b8) made
+    // first-paint read `nodeCenterPoint(rf.getNode(latestNodeId))` —
+    // but React Flow's internal store lags our `nodes` prop on a cold
+    // 600-node load: `latestNodeMeasured` (DOM size) goes true BEFORE
+    // RF commits the dagre coordinate, so `node.position` is non-
+    // finite at this tick → setCenter skipped → canvas unblurred at
+    // the DEFAULT viewport → the latest card (far right in LR) is
+    // off-screen → open→first-card +3.6s (8475 vs 4816ms; the #232
+    // regression). Our `nodes` memo IS the dagre output and is ALWAYS
+    // finite, available synchronously with render. Use it. The finite
+    // check stays as defence (and preserves the NaN-flood guard: we
+    // still never feed NaN to setCenter); it just (almost) never
+    // trips now because dagre output is finite.
+    const laid = nodes.find((n) => n.id === latestNodeId);
+    const px = laid?.position?.x;
+    const py = laid?.position?.y;
+    if (Number.isFinite(px) && Number.isFinite(py)) {
+      rf.setCenter(
+        (px as number) + w / 2,
+        (py as number) + h / 2 + CANVAS_FOCUS_BIAS_Y_PX / zoom,
+        { zoom, duration: 0 },
+      );
+      // Mark done ONLY now — a real center happened. If we couldn't
+      // center yet, leave it unset so the nodes-dep re-run retries.
+      focusedSessionRef.current = chatFlow.id;
     }
+    // Always unblur — never leave the canvas stuck behind the opacity
+    // gate even in the (now rare) not-yet-laid-out case; the retry
+    // above snaps it to center within a render or two.
     setFirstPaintReady(true);
-  }, [chatFlow.id, latestNodeId, latestNodeMeasured, rfPixelW, rfPixelH, rf]);
+  }, [
+    chatFlow.id,
+    latestNodeId,
+    latestNodeMeasured,
+    rfPixelW,
+    rfPixelH,
+    rf,
+    nodes,
+  ]);
 
   // v0.8.1 #5: register a pan-to-chat-node handler that ConversationView
   // hover triggers can call. The handler:
