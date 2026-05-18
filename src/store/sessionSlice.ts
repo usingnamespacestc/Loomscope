@@ -37,7 +37,7 @@ function blankSessionState(): SessionState {
     error: null,
     lastUpdated: 0,
     lastInvalidateAt: 0,
-    lastDeltaSeq: null,
+    appliedVersion: null,
     rawAppliedRecordUuids: new Set<string>(),
   };
 }
@@ -335,10 +335,10 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         error: null,
         lastUpdated: Date.now(),
         // v2.1 PR D2: full load establishes a fresh baseline. Clear
-        // lastDeltaSeq so the first delta after this load doesn't
+        // appliedVersion so the first delta after this load doesn't
         // get treated as a gap (it sets the new baseline).
-        // 中: 全量 load 后重置 lastDeltaSeq，让下一条 delta 重起 baseline。
-        lastDeltaSeq: null,
+        // 中: 全量 load 后重置 appliedVersion，让下一条 delta 重起 baseline。
+        appliedVersion: null,
       });
       set({ sessions: updated });
     } catch (err) {
@@ -557,10 +557,10 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         error: null,
         lastUpdated: Date.now(),
         // v2.1 PR D2: a full refresh re-baselines delta tracking.
-        // Next incoming delta seeds lastDeltaSeq without raising a
+        // Next incoming delta seeds appliedVersion without raising a
         // false-positive gap.
         // 中: 全量 refresh 后重置 delta seq baseline。
-        lastDeltaSeq: null,
+        appliedVersion: null,
       });
       set({ sessions: updated });
     } catch (err) {
@@ -568,18 +568,18 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       // still valid; log and let the next SSE invalidate retry.
       console.error("[loomscope] refreshSession failed:", err);
       // v2.1 PR D5 (2026-05-13): even on failed refresh, drop
-      // lastDeltaSeq=null so subsequent deltas seed a fresh baseline
+      // appliedVersion=null so subsequent deltas seed a fresh baseline
       // instead of looping in gap-detection-retriggers-refresh against
       // the same stale lastSeq. The chatFlow stays at its old content
       // (stale but not catastrophic); future deltas + drift detection
       // will eventually reconcile.
-      // 中: refresh 失败时也要清 lastDeltaSeq=null，避免 gap → refresh →
+      // 中: refresh 失败时也要清 appliedVersion=null，避免 gap → refresh →
       // 失败 → 同 gap 再次触发的死循环。chatFlow 暂保留旧内容，
       // 后续 delta + 30s drift hash 会自然纠正。
       const updated = new Map(get().sessions);
       const cur = updated.get(id);
-      if (cur && cur.lastDeltaSeq != null) {
-        updated.set(id, { ...cur, lastDeltaSeq: null });
+      if (cur && cur.appliedVersion != null) {
+        updated.set(id, { ...cur, appliedVersion: null });
         set({ sessions: updated });
       }
     }
@@ -619,13 +619,13 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       void get().refreshSession(sessionId);
       return;
     }
-    // Gap detection. lastDeltaSeq null = first delta after a baseline
+    // Gap detection. appliedVersion null = first delta after a baseline
     // load → accept any seq as the new baseline. Otherwise expect
     // strict +1.
-    // 中: lastDeltaSeq null 表示刚 baseline，任何 seq 都直接当起点；
+    // 中: appliedVersion null 表示刚 baseline，任何 seq 都直接当起点；
     // 否则严格 +1。检测漏号触发 full refresh。
     const expected =
-      cur.lastDeltaSeq == null ? delta.seq : cur.lastDeltaSeq + 1;
+      cur.appliedVersion == null ? delta.seq : cur.appliedVersion + 1;
     if (delta.seq !== expected) {
       console.warn(
         `[loomscope] delta seq gap on ${sessionId}: expected ${expected}, got ${delta.seq} — forcing full refresh`,
@@ -752,7 +752,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       workflowCache,
       foldedCompactIds,
       selectedNodeId: nextSelected,
-      lastDeltaSeq: delta.seq,
+      appliedVersion: delta.seq,
       lastUpdated: Date.now(),
     });
     set({ sessions: updated });

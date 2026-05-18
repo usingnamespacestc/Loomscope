@@ -60,7 +60,7 @@ function seed(prompt: {
       error: null,
       lastUpdated: 0,
       lastInvalidateAt: 0,
-      lastDeltaSeq: null,
+      appliedVersion: null,
       rawAppliedRecordUuids: new Set<string>(),
     });
     return { sessions, activeSessionId: SID };
@@ -181,7 +181,7 @@ describe("InteractivePermissionBanner — source-aware decision routing", () => 
         error: null,
         lastUpdated: 0,
         lastInvalidateAt: 0,
-        lastDeltaSeq: null,
+        appliedVersion: null,
         rawAppliedRecordUuids: new Set<string>(),
       });
       return { sessions, activeSessionId: SID };
@@ -239,7 +239,7 @@ describe("InteractivePermissionBanner — source-aware decision routing", () => 
         error: null,
         lastUpdated: 0,
         lastInvalidateAt: 0,
-        lastDeltaSeq: null,
+        appliedVersion: null,
         rawAppliedRecordUuids: new Set<string>(),
       });
       return { sessions, activeSessionId: SID };

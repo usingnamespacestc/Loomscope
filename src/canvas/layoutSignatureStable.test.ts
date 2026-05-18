@@ -97,7 +97,7 @@ beforeEach(() => {
       error: null,
       lastUpdated: 0,
       lastInvalidateAt: 0,
-      lastDeltaSeq: 5,
+      appliedVersion: 5,
       rawAppliedRecordUuids: new Set<string>(),
     });
     return { sessions, activeSessionId: SID };

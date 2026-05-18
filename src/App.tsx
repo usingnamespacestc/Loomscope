@@ -646,7 +646,7 @@ export default function App() {
       // session); we skip the refresh because loadSession is already
       // about to do equivalent work.
       //
-      // We still reset lastDeltaSeq=null so any deltas arriving
+      // We still reset appliedVersion=null so any deltas arriving
       // before refresh completes seed a fresh baseline rather than
       // gap-detecting against the pre-disconnect seq.
       //
@@ -677,9 +677,9 @@ export default function App() {
       // seq baseline + 强制 refresh 补全。refreshSession 自带去重。
       const sessions = useStore.getState().sessions;
       const cur = sessions.get(activeId);
-      if (cur && cur.lastDeltaSeq != null) {
+      if (cur && cur.appliedVersion != null) {
         const next = new Map(sessions);
-        next.set(activeId, { ...cur, lastDeltaSeq: null });
+        next.set(activeId, { ...cur, appliedVersion: null });
         useStore.setState({ sessions: next });
       }
       void useStore.getState().refreshSession(activeId);
@@ -704,7 +704,7 @@ export default function App() {
     //      banner / running-time stuck (the core P5 symptom). Cheap.
     //   2. await refreshSession — pull ground truth (incl. any turns
     //      whose deltas were missed). This RECONCILES; we deliberately
-    //      do NOT null lastDeltaSeq (the old code did): the explicit
+    //      do NOT null appliedVersion (the old code did): the explicit
     //      refresh already gets ground truth, and the natural seq-gap
     //      detector elsewhere will refresh again if a later delta
     //      still doesn't line up — nulling just FORCED a second heavy
@@ -720,7 +720,7 @@ export default function App() {
     // is the fix for the sse_longconv regression where the recovery
     // janked → re-tripped → storm → all appends lost.
     // 中: 半开恢复严格顺序——先 await refreshSession 补全（不再清
-    // lastDeltaSeq，避免二次重建），再重建 EventSource；recovering +
+    // appliedVersion，避免二次重建），再重建 EventSource；recovering +
     // cooldown 保证一次 trip 最多一次 recovery，杜绝大 session 风暴。
     const watchdogTimer = window.setInterval(() => {
       if (recovering || !watchdog.check()) return;

@@ -338,7 +338,7 @@ export interface SessionState {
   lastInvalidateAt: number;
   /** EN (v2.1 PR D2): last applied delta seq for this session. Set on
    *  every successful `applyChatFlowDelta` call. Used by the gap
-   *  detector — if an incoming delta's seq != lastDeltaSeq + 1, we
+   *  detector — if an incoming delta's seq != appliedVersion + 1, we
    *  dropped events and need a full refresh.
    *  null = never received a delta (fresh load) → first delta seeds
    *  the baseline without raising a gap.
@@ -346,7 +346,7 @@ export interface SessionState {
    *  中: 上一条已应用 delta 的 seq。null 表示从未收过 delta（fresh
    *  load）；下一条直接当 baseline。gap 检测发现错位时强制 full refresh。
    */
-  lastDeltaSeq: number | null;
+  appliedVersion: number | null;
   /** EN (v2.2 PR E2): UUIDs of jsonl records already absorbed via the
    *  raw-record fast path. Idempotency guard so chokidar double-fires
    *  or out-of-order replay don't double-apply assistant text to a
@@ -408,7 +408,7 @@ export interface SessionSlice {
   /** EN (v2.1 PR D2): apply a freshly-arrived server delta to this
    *  session's ChatFlow. Implements per-type reducers (chatnode-added /
    *  chatnode-summary-updated / chatnode-removed / checkpoint) and
-   *  gap detection: if `delta.seq != lastDeltaSeq + 1`, schedules a
+   *  gap detection: if `delta.seq != appliedVersion + 1`, schedules a
    *  full `refreshSession` and bails (don't apply out-of-order).
    *
    *  中: 应用一条服务端推过来的 delta。包含 gap 检测——seq 错位会

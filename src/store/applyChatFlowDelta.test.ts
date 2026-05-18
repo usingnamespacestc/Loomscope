@@ -1,6 +1,6 @@
 // EN (v2.1 PR D2): unit tests for the client-side applyChatFlowDelta
 // reducer. Drives the store directly with synthetic delta payloads
-// and asserts the resulting ChatFlow state + lastDeltaSeq.
+// and asserts the resulting ChatFlow state + appliedVersion.
 //
 // 中: applyChatFlowDelta 单测。直接 dispatch 合成 delta，看 store
 // 状态 + seq 走得对不对。
@@ -50,7 +50,7 @@ function cn(id: string, parent: string | null = null): ChatNode {
   };
 }
 
-function seed(chatFlow: ChatFlow, lastDeltaSeq: number | null = null): void {
+function seed(chatFlow: ChatFlow, appliedVersion: number | null = null): void {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
@@ -75,7 +75,7 @@ function seed(chatFlow: ChatFlow, lastDeltaSeq: number | null = null): void {
       error: null,
       lastUpdated: 0,
       lastInvalidateAt: 0,
-      lastDeltaSeq,
+      appliedVersion,
       rawAppliedRecordUuids: new Set<string>(),
     });
     return { sessions, activeSessionId: SID };
@@ -104,7 +104,7 @@ beforeEach(() => {
 });
 
 describe("applyChatFlowDelta", () => {
-  it("first delta after fresh baseline seeds lastDeltaSeq without gap", () => {
+  it("first delta after fresh baseline seeds appliedVersion without gap", () => {
     seed(flow([cn("a")]));
     useStore.getState().applyChatFlowDelta(SID, {
       type: "chatnode-added",
@@ -113,7 +113,7 @@ describe("applyChatFlowDelta", () => {
     } as ChatFlowDeltaEvent);
     const s = useStore.getState().sessions.get(SID);
     expect(s?.chatFlow?.chatNodes.map((c) => c.id)).toEqual(["a", "b"]);
-    expect(s?.lastDeltaSeq).toBe(42);
+    expect(s?.appliedVersion).toBe(42);
     expect(useStore.getState().refreshSession).not.toHaveBeenCalled();
   });
 
@@ -126,7 +126,7 @@ describe("applyChatFlowDelta", () => {
     });
     const cf = useStore.getState().sessions.get(SID)?.chatFlow;
     expect(cf?.chatNodes.map((c) => c.id)).toEqual(["a", "b"]);
-    expect(useStore.getState().sessions.get(SID)?.lastDeltaSeq).toBe(1);
+    expect(useStore.getState().sessions.get(SID)?.appliedVersion).toBe(1);
   });
 
   it("chatnode-added: dedups when id already present (replace semantics)", () => {
@@ -185,7 +185,7 @@ describe("applyChatFlowDelta", () => {
       chatNodeCount: 2,
     });
     expect(useStore.getState().refreshSession).not.toHaveBeenCalled();
-    expect(useStore.getState().sessions.get(SID)?.lastDeltaSeq).toBe(1);
+    expect(useStore.getState().sessions.get(SID)?.appliedVersion).toBe(1);
   });
 
   it("checkpoint: chatNodeCount mismatch → refreshSession", () => {
@@ -314,7 +314,7 @@ describe("applyChatFlowDelta", () => {
         error: null,
         lastUpdated: 0,
         lastInvalidateAt: 0,
-        lastDeltaSeq: null,
+        appliedVersion: null,
       });
       return { sessions, activeSessionId: SID };
     });

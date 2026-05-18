@@ -82,7 +82,7 @@ function seed(chatFlow: ChatFlow | null): void {
       error: null,
       lastUpdated: 0,
       lastInvalidateAt: 0,
-      lastDeltaSeq: null,
+      appliedVersion: null,
       rawAppliedRecordUuids: new Set<string>(),
     });
     return { sessions, activeSessionId: SID };

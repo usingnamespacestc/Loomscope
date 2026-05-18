@@ -13,7 +13,7 @@
 //      clearing cc-hook events were the ones missed in the dark)
 //   2. awaits refreshSession (ground-truth resync) FIRST
 //   3. THEN closes the dead EventSource and recreates it (reconnect)
-//   4. does NOT null lastDeltaSeq (the explicit refresh reconciles;
+//   4. does NOT null appliedVersion (the explicit refresh reconciles;
 //      nulling forced a second heavy rebuild — the sse_longconv
 //      regression) — it must survive unchanged
 // All asserted via STORE STATE + mock-EventSource bookkeeping — no
@@ -88,7 +88,7 @@ beforeEach(() => {
             gitDirtyCount: null,
             gitDirtyFiles: [],
             gitDirtyFetchedAt: 0,
-            lastDeltaSeq: 42,
+            appliedVersion: 42,
             rawAppliedRecordUuids: new Set<string>(),
           },
         ],
@@ -183,10 +183,10 @@ describe("App — SSE staleness watchdog (P5/P2/P3)", () => {
     const s = useStore.getState().sessions.get(SID)!;
     expect(s.pendingPermission).toBeNull();
     expect(s.currentTurn).toBeNull();
-    // 4. … but lastDeltaSeq is NOT nulled — the explicit
+    // 4. … but appliedVersion is NOT nulled — the explicit
     //    refreshSession reconciles ground truth; nulling only forced
     //    a second heavy rebuild (the sse_longconv regression).
-    expect(s.lastDeltaSeq).toBe(42);
+    expect(s.appliedVersion).toBe(42);
   });
 
   it("does NOT reconnect before the stale threshold (no premature trip)", async () => {
