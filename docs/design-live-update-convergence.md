@@ -274,6 +274,38 @@ in PR-3 + PR-4.
   suspects `8834d41`/`c864efe`/`05795b8` (shipped vitest-only after
   the last e2e-green `ed916cc`). Tracked as **task #232**; see
   `docs/report-loomscope-convergence-pr1.md`.
+- 2026-05-18: **#232 resolved** (`bdf6165`) — the clean-server
+  `sse_longconv` baseline-red was the cold-load uncentred-canvas
+  regression from `c864efe`/`05795b8`; first-paint now centres from
+  the dagre `nodes` memo. **#233 shipped** (`60b7198`): `sse_longconv`
+  + `sse_autorefresh` gates made deterministic — worst-append
+  wall-clock demoted to non-gating telemetry; cold-start solved by an
+  INTERNAL WARM-UP (open + 2 throwaway appends absorb the cold-JIT
+  delta/SSE path — verified run-1 first cold append took 104 s,
+  discarded; measured appends then all render); `sse_autorefresh`
+  given `test.setTimeout(120_000)` (its implicit default-30s budget
+  was a machine-load gate). DoD met: cold restart then **4/4
+  consecutive green** both specs. PR-1's 4-consecutive e2e DoD is now
+  satisfiable ⇒ **task #231 closed**. See
+  `docs/report-loomscope-convergence-pr1.md` + handoff §1.
+- 2026-05-18: **PR-2 shipped** — unified signal normaliser
+  (`signalNormalizer.ts`) + the one ①②③ classifier
+  (`signalClassifier.ts`) + the coalesced/quiescence/version-short-
+  circuited/re-entrant reconcile backbone (`reconcileScheduler.ts`,
+  pure clock-injected like `stalenessWatchdog`), wired ADDITIVELY into
+  `src/App.tsx` (single `ingestSignal` tap on the existing per-event
+  wrapper + a 100 ms reconcile tick). Reproduce-first: the dropped
+  mid-stream `chatnode-summary-updated` + turn-end quiescence
+  screenshot bug now converges via ONE reconcile with no further
+  delta (`reconcileConvergence.test.ts`); 42 PR-2 unit/integration
+  tests + full vitest 1199 green (lone failure = the pre-existing
+  out-of-scope `foldProjection` 100 ms perf flake, passes 23/23
+  isolated). **NOT touched**: `sessionRegistry`/lifecycle (PR-2.5),
+  the ④ retract arm (PR-3), the single store shape / cross-plane OR
+  (PR-4); NO band-aid deleted (PR-5) — the backbone runs in parallel,
+  its version short-circuit guaranteeing zero extra GETs whenever the
+  old paths already converged. See
+  `docs/report-loomscope-convergence-pr2.md`.
 
 ---
 

@@ -37,6 +37,13 @@ import {
   SSE_WATCHDOG_TICK_MS,
   createSseWatchdog,
 } from "@/sse/stalenessWatchdog";
+import { normalizeSignal } from "@/sse/signalNormalizer";
+import {
+  RECONCILE_DEBOUNCE_MS,
+  RECONCILE_MAX_WAIT_MS,
+  RECONCILE_TICK_MS,
+  createReconcileScheduler,
+} from "@/sse/reconcileScheduler";
 import { useStore } from "@/store/index";
 import { chatFlowHash } from "@/utils/chatFlowSig";
 import {
@@ -213,6 +220,69 @@ export default function App() {
     // 中: recovery 期间禁止再次触发；epoch 重建 effect 时新闭包自动
     // 复位，不需要 useRef。
     let recovering = false;
+
+    // ── PR-2: convergent reconcile backbone (ADDITIVE) ──────────────
+    // docs/design-live-update-convergence.md §9.1/§9.4/§9.7. ONE
+    // coalesced, version-short-circuited, quiescence-capable reconcile
+    // path, running IN PARALLEL with the existing per-event recovery
+    // (the seq-gap/drift/hello/watchdog refreshes are deliberately NOT
+    // removed — that is PR-5). This deletes no band-aid, adds no
+    // retract arm (PR-3), and does not touch sessionRegistry (PR-2.5).
+    // Safe to run alongside the old paths because the version-equal
+    // short-circuit makes a due reconcile a no-op whenever the store
+    // already covers the max server version a signal announced (so a
+    // healthy delta burst, or a refresh the old path already did,
+    // costs zero extra GETs).
+    // 中: PR-2 收敛主干（附加层），与旧逐事件 recovery 并行。版本短路
+    // 使常态/旧路径已收敛时本路径为 no-op，零额外 GET。不删 band-aid、
+    // 无 retract、不碰 sessionRegistry。
+    let observedServerVersion: number | null = null;
+    const reconcile = createReconcileScheduler({
+      debounceMs: RECONCILE_DEBOUNCE_MS,
+      maxWaitMs: RECONCILE_MAX_WAIT_MS,
+      getVersions: () => ({
+        applied:
+          useStore.getState().sessions.get(activeId)?.appliedVersion ?? null,
+        server: observedServerVersion,
+      }),
+      // Cold-storm guard: the convergent reconcile only converges an
+      // EXISTING baseline; the initial cold fetch is loadSession's
+      // job. Stay out until the session has a chatFlow baseline and
+      // no load/refresh is in flight — otherwise the tick piles heavy
+      // refreshSession full-rebuilds onto the cold 600-node
+      // buildChatFlow (the regression that broke the cold
+      // sse_longconv run; design §9.7 / d50bfe0).
+      canReconcile: () => {
+        const s = useStore.getState().sessions.get(activeId);
+        return !!s && !!s.chatFlow && !s.isLoading;
+      },
+    });
+    // Every inbound SSE event is folded through the unified normaliser
+    // here (single point — mirrors how the watchdog taps every event):
+    // track the max server version seen, and schedule a reconcile when
+    // the signal type implies convergence (invalidate / hello /
+    // sdk-idle / sdk-message / sdk-session-closed) OR the signal is
+    // versioned (delta / drift-ping) — the latter self-no-ops via the
+    // short-circuit unless the client is actually behind, so it needs
+    // no duplicated gap logic and never storms a healthy stream.
+    const ingestSignal = (type: string, ev: Event): void => {
+      let payload: unknown = undefined;
+      try {
+        payload = JSON.parse((ev as MessageEvent).data ?? "null");
+      } catch {
+        /* non-JSON (e.g. bare ping) — normaliser handles undefined */
+      }
+      const sig = normalizeSignal(type, payload);
+      if (
+        sig.version != null &&
+        (observedServerVersion == null || sig.version > observedServerVersion)
+      ) {
+        observedServerVersion = sig.version;
+      }
+      if (sig.reconcileReason) reconcile.schedule(sig.reconcileReason);
+      else if (sig.version != null) reconcile.schedule("seq-gap");
+    };
+
     const rawAdd = es.addEventListener.bind(es);
     es.addEventListener = ((
       type: string,
@@ -223,6 +293,7 @@ export default function App() {
         type,
         (ev: Event) => {
           watchdog.noteEvent();
+          ingestSignal(type, ev);
           return (cb as EventListener)(ev);
         },
         o,
@@ -749,12 +820,51 @@ export default function App() {
         })
         .finally(() => {
           watchdog.reset();
+          // PR-2: the watchdog already pulled ground truth via the
+          // refreshSession above; drop the parallel scheduler's
+          // pending/in-flight state so it doesn't re-fire across the
+          // forced socket recreate (the effect re-runs with a fresh
+          // scheduler closure anyway via the epoch bump).
+          reconcile.reset();
+          observedServerVersion = null;
           es.close();
           setSseEpoch((e) => e + 1); // re-run effect → fresh EventSource
         });
     }, SSE_WATCHDOG_TICK_MS);
+
+    // PR-2: convergent reconcile tick. Cadence is finer than the
+    // debounce so coalescing/​max-wait resolve promptly; the work per
+    // tick is a few comparisons unless a reconcile is actually due.
+    // The reconcile ACTION today is the existing refreshSession (the
+    // incremental version-GET is a later PR); PR-2's contribution is
+    // the coalescing + version short-circuit + quiescence firing IN
+    // FRONT of it. refreshSession is internally dedup'd, so even if
+    // the parallel old path raced one, this collapses.
+    // 中: PR-2 reconcile tick。节奏细于 debounce；除非真到期否则仅几
+    // 次比较。动作仍是既有 refreshSession（增量 GET 属后续 PR），
+    // PR-2 贡献的是其前面的合并 + 版本短路 + 静默触发。
+    const reconcileTimer = window.setInterval(() => {
+      const d = reconcile.tick();
+      if (d.action !== "reconcile") return;
+      void useStore
+        .getState()
+        .refreshSession(activeId)
+        .catch(() => {
+          /* refreshSession swallows its own errors; ignore */
+        })
+        .finally(() => {
+          // Re-baseline the observed server version: refreshSession
+          // pulled ground truth, so only a FRESH versioned signal
+          // that is genuinely ahead should re-arm convergence (else a
+          // stale observed version would loop a redundant GET).
+          observedServerVersion = null;
+          reconcile.done();
+        });
+    }, RECONCILE_TICK_MS);
+
     return () => {
       window.clearInterval(watchdogTimer);
+      window.clearInterval(reconcileTimer);
       es.close();
       useStore.getState().setLiveStatus("session", "idle");
     };
