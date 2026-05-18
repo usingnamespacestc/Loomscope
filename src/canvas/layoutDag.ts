@@ -62,9 +62,40 @@ export function nodeCenterPoint(node: {
   const px = node.position?.x;
   const py = node.position?.y;
   if (!Number.isFinite(px) || !Number.isFinite(py)) return null;
-  const w = node.measured?.width ?? NODE_WIDTH;
-  const h = node.measured?.height ?? NODE_HEIGHT;
+  // `?? NODE_WIDTH` does NOT catch NaN (nullish coalescing only traps
+  // null/undefined). React Flow can hand back `measured: {width:NaN}`
+  // for a placeholder measured before it had a real size — fall back
+  // on any non-finite measure, not just a missing one.
+  const mw = node.measured?.width;
+  const mh = node.measured?.height;
+  const w = Number.isFinite(mw) ? (mw as number) : NODE_WIDTH;
+  const h = Number.isFinite(mh) ? (mh as number) : NODE_HEIGHT;
   return { cx: (px as number) + w / 2, cy: (py as number) + h / 2 };
+}
+
+// EN (2026-05-18): final pan-target sanitiser. Composes a node centre
+// + a viewport zoom + a screen-space y bias into the exact args
+// `rf.setCenter` receives, and returns null if ANYTHING is non-finite.
+// `vp.zoom` is 0 or NaN before the viewport initialises (an early pan
+// racing first-paint/fitView); `bias / 0` = Infinity, `bias / NaN` =
+// NaN, and a bad `zoom` makes d3 emit NaN transforms — the
+// `<pattern> y` / `<circle> cx` console flood. We sanitise zoom to a
+// safe positive value and finite-check the result so NO degraded
+// input can ever reach setCenter. Pure + RF-free → unit-testable.
+// 中: setCenter 最终入参的统一净化器；zoom 为 0/NaN(视口未初始化)
+// 时回退安全值,任一非有限则返回 null,杜绝 NaN 进 setCenter。
+export function safePanTarget(
+  center: { cx: number; cy: number } | null,
+  rawZoom: number,
+  biasPx: number,
+): { x: number; y: number; zoom: number } | null {
+  if (!center) return null;
+  const zoom =
+    Number.isFinite(rawZoom) && rawZoom > 0 ? rawZoom : 1;
+  const x = center.cx;
+  const y = center.cy + biasPx / zoom;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y, zoom };
 }
 
 export interface ChatNodeRFData extends Record<string, unknown> {

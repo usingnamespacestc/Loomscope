@@ -44,6 +44,7 @@ import {
   incrementalAppendLayout,
   layoutChatFlow,
   nodeCenterPoint,
+  safePanTarget,
   type PrevLayout,
 } from "@/canvas/layoutDag";
 import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
@@ -218,21 +219,26 @@ function panToNodeCenter(
   node: { position: { x: number; y: number }; measured?: { width?: number; height?: number } },
   opts: { duration?: number } = {},
 ): boolean {
-  const c = nodeCenterPoint(node);
-  if (!c) return false;
   const vp = rf.getViewport();
-  rf.setCenter(
-    c.cx,
-    c.cy + CANVAS_FOCUS_BIAS_Y_PX / vp.zoom,
-    {
-      zoom: vp.zoom,
-      // Default 200ms for click-focus animation; first-paint passes 0
-      // because the canvas is opacity-gated until firstPaintReady and
-      // an animation would play out behind the gate, then unblur into
-      // motion — looks like a flicker.
-      duration: opts.duration ?? 200,
-    },
+  const t = safePanTarget(
+    nodeCenterPoint(node),
+    vp.zoom,
+    CANVAS_FOCUS_BIAS_Y_PX,
   );
+  // null = node not laid out yet OR viewport zoom not ready OR any
+  // degraded input → no-op. Callers with a pending-pan retry keep the
+  // target pending so the post-layout drain re-attempts once geometry
+  // is sane (the earlier fix only guarded node position, missing the
+  // viewport-zoom path — this composes both, fully).
+  if (!t) return false;
+  rf.setCenter(t.x, t.y, {
+    zoom: t.zoom,
+    // Default 200ms for click-focus animation; first-paint passes 0
+    // because the canvas is opacity-gated until firstPaintReady and
+    // an animation would play out behind the gate, then unblur into
+    // motion — looks like a flicker.
+    duration: opts.duration ?? 200,
+  });
   return true;
 }
 

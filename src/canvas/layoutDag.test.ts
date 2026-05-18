@@ -12,6 +12,7 @@ import {
   nodeCenterPoint,
   nodeOwnFileChanges,
   previewUserContent,
+  safePanTarget,
 } from "@/canvas/layoutDag";
 import type { ChatFlow, ChatNode } from "@/data/types";
 
@@ -1165,5 +1166,60 @@ describe("nodeCenterPoint — NaN-position guard (2026-05-18)", () => {
     expect(
       nodeCenterPoint({ position: { x: 0, y: -Infinity } }),
     ).toBeNull();
+  });
+
+  it("falls back to NODE_WIDTH/HEIGHT when measured size is NaN (?? does NOT catch NaN)", () => {
+    // The 2nd-incomplete-fix hole: `measured?.width ?? NODE_WIDTH`
+    // passes NaN straight through (nullish coalescing only traps
+    // null/undefined). RF can measure a placeholder at NaN size.
+    const c = nodeCenterPoint({
+      position: { x: 100, y: 200 },
+      measured: { width: NaN, height: NaN },
+    });
+    expect(c).toEqual({ cx: 100 + NODE_WIDTH / 2, cy: 200 + NODE_HEIGHT / 2 });
+  });
+});
+
+describe("safePanTarget — viewport-zoom + final-finite guard (2026-05-18)", () => {
+  const BIAS = 16;
+
+  it("passes through a healthy center + zoom", () => {
+    const t = safePanTarget({ cx: 50, cy: 80 }, 1.5, BIAS);
+    expect(t).toEqual({ x: 50, y: 80 + BIAS / 1.5, zoom: 1.5 });
+  });
+
+  it("returns null when the center is null (node not laid out)", () => {
+    expect(safePanTarget(null, 1, BIAS)).toBeNull();
+  });
+
+  it("sanitises zoom=0 to 1 (viewport not initialised → no Infinity)", () => {
+    // The reported 2nd flood: vp.zoom=0 before first-paint →
+    // `BIAS / 0` = Infinity → NaN d3 transform. Must fall back.
+    const t = safePanTarget({ cx: 10, cy: 20 }, 0, BIAS);
+    expect(t).toEqual({ x: 10, y: 20 + BIAS / 1, zoom: 1 });
+  });
+
+  it("sanitises zoom=NaN and negative zoom to 1", () => {
+    expect(safePanTarget({ cx: 0, cy: 0 }, NaN, BIAS)).toEqual({
+      x: 0,
+      y: BIAS,
+      zoom: 1,
+    });
+    expect(safePanTarget({ cx: 0, cy: 0 }, -2, BIAS)).toEqual({
+      x: 0,
+      y: BIAS,
+      zoom: 1,
+    });
+  });
+
+  it("never returns a non-finite x/y/zoom (final backstop)", () => {
+    for (const z of [0, NaN, Infinity, -Infinity, -1, 2]) {
+      const t = safePanTarget({ cx: 1, cy: 2 }, z, BIAS);
+      expect(t).not.toBeNull();
+      expect(Number.isFinite(t!.x)).toBe(true);
+      expect(Number.isFinite(t!.y)).toBe(true);
+      expect(Number.isFinite(t!.zoom)).toBe(true);
+      expect(t!.zoom).toBeGreaterThan(0);
+    }
   });
 });
