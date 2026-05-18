@@ -110,6 +110,32 @@ regression over mere slowness, but cannot be disambiguated without a
 controlled run (idle machine + server-restart for specific bytes),
 which requires the user.
 
+### UPDATE (idle-machine run — disambiguated)
+
+Re-ran e2e on HEAD with the machine idle (user away). Result:
+`sse_autorefresh` PASS; `sse_longconv` open→first-card **4580ms**,
+**all 6 appends rendered** (`NEVER rendered: []`), failing ONLY on
+`worst append→visible 11328ms` vs the <10s gate. This conclusively
+splits #232:
+
+- **"6 appends never render" = machine-load, NOT a code regression.**
+  Red only while the user was actively on the machine; all 6 render
+  idle. That open question is closed — no appends-null code bug.
+- **Sole real regression = the NaN-pan canvas fix
+  (`c864efe`/`05795b8`)** — my own this-session change. Bisect-
+  confirmed (open 8475→4816ms on revert) and consistent with idle
+  worst-append 11.3s vs ~6.5–6.9s historically at `ed916cc`. It is
+  a 600-node canvas pan/layout latency regression, shipped
+  vitest-only.
+
+So the PR-1 e2e gate is blocked by exactly ONE precisely-identified
+issue (#232 = the NaN-pan latency regression), which is **outside
+PR-1's additive-plumbing deliverable** and whose fix is canvas code
+that must not ship vitest-only unattended (the exact failure pattern
+this whole effort exists to stop) — i.e. it needs the user's
+explicit authorization (option 1/2/3), which was not given before
+they went away.
+
 ### Recommended path
 
 Bisect #232 first (checkout `ed916cc`-era, controlled idle run,
