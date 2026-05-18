@@ -262,6 +262,18 @@ in PR-3 + PR-4.
   lifecycle becomes server-held, versioned, reconcilable on the same
   contract as content. Captured in **§9.8**; new **PR-2.5** in §9.7.
   Three-segment (backend / SSE / frontend) design walk now complete.
+- 2026-05-18: **PR-1 shipped** (`91dac34` rename + `22f7e6a` version
+  watermark plumbing + loomId transport) — additive, recorded-not-
+  consumed, deterministically proven zero-behaviour-change (1158
+  vitest green, seq-carrying events byte-identical, serverVersion
+  inert). loomId↔promptId binding correlation deferred as the
+  human-gated remainder (touches SDK-lifecycle owner). e2e
+  same-range gate could NOT be evaluated: `sse_longconv` is **red at
+  the pre-PR-1 baseline itself** on a clean server (open 8475ms / 6
+  appends null) — a pre-existing regression unrelated to PR-1, prime
+  suspects `8834d41`/`c864efe`/`05795b8` (shipped vitest-only after
+  the last e2e-green `ed916cc`). Tracked as **task #232**; see
+  `docs/report-loomscope-convergence-pr1.md`.
 
 ---
 
