@@ -326,6 +326,26 @@ in PR-3 + PR-4.
   sourcing makes "card correct ⇒ conversation correct" structural.
   Remaining: finish PR-4 content unification across the remaining
   views, then PR-2.5 → PR-3 → PR-4 OR-collapse → PR-5.
+- 2026-05-19: PR-4 content-unification scan = **class closed** by
+  `d91682d` + `043467f`: the only views rendering assistant content
+  as primary are canvas card + conversation (both single-sourced on
+  store summary now); EffectiveContext already reads summary directly
+  (no lazy workflow); ChatNodeDetail/WorkFlowCanvas lazy-load
+  workflow legitimately for *structure*, not a duplicated text
+  source. No remaining analogous "stale fetched workflow blanks live
+  summary" view. Proceeded per design → **PR-2.5 slice 1 shipped**
+  (`e4b243e`): server-held, content-versioned `LifecycleSnapshot`
+  shape + pure `buildLifecycleSnapshot(registry, id)` aggregator over
+  facts the server already owns (sessionRegistry.snapshot +
+  pendingPermissionTracker, stamped getCurrentSeq), exposed read-only
+  on additive `GET /:id/lifecycle` — recorded-not-consumed, zero
+  writes/broadcasts/behaviour change (PR-1 discipline on the
+  server surface; sessionsRouter has no DI'd registry so it lives on
+  the turns router which does). DEFERRED to PR-2.5 slices 2+:
+  subscribe-replay + reconcile-GET inclusion; terminal-CC
+  hook→lifecycle reducer (generalised pendingPermissionTracker +
+  lost-Stop transcript-cross-check/TTL); respawn/deferral/rate-limit
+  fields; then PR-4 OR-collapse (frontend) → PR-3 → PR-5.
 
 ---
 
