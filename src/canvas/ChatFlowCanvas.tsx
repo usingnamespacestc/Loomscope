@@ -44,9 +44,11 @@ import {
   incrementalAppendLayout,
   layoutChatFlow,
   nodeCenterPoint,
+  refreshChatNodeContent,
   safePanTarget,
   type PrevLayout,
 } from "@/canvas/layoutDag";
+import { chatFlowContentSignature } from "@/utils/chatFlowSig";
 import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
 import { AwaySummaryNodeCard } from "@/canvas/nodes/AwaySummaryNodeCard";
 import { ChatFoldNodeCard } from "@/canvas/nodes/ChatFoldNodeCard";
@@ -290,7 +292,11 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
   // 中: 拓扑变化时先试线性尾追加（复用旧坐标，仅新叶子定位），
   // 非平凡情况回退全量 dagre。ref 缓存上次结果用于增量。
   const prevLayoutRef = useRef<PrevLayout | null>(null);
-  const { nodes, edges: rawEdges } = useMemo(() => {
+  // POSITIONS — dagre, gated on the structural signature ONLY. This
+  // is the #226 perf invariant: content-only deltas never re-run the
+  // 600-node layout (the `__layoutChatFlowCalls` e2e gate asserts
+  // this). Unchanged from before.
+  const laidOut = useMemo(() => {
     const incr = incrementalAppendLayout(
       prevLayoutRef.current,
       chatFlow,
@@ -305,6 +311,31 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutSig]);
+  // CONTENT — the dual gate. The node memo used to be `[layoutSig]`
+  // alone, so a `chatnode-summary-updated` delta (assistant text
+  // streaming in) updated the store but the card's
+  // `data.assistantPreview` only refreshed on the NEXT topology
+  // change — the user-reported "ChatNode assistant message doesn't
+  // update until the next message creates a node". `contentSig`
+  // changes whenever any card's rendered content changes;
+  // `refreshChatNodeContent` re-derives card `data` from the live
+  // chatFlow over the cached positions — O(N), NO dagre, so the
+  // #226 invariant above is fully preserved.
+  const contentSig = useMemo(
+    () => chatFlowContentSignature(chatFlow),
+    [chatFlow],
+  );
+  const { nodes, edges: rawEdges } = useMemo(
+    () => ({
+      nodes: refreshChatNodeContent(laidOut.nodes, chatFlow),
+      edges: laidOut.edges,
+    }),
+    // chatFlow is read but its render-relevant content is digested by
+    // contentSig (structure by laidOut/layoutSig) — same intentional
+    // exhaustive-deps exclusion as the layout memo above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [laidOut, contentSig],
+  );
   // EN: v0.9.1 Task 3 — decorate the edge feeding the running
   // ChatNode with `data.running=true` so ContinuationEdge / SpawnEdge
   // render the animated dashed flow. We pass it as edge data rather

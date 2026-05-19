@@ -260,6 +260,57 @@ export function chatFlowLayoutSignature(
   return parts.join("\n") + "\n##FOLD##" + fold;
 }
 
+/**
+ * EN: the content-side counterpart of the layout signature. Given an
+ * ALREADY-laid-out node list (positions fixed by a dagre pass that is
+ * correctly gated on `chatFlowLayoutSignature`) and the CURRENT
+ * chatFlow, return a new list where every `chatNode`'s `data` is
+ * re-derived from the live ChatNode — reusing the cached dagre
+ * `position` and the cached structural edge flags / childCount (these
+ * are stable whenever the layout signature is unchanged, which is the
+ * only time this is called). NO dagre, NO fold projection: pure O(N)
+ * field work via the existing `deriveCardData`. This is what makes a
+ * content-only `chatnode-summary-updated` delta (assistant text
+ * streaming in) actually reach the card without re-running the
+ * 600-node layout — the bug was ChatFlowCanvas memoising BOTH
+ * positions and card data on the layout signature alone, so content
+ * deltas updated the store but never the card until the next topology
+ * change. The `__layoutChatFlowCalls` counter (the #226 e2e gate) is
+ * intentionally NOT touched here.
+ *
+ * 中: layout 指纹的内容侧对偶。给定已排好版的节点 + 当前 chatFlow，
+ * 复用缓存坐标与结构边标志，仅用 deriveCardData 重算每个 chatNode 的
+ * data。无 dagre、无 fold projection，纯 O(N)。让 content-only 的
+ * summary-updated delta 不重排也能刷到卡片。dagre 计数器不变。
+ */
+export function refreshChatNodeContent(
+  nodes: LayoutRFNode[],
+  chatFlow: ChatFlow,
+): LayoutRFNode[] {
+  const byId = new Map(chatFlow.chatNodes.map((c) => [c.id, c]));
+  let changed = false;
+  const next = nodes.map((n) => {
+    if (n.type !== "chatNode") return n;
+    const cn = byId.get(n.id);
+    if (!cn) return n;
+    const data = deriveCardData(
+      cn,
+      {
+        hasIncomingEdge: n.data.hasIncomingEdge,
+        hasOutgoingEdge: n.data.hasOutgoingEdge,
+      },
+      n.data.childCount,
+      chatFlow,
+    );
+    changed = true;
+    return { ...n, data };
+  });
+  // Preserve array identity when there were no chatNodes to refresh
+  // (e.g. a fold-only / empty flow) so downstream memo consumers
+  // don't see a spurious new reference.
+  return changed ? next : nodes;
+}
+
 export function layoutChatFlow(
   chatFlow: ChatFlow,
   foldedCompactIds?: Set<string>,
@@ -893,7 +944,7 @@ function deriveContextTokens(cn: ChatNode): {
   };
 }
 
-function deriveCardData(
+export function deriveCardData(
   cn: ChatNode,
   edges: { hasIncomingEdge: boolean; hasOutgoingEdge: boolean },
   childCount: number,

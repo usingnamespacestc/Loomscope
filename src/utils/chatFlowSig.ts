@@ -11,7 +11,7 @@
 // 两边一致，delta 正确应用后客户端算出的 hash 跟服务端必相等；
 // 不等说明 reducer 漂移。FNV-1a 32-bit，无 Node 依赖，浏览器也用。
 
-import type { ChatNode, WorkflowSummary } from "@/data/types";
+import type { ChatFlow, ChatNode, WorkflowSummary } from "@/data/types";
 
 /**
  * EN: stable signature of a WorkflowSummary's user-visible fields.
@@ -50,6 +50,35 @@ export function chatNodeSig(cn: ChatNode): string {
     cn.isCompactSummary ? "1" : "0",
     summarySig(cn.workflow.summary),
   ].join("\t");
+}
+
+/**
+ * EN: cheap per-canvas CONTENT digest — the dual of
+ * `chatFlowLayoutSignature` (which is structure-only and deliberately
+ * excludes content so 600-node dagre doesn't re-run on every
+ * streaming token, see layoutDag.ts:234). ChatFlowCanvas's node memo
+ * was gated SOLELY on the layout signature, so a content-only
+ * `chatnode-summary-updated` delta updated the store but never
+ * refreshed the card's `data.assistantPreview` — the card stayed
+ * stale until the next topology change (next message) bumped the
+ * layout signature. This digest changes whenever any card's rendered
+ * content changes (per-node `summarySig`: assistantPreview/assistantText
+ * length, llmCount, tokens, …) so the data-refresh memo can re-derive
+ * card data cheaply (O(N) string + the existing pure deriveCardData)
+ * WITHOUT calling dagre — preserving the #226 perf invariant exactly.
+ *
+ * 中: layout 指纹的对偶——内容指纹。layout 指纹故意不含内容（避免每
+ * 个流式 token 全量 dagre），但 canvas 节点 memo 只盯 layout 指纹，
+ * 导致 summary-updated delta 进了 store 却不刷新卡片，直到下一次拓扑
+ * 变化才补上。本指纹随任意卡片渲染内容变化而变，让"只刷 data 不重
+ * 排"的廉价 memo 能 O(N) 重算卡片数据，dagre 调用次数不变。
+ */
+export function chatFlowContentSignature(chatFlow: ChatFlow): string {
+  const parts: string[] = [];
+  for (const cn of chatFlow.chatNodes) {
+    parts.push(cn.id + "|" + summarySig(cn.workflow.summary));
+  }
+  return parts.join("\n");
 }
 
 /**
