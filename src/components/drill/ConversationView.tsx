@@ -1139,25 +1139,13 @@ function MessageBubbleImpl({
   const access = useChatNodeWorkflow(sessionId, chatNode, {
     autoFetch: !disableAutoFetch,
   });
-  const rounds = useMemo(() => {
-    // EN (v0.9.2): when workflow is loaded, build rounds with full
-    // structure (text + tool_call + delegate). When NOT loaded yet,
-    // synthesize text-only rounds from summary.assistantText so the
-    // bubble shows complete assistant text immediately on session
-    // open — tool pills fill in below when the lazy workflow fetch
-    // lands. Keeps user message + assistant message visually
-    // coupled instead of staggered.
-    // 中: workflow 已加载 → 完整 round（含工具）；未加载时用
-    // summary.assistantText 临时合成纯文本 round，让 bubble 即时显
-    // 示完整助手文本。Tool pill 在 workflow 真正到达时再补进来。
-    if (access.workflow) return buildConversationRounds(access.workflow);
-    const texts = chatNode.workflow.summary?.assistantText ?? [];
-    return texts.map((text, llmIndex) => ({
-      llmIndex,
-      text,
-      tools: [],
-    }));
-  }, [access.workflow, chatNode]);
+  // PR-4 content single-source: TEXT is always the live store
+  // summary (same source the canvas card reads); the fetched
+  // workflow only enriches tool pills. See deriveConversationRounds.
+  const rounds = useMemo(
+    () => deriveConversationRounds(chatNode, access.workflow),
+    [access.workflow, chatNode],
+  );
   // EN: Inline-content fallback for ChatNodes whose payload lives
   // OUTSIDE workflow.nodes — compact summary, slash command stdout.
   // Both are stored directly on the ChatNode (compactMetadata /
@@ -1533,6 +1521,55 @@ function buildConversationRounds(
   }
   if (cur) rounds.push(cur);
   // Drop empty rounds (no text + no tools).
+  return rounds.filter(
+    (r) => (r.text && r.text.trim().length > 0) || r.tools.length > 0,
+  );
+}
+
+/**
+ * EN (PR-4 "content single-source", slice 1): the assistant TEXT of a
+ * conversation bubble is canonically the LIVE store
+ * `chatNode.workflow.summary.assistantText` — the SAME source the
+ * canvas card reads (proven live-correct). The lazily-fetched
+ * workflow (workflowCache) is ENRICHMENT for tool pills ONLY; it must
+ * never gate or replace assistant text.
+ *
+ * The bug this kills: the rounds memo previously did
+ * `if (access.workflow) return buildConversationRounds(access.workflow)`
+ * — a stale/early workflowCache fetch (whose staleSince→refetch
+ * trigger differs on the SDK / Loomscope-send path vs the file-watch
+ * path) won OUTRIGHT over the fresh summary, so the conversation went
+ * blank while the canvas card (summary-sourced) showed correctly;
+ * only a reload (no cache → summary fallback) recovered it. Two
+ * views, two sources, divergent staleness = the §9 holey-contract
+ * class. Single-sourcing the text makes "card correct ⇒ conversation
+ * correct" structural, regardless of which signal/path delivered the
+ * update.
+ *
+ * 中: 对话气泡助手文本以 store 的 summary.assistantText 为唯一真源
+ * （与卡片同源、已证 live 正确）；懒取 workflow 仅附加工具 pill，绝
+ * 不门控/替换文本。根治"workflow 一存在就赢、无视 live summary"导
+ * 致 SDK 路径对话空白、必须刷新才好的分叉源 bug。
+ */
+export function deriveConversationRounds(
+  chatNode: ChatNode,
+  fetchedWorkflow: WorkFlow | null,
+): ConversationRound[] {
+  const texts = chatNode.workflow.summary?.assistantText ?? [];
+  const wfRounds = buildConversationRounds(fetchedWorkflow);
+  // No canonical summary text (sub-agent inline / orphan-tool /
+  // pre-summary fixtures): fall back to the fetched workflow so we
+  // never regress turns whose text only lives on workflow.nodes.
+  if (texts.length === 0) return wfRounds;
+  // Spine = canonical live summary text; tools merged from the
+  // fetched workflow by llm index (best-effort enrichment — a stale
+  // or missing workflow simply means no pills yet, NEVER blank text).
+  const rounds = texts.map((text, llmIndex) => ({
+    llmIndex,
+    text,
+    tools: wfRounds[llmIndex]?.tools ?? [],
+  }));
+  // Match buildConversationRounds: drop fully-empty rounds.
   return rounds.filter(
     (r) => (r.text && r.text.trim().length > 0) || r.tools.length > 0,
   );
