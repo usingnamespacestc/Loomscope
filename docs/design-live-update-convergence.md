@@ -364,6 +364,22 @@ in PR-3 + PR-4.
   server tests + full vitest 1218 green; tsc clean. (Commit message
   body lost a few backticked tokens to the `git commit -m` backtick-
   substitution landmine — content correct, not force-push-fixed.)
+- 2026-05-19: **PR-2.5 slice 3a shipped** (`7f53307`): terminal-CC
+  `hookLifecycleReducer` generalises the proven
+  `pendingPermissionTracker` pattern to turn-running
+  (UserPromptSubmit→running{since}; Stop/SessionEnd→clear; dup-submit
+  no reset). `buildLifecycleSnapshot` composes turnRunning =
+  SDK-registry-running ?? terminal-hook-running (registry
+  precedence); init wired beside initPendingPermissionTracker. Still
+  recorded-not-consumed → zero behaviour change. SCAFFOLD ONLY (long
+  defensive TTL leak-guard); the lost-Stop transcript-append turn-end
+  cross-check + tight TTL — the ACTUAL P5 cure + the design's flagged
+  "only genuinely new subtlety, needs empirical validation" — is the
+  next sub-slice **3b** with its own reproduce-first lost-Stop suite.
+  58 server tests + full vitest 1230 green; commit message
+  backtick-free (landmine avoided). Sequence: 3b →
+  respawn/deferral/rate-limit fields → PR-4 OR-collapse (frontend) →
+  PR-3 → PR-5.
 
 ---
 
