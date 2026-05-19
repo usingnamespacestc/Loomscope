@@ -306,6 +306,26 @@ in PR-3 + PR-4.
   its version short-circuit guaranteeing zero extra GETs whenever the
   old paths already converged. See
   `docs/report-loomscope-convergence-pr2.md`.
+- 2026-05-19: goal-loop incident paused the rework; user resumed it
+  ("unify the signal path > keep patching") and chose **B**: do
+  **PR-4 content-single-source first**, splitting PR-4 into (a)
+  content unification now and (b) the cross-plane is-running OR
+  collapse later (the latter needs §9.8's server-held versioned
+  lifecycle field = PR-2.5). Two live divergence bugs were hit while
+  paused at the additive PR-2 foundation and fixed as standalone
+  regressions: `d91682d` (canvas card froze on streaming summary —
+  the #226 layoutSig memo conflated positions+data; decoupled via
+  `refreshChatNodeContent` + `chatFlowContentSignature`) and
+  `043467f` (**PR-4 slice 1**: ConversationView's rounds let a
+  stale/early workflowCache fetch win over live `summary.assistantText`
+  → SDK-path blank conversation while the card was correct; new pure
+  `deriveConversationRounds` makes assistant TEXT canonically the
+  live store summary, workflow = tool-pill enrichment only). Both
+  reproduce-first; full vitest green. These are exactly the §9
+  "two views / two sources / divergent staleness" class — single-
+  sourcing makes "card correct ⇒ conversation correct" structural.
+  Remaining: finish PR-4 content unification across the remaining
+  views, then PR-2.5 → PR-3 → PR-4 OR-collapse → PR-5.
 
 ---
 
