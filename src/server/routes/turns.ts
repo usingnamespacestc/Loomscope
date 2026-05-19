@@ -24,6 +24,7 @@ import { z } from "zod";
 import { forkSession } from "@anthropic-ai/claude-agent-sdk";
 
 import { findForkClosure } from "@/server/services/forkTree";
+import { buildLifecycleSnapshot } from "@/server/services/lifecycleSnapshot";
 import { locateSessionJsonl } from "@/server/services/locateJsonl";
 import type { SessionRegistry } from "@/server/services/sessionRegistry";
 
@@ -214,6 +215,24 @@ export function turnsRouter(opts: TurnsRouterOptions) {
       return c.json(
         snap ?? { state: "idle", pendingCount: 0, currentRun: null },
       );
+    },
+  );
+
+  // PR-2.5 slice 1 (design §9.7 item 3 / §9.8): additive read-only
+  // server-held, content-versioned LIFECYCLE snapshot. Pure
+  // aggregator over facts the server already owns (registry +
+  // pendingPermissionTracker), stamped with getCurrentSeq. Exposed
+  // here because this router already holds the DI'd registry; the
+  // frontend does NOT consume it yet (recorded-not-consumed, PR-1
+  // discipline — zero behaviour change). Subscribe-time replay +
+  // the terminal hook→lifecycle reducer + frontend OR-collapse are
+  // later slices.
+  app.get(
+    "/:id/lifecycle",
+    zValidator("param", z.object({ id: z.string().regex(SESSION_ID_RE) })),
+    async (c) => {
+      const { id } = c.req.valid("param");
+      return c.json(buildLifecycleSnapshot(opts.registry, id));
     },
   );
 
