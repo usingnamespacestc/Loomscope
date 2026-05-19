@@ -49,6 +49,7 @@ import {
 import { setDriftDetectionInterval } from "@/server/services/driftDetection";
 import { findForkClosure } from "@/server/services/forkTree";
 import { locateSessionJsonl } from "@/server/services/locateJsonl";
+import { initHookLifecycleReducer } from "@/server/services/hookLifecycleReducer";
 import { initPendingPermissionTracker } from "@/server/services/pendingPermissionTracker";
 import { loadPreferences } from "@/server/services/preferences";
 import { realSdkQuery, resolveClaudePath } from "@/server/services/sdkAdapter";
@@ -112,6 +113,11 @@ export function createApp(opts: AppOptions) {
   // of unresolved PermissionRequest fires. SSE route reads this
   // on subscribe to send a snapshot to late-joining clients.
   initPendingPermissionTracker();
+  // PR-2.5 slice 3a: terminal-CC hook→lifecycle reducer (turn-running
+  // from UserPromptSubmit/Stop). Idempotent; composed into
+  // buildLifecycleSnapshot. Recorded-not-consumed (frontend doesn't
+  // read lifecycleSnapshot yet) → zero behaviour change.
+  initHookLifecycleReducer();
 
   app.get("/api/health", (c) =>
     c.json({ ok: true, version: pkg.version, rootDir: opts.rootDir }),

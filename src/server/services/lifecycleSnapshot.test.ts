@@ -15,8 +15,12 @@ vi.mock("@/server/services/chatFlowDeltaEngine", () => ({
 vi.mock("@/server/services/pendingPermissionTracker", () => ({
   getPendingPermission: vi.fn(),
 }));
+vi.mock("@/server/services/hookLifecycleReducer", () => ({
+  getTerminalTurnRunning: vi.fn(),
+}));
 
 import { getCurrentSeq } from "@/server/services/chatFlowDeltaEngine";
+import { getTerminalTurnRunning } from "@/server/services/hookLifecycleReducer";
 import { getPendingPermission } from "@/server/services/pendingPermissionTracker";
 import { buildLifecycleSnapshot } from "@/server/services/lifecycleSnapshot";
 import type { SessionRegistry } from "@/server/services/sessionRegistry";
@@ -38,10 +42,12 @@ function fakeRegistry(
 
 const seq = vi.mocked(getCurrentSeq);
 const perm = vi.mocked(getPendingPermission);
+const term = vi.mocked(getTerminalTurnRunning);
 
 beforeEach(() => {
   seq.mockReset().mockReturnValue(0);
   perm.mockReset().mockReturnValue(null);
+  term.mockReset().mockReturnValue(null);
 });
 
 describe("buildLifecycleSnapshot — faithful mapping", () => {
@@ -120,5 +126,45 @@ describe("buildLifecycleSnapshot — purity (zero behaviour change)", () => {
     // aggregator added no side-effecting call.
     expect(seq).toHaveBeenCalledWith("s1");
     expect(perm).toHaveBeenCalledWith("s1");
+  });
+});
+
+describe("buildLifecycleSnapshot — turnRunning composition (slice 3a)", () => {
+  it("SDK registry running takes precedence over the terminal hook reducer", () => {
+    term.mockReturnValue({ since: 999 });
+    const reg = fakeRegistry({
+      state: "running",
+      pendingCount: 0,
+      currentRun: { promptItemId: "i", startedAt: 111 },
+    });
+    expect(buildLifecycleSnapshot(reg, "s1").turnRunning).toEqual({
+      since: 111,
+    });
+  });
+
+  it("falls back to the terminal-CC hook reducer when the registry has no running turn (no entry)", () => {
+    term.mockReturnValue({ since: 555 });
+    const reg = fakeRegistry(null); // terminal-CC turn → no registry entry
+    expect(buildLifecycleSnapshot(reg, "s1").turnRunning).toEqual({
+      since: 555,
+    });
+  });
+
+  it("falls back to terminal reducer when registry is idle", () => {
+    term.mockReturnValue({ since: 777 });
+    const reg = fakeRegistry({
+      state: "idle",
+      pendingCount: 0,
+      currentRun: null,
+    });
+    expect(buildLifecycleSnapshot(reg, "s1").turnRunning).toEqual({
+      since: 777,
+    });
+  });
+
+  it("both absent → turnRunning null", () => {
+    term.mockReturnValue(null);
+    const reg = fakeRegistry(null);
+    expect(buildLifecycleSnapshot(reg, "s1").turnRunning).toBeNull();
   });
 });

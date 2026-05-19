@@ -33,6 +33,7 @@
 
 import { getCurrentSeq } from "@/server/services/chatFlowDeltaEngine";
 import type { HookEnvelope } from "@/server/services/hookEventBus";
+import { getTerminalTurnRunning } from "@/server/services/hookLifecycleReducer";
 import { getPendingPermission } from "@/server/services/pendingPermissionTracker";
 import type { SessionRegistry } from "@/server/services/sessionRegistry";
 
@@ -66,12 +67,20 @@ export function buildLifecycleSnapshot(
 ): LifecycleSnapshot {
   const reg = registry.snapshot(sessionId);
   const perm = getPendingPermission(sessionId);
+  // turnRunning composition (design §9.8: ONE fact from whichever
+  // path owns the turn). SDK/Loomscope path: sessionRegistry owns
+  // the Query state machine. Terminal-CC path: no registry entry —
+  // fall back to the hook→lifecycle reducer (slice 3a). They are
+  // mutually exclusive in practice (a session is driven by one path
+  // at a time); registry-running takes precedence when both somehow
+  // report.
+  const sdkRunning =
+    reg && reg.state === "running" && reg.currentRun
+      ? { since: reg.currentRun.startedAt }
+      : null;
   return {
     version: getCurrentSeq(sessionId),
-    turnRunning:
-      reg && reg.state === "running" && reg.currentRun
-        ? { since: reg.currentRun.startedAt }
-        : null,
+    turnRunning: sdkRunning ?? getTerminalTurnRunning(sessionId),
     pendingPermission: perm ? { payload: perm } : null,
     queueDepth: reg?.pendingCount ?? 0,
   };
