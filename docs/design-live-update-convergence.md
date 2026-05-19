@@ -380,6 +380,48 @@ in PR-3 + PR-4.
   backtick-free (landmine avoided). Sequence: 3b →
   respawn/deferral/rate-limit fields → PR-4 OR-collapse (frontend) →
   PR-3 → PR-5.
+- 2026-05-19: **PR-2.5 slice 3b spec — APPROVED by user, pending
+  implementation** (recorded here so it survives compaction, per the
+  small-steps rule). The lost-Stop turn-end cure. Core constraint: a
+  lost Stop has NO triggering event, so turn-end must be inferred at
+  READ time (`getTerminalTurnRunning`, called via
+  `buildLifecycleSnapshot` from GET /:id + SSE subscribe) WITHOUT
+  heavy IO on the hot path.
+  Algorithm (only when the entry is `running`):
+  1. Extend the 3a hook listener: every hook event (any kind)
+     refreshes `lastActivityAt[sid]`; capture the `UserPromptSubmit`
+     envelope's `transcript_path` into the running entry
+     (`{ since, transcriptPath?, lastActivityAt }`).
+  2. At read: `now - lastActivityAt < QUIET_MS` → still running, ZERO
+     IO (common live case — a live CC turn streams PreToolUse/
+     PostToolUse/Notification). Silent ≥ QUIET_MS (rare suspicious
+     path) → bounded transcript-tail read (seek to EOF, read only the
+     LAST jsonl record, no full parse): last record is a terminal
+     assistant (`stop_reason: end_turn` / not `tool_use`) → turn
+     ended, Stop was lost → clear → null (the P5 cure); last record
+     is `tool_use`/tool_result/partial (a long tool may be running) →
+     keep running, bounded by HARD_TTL; unreadable/empty → fall back
+     to HARD_TTL only. `now - since > HARD_TTL` → unconditional clear
+     (absolute leak guard). `Stop`/`SessionEnd` events still clear
+     immediately (3a fast path, unchanged).
+  Rationale: IO only on the rare running-and-silent path, single
+  record; the last-record KIND makes the decision precise (QUIET_MS
+  only gates *when to bother checking*, not the decision itself);
+  HARD_TTL is the final backstop. 3b lands recorded-not-consumed too
+  → its heuristic can be curl-validated before PR-4 consumes it (why
+  the design's "needs empirical validation" is safe here).
+  Injectables (deterministic tests, no FS/real timing): `now()` +
+  `readTranscriptTail(path)`. Tunables to empirically validate:
+  QUIET_MS (~30–45 s initial), HARD_TTL (10 min or tighter).
+  Reproduce-first lost-Stop matrix (8 cases): (1) happy Stop→null;
+  (2) lost-Stop+terminal-assistant-tail → null (cure); (3) long-tool
+  tool_use-tail within HARD_TTL → still running; (4) lost-Stop stuck
+  mid-turn past HARD_TTL → null; (5) recent hook activity → running +
+  assert tail-reader NOT called (IO bounded); (6) transcript
+  unreadable → HARD_TTL fallback; (7) per-session isolation under
+  lost-Stop; (8) buildLifecycleSnapshot composition under lost-Stop.
+  Discipline: small-step, reproduce-first, full vitest green, no
+  goal-loop, backtick-free commit.
 
 ---
 
