@@ -346,6 +346,24 @@ in PR-3 + PR-4.
   hook→lifecycle reducer (generalised pendingPermissionTracker +
   lost-Stop transcript-cross-check/TTL); respawn/deferral/rate-limit
   fields; then PR-4 OR-collapse (frontend) → PR-3 → PR-5.
+- 2026-05-19: user picked b → **PR-2.5 slice 2 shipped** (`df06a4f`):
+  the slice-1 snapshot is now delivered to the client on the two
+  catch-up paths — lite GET `/:id` gains an additive
+  `lifecycleSnapshot` (beside PR-1's `version`), and SSE
+  `/:id/events` subscribe emits one synthetic `lifecycle-snapshot`
+  catch-up frame after the pendingPerm/httpHook frames. Wiring:
+  `SessionsRouteOptions.getRegistry` lazy thunk (sessionsRouter is
+  mounted before `registry` is constructed in createApp and the
+  mount order is Hono-precedence-sensitive → thunk resolved at
+  request time, NOT a precedence-risky mount reorder). NEW SSE event
+  type with NO client handler + frontend ignores the GET field →
+  inert, recorded-not-consumed, ZERO behaviour change (PR-1
+  discipline). Verified live earlier (idle + running snapshots
+  faithful; version == content version; the sequential-sample skew
+  during active streaming is the monotonic counter advancing). 46
+  server tests + full vitest 1218 green; tsc clean. (Commit message
+  body lost a few backticked tokens to the `git commit -m` backtick-
+  substitution landmine — content correct, not force-push-fixed.)
 
 ---
 
