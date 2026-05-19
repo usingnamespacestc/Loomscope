@@ -145,6 +145,60 @@ describe("GET /api/sessions/:id", () => {
     expect(body.chatNodes.length).toBe(1);
   });
 
+  // PR-2.5 slice 2: the lite GET carries the content-versioned
+  // lifecycleSnapshot end-to-end through createApp's real registry
+  // thunk. Recorded-not-consumed → existing fields unchanged (the
+  // test above still asserts the legacy shape); this only adds the
+  // field + pins the §9.8 "one watermark for content + lifecycle".
+  it("includes a content-versioned lifecycleSnapshot (additive, recorded-not-consumed)", async () => {
+    const projectDir = path.join(tmpRoot, "-home-user-Lc");
+    const sid = "22222222-2222-4000-8000-000000000002";
+    await writeJsonl(path.join(projectDir, `${sid}.jsonl`), [
+      {
+        type: "user",
+        uuid: "u1",
+        sessionId: sid,
+        promptId: "p1",
+        cwd: "/home/user/Lc",
+        gitBranch: "main",
+        message: { role: "user", content: "Hi" },
+        timestamp: "2026-05-02T00:00:00.000Z",
+      },
+      {
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u1",
+        sessionId: sid,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello." }],
+          stop_reason: "end_turn",
+        },
+        timestamp: "2026-05-02T00:00:01.000Z",
+      },
+    ]);
+    const res = await app.request(`/api/sessions/${sid}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      id: string;
+      version: number;
+      lifecycleSnapshot?: {
+        version: number;
+        turnRunning: unknown;
+        pendingPermission: unknown;
+        queueDepth: number;
+      };
+    };
+    expect(body.lifecycleSnapshot).toBeDefined();
+    // No SDK registry entry for a pure file fixture → idle/empty,
+    // and the snapshot shares the SAME monotonic watermark as
+    // content (§9.8: one version for both).
+    expect(body.lifecycleSnapshot!.turnRunning).toBeNull();
+    expect(body.lifecycleSnapshot!.pendingPermission).toBeNull();
+    expect(body.lifecycleSnapshot!.queueDepth).toBe(0);
+    expect(body.lifecycleSnapshot!.version).toBe(body.version);
+  });
+
   it("404s for an unknown session id", async () => {
     const res = await app.request("/api/sessions/00000000-0000-4000-8000-deadbeef0000");
     expect(res.status).toBe(404);

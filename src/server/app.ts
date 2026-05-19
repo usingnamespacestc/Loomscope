@@ -118,7 +118,19 @@ export function createApp(opts: AppOptions) {
   );
 
   app.route("/api/workspaces", workspacesRouter({ rootDir: opts.rootDir }));
-  app.route("/api/sessions", sessionsRouter({ rootDir: opts.rootDir }));
+  app.route(
+    "/api/sessions",
+    // PR-2.5 slice 2: lazy registry thunk. `registry` is constructed
+    // ~20 lines below; sessionsRouter is mounted here (mount order is
+    // Hono-precedence-sensitive — do NOT reorder). The closure is
+    // only invoked at request time, long after createApp completes
+    // and `registry` is assigned, so this is safe and avoids a
+    // precedence-risky mount move.
+    sessionsRouter({
+      rootDir: opts.rootDir,
+      getRegistry: () => registry,
+    }),
+  );
   app.route("/api/search", searchRouter({ rootDir: opts.rootDir }));
   // v∞.2: SDK-backed turn endpoints + preferences. Registry is created
   // here unless one was passed in (tests do this for hermeticity).

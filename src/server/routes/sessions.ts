@@ -38,7 +38,12 @@ import {
 // checkpoint chatNodeCount and drift-ping hash. See onAbort comment.
 // 中: snapshot reset 已移除——大 session 重连会触发 re-emit 风暴。
 import { pendingPromptsFor as httpHookPendingFor } from "@/server/services/httpHookPermissionGate";
+import {
+  buildLifecycleSnapshot,
+  type LifecycleSnapshot,
+} from "@/server/services/lifecycleSnapshot";
 import { getPendingPermission } from "@/server/services/pendingPermissionTracker";
+import type { SessionRegistry } from "@/server/services/sessionRegistry";
 import { findForkClosure, type ClosureMember } from "@/server/services/forkTree";
 // Read paths use the with-trash locator so a session that was soft-
 // deleted via /api/sessions/:id/trash still loads (the canvas shows
@@ -74,6 +79,17 @@ const SSE_HEARTBEAT_MS = 25_000;
 
 export interface SessionsRouteOptions {
   rootDir: string;
+  /** PR-2.5 slice 2: lazy accessor for the DI'd SessionRegistry so
+   *  the lite GET + SSE subscribe catch-up can deliver the
+   *  content-versioned `lifecycleSnapshot` (design §9.8: a missed
+   *  lifecycle signal self-heals on the same path a missed delta
+   *  does). A THUNK, not the instance, because sessionsRouter is
+   *  mounted before `registry` is constructed in createApp — the
+   *  closure resolves at request time when it exists. Optional:
+   *  callers/tests that don't pass it simply omit the snapshot
+   *  (recorded-not-consumed; frontend doesn't read it yet → zero
+   *  behaviour change either way). */
+  getRegistry?: () => Pick<SessionRegistry, "snapshot"> | undefined;
 }
 
 const SESSION_ID_RE = /^[a-f0-9-]{8,}$/i;
@@ -162,7 +178,22 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
       // detector still uses the unchanged `appliedVersion` contract.
       const version = getCurrentSeq(id);
       const base = wantsFull ? chatFlow : stripChatFlowToLite(chatFlow);
-      return c.json({ ...base, version });
+      // PR-2.5 slice 2: deliver the content-versioned lifecycle
+      // snapshot alongside content on the reconcile/lite GET so a
+      // missed lifecycle signal self-heals on the same path a missed
+      // delta does (design §9.8). Additive + recorded-not-consumed:
+      // the frontend does not read `lifecycleSnapshot` yet, exactly
+      // like PR-1's `version` — zero behaviour change. Omitted when
+      // no registry thunk is wired (back-compat for direct callers).
+      const reg = opts.getRegistry?.();
+      const lifecycleSnapshot: LifecycleSnapshot | undefined = reg
+        ? buildLifecycleSnapshot(reg, id)
+        : undefined;
+      return c.json({
+        ...base,
+        version,
+        ...(lifecycleSnapshot ? { lifecycleSnapshot } : {}),
+      });
     },
   );
 
@@ -362,6 +393,23 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
                 input: p.toolInput,
                 source: "http",
               }),
+            })
+            .catch(() => {});
+        }
+        // PR-2.5 slice 2: lifecycle catch-up. Emit one synthetic
+        // `lifecycle-snapshot` frame to this (late-joining /
+        // reconnecting) subscriber so a missed lifecycle transition
+        // self-heals on the SAME subscribe-replay path a missed
+        // permission / delta does (design §9.8). NEW event type — no
+        // client handler listens for `lifecycle-snapshot` yet, so
+        // this is inert (recorded-not-consumed; zero behaviour
+        // change). Skipped when no registry thunk is wired.
+        const lifecycleReg = opts.getRegistry?.();
+        if (lifecycleReg) {
+          await stream
+            .writeSSE({
+              event: "lifecycle-snapshot",
+              data: JSON.stringify(buildLifecycleSnapshot(lifecycleReg, id)),
             })
             .catch(() => {});
         }
