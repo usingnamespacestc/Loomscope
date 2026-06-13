@@ -734,6 +734,16 @@ export function buildChatFlow(
     }
     reusable = new Map(reuse.prevChatFlow.chatNodes.map((cn) => [cn.id, cn]));
   }
+  // chain-participant uuid → parentUuid map (CC isChainParticipant).
+  // Built ONCE here from the full index and shared across all buckets —
+  // it's purely a function of `indexByUuid`, identical for every
+  // ChatNode. Building it inside buildChatNode (per ChatNode) made parse
+  // O(N²): each of N ChatNodes re-scanned all N records.
+  const chainParentByUuid = new Map<string, string>();
+  for (const [uuid, ir] of indexByUuid) {
+    if (ir.type === "progress") continue;
+    if (ir.parentUuid) chainParentByUuid.set(uuid, ir.parentUuid);
+  }
   const chatNodes: ChatNode[] = [];
   for (const bucket of bucketsByPid.values()) {
     if (reusable && !dirtyPromptIds.has(bucket.promptId)) {
@@ -749,6 +759,7 @@ export function buildChatFlow(
       boundariesByUuid,
       awaySummaryByUuid,
       scheduledFireByUuid,
+      chainParentByUuid,
       snapshotsByPid.get(bucket.promptId),
     );
     if (cn) chatNodes.push(cn);
@@ -900,6 +911,7 @@ function buildChatNode(
   boundariesByUuid: Map<string, RawRecord>,
   _awaySummaryByUuid: Map<string, RawRecord>,
   scheduledFireByUuid: Map<string, RawRecord>,
+  chainParentByUuid: Map<string, string>,
   fileHistorySnapshots?: FileHistorySnapshot[],
 ): ChatNode | null {
   // Root user record preference (highest → lowest):
@@ -1005,28 +1017,10 @@ function buildChatNode(
     compactRecord: compactUser,
     boundaryRecord: boundaryRec,
   });
-  // Build chain-participant uuid → parentUuid map for chainCount's
-  // transit walk. Drawn from the FULL record index (not just
-  // bucket.records) so transit records that the parser excludes from
-  // bucketing — compact_boundary (jsonl.ts:469 unpaired-skip),
-  // unbucketed user records (no promptId) — still appear here.
-  // Mirrors CC's isChainParticipant (utils/sessionStorage.ts:154):
-  // user / assistant / attachment / system are chain participants;
-  // progress is not. Walking too far (across ChatNode boundaries) is
-  // safe: byId lookup matches only THIS WorkFlow's WorkNodes, so a
-  // stray cross-bucket walk just continues until terminating.
-  const chainParentByUuid = new Map<string, string>();
-  for (const [uuid, ir] of index) {
-    if (ir.type === "progress") continue;
-    // compact_boundary records have parentUuid=null +
-    // logicalParentUuid pointing at the pre-compact tail. Don't
-    // splice via logicalParentUuid here: compact is a real
-    // information-flow break (prior turn content replaced with
-    // summary), not a transit, so the walk should DEAD-END at the
-    // boundary and let the post-compact llm_call register as a
-    // chain root.
-    if (ir.parentUuid) chainParentByUuid.set(uuid, ir.parentUuid);
-  }
+  // `chainParentByUuid` (chain-participant uuid → parentUuid, drawn
+  // from the FULL record index) is built ONCE in buildChatFlow and
+  // passed in — it's identical for every ChatNode, so building it here
+  // per-call was the parse O(N²). Mirrors CC's isChainParticipant.
   // v0.10 polish (lazy ChatFlow B1): pre-compute summary stats so the
   // lite ChatFlow endpoint can ship them inline. ~100-200B per
   // ChatNode — negligible against the workflow.nodes payload.
