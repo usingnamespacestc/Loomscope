@@ -67,3 +67,38 @@ the right-side ConversationView already does (token-budget windowing).
   synthetic generator used to fill `/tmp/loom-scale`). Server cold-parse
   numbers via `curl -w "%{time_total} %{size_download}"` on first hit;
   RSS via `docker stats`.
+
+---
+
+## Update — root causes pinned + parse wall FIXED
+
+CPU-profiling the 10k parse located the primary wall precisely, and
+timing `layoutChatFlow` directly located the secondary one.
+
+### Primary wall (server parse) — FIXED, now O(N)
+Two per-ChatNode O(N) scans made parse O(N²):
+1. `buildChatNode` rebuilt `chainParentByUuid` from the **full record
+   index on every call** (identical each time) — 16.5 s self-time at 10k.
+2. `hasInWorkflowLlmPredecessor` bounded its chain-walk by
+   `chainParentByUuid.size` (≈ whole-session), so a single-llm ChatNode
+   walked the **entire session backward** before giving up — 9.6 s.
+
+Fix: build `chainParentByUuid` once in `buildChatFlow`; bound the walk by
+the workflow's own node count + a small transit margin. Both behaviour-
+identical (full test suite green). Parse is now **linear**:
+
+| ChatNodes | cold parse before | after |
+|-----------|-------------------|-------|
+| 1k  | 0.2 s | **32 ms** |
+| 10k | 27 s  | **230 ms** |
+| 50k | >300 s (unloadable) | **1.06 s** |
+
+### Secondary wall (client) — it's a dagre STACK OVERFLOW, not slow layout
+`layoutChatFlow` direct timing: 1k = 308 ms; **5k and 10k throw
+`RangeError: Maximum call stack size exceeded`** from
+`@dagrejs/dagre/lib/acyclic.js` (recursive DFS over a ~5k-deep linear
+chain). That is why the 5k/10k browser renders never produced a card —
+the layout crashed, not "took too long". The browser can't grow the
+stack, so this is **not** algorithmically tunable like the parse was; it
+requires windowing the layout (or replacing dagre). See
+`design-windowed-canvas.md`.
