@@ -794,15 +794,27 @@ export function buildChatFlow(
   }
 
   // Attach scheduled triggerSource (workNodeId = the ScheduleWakeup tool_use
-  // block id of the most-recent ScheduleWakeup before the fire). We resolve
-  // by walking the fire.parentUuid chain to find a tool_use we know about.
+  // block id of the most-recent ScheduleWakeup before the fire).
+  // Precompute the (small) list of ScheduleWakeup tool_uses ONCE so the
+  // per-fire lookup scans it instead of re-scanning ALL records each time
+  // (was O(fires × records)).
+  const scheduleWakeups: Array<{ ts: string; id: string }> = [];
+  for (const r of records) {
+    if (r.type !== "assistant" || !r.timestamp) continue;
+    for (const b of blocksOf(r)) {
+      if (b.type !== "tool_use") continue;
+      const tu = b as { id?: string; name?: string };
+      if (tu.name !== "ScheduleWakeup" || !tu.id) continue;
+      if (!scheduleWakeupToolUseIds.has(tu.id)) continue;
+      scheduleWakeups.push({ ts: r.timestamp, id: tu.id });
+    }
+  }
   for (const cn of chatNodes) {
     if (cn.trigger !== "scheduled" || !cn.meta.scheduledFireUuid) continue;
     const wid = findScheduleWakeupAncestor(
       cn.meta.scheduledFireUuid,
       indexByUuid,
-      records,
-      scheduleWakeupToolUseIds,
+      scheduleWakeups,
     );
     if (wid) cn.triggerSource = { workNodeId: wid };
   }
@@ -886,7 +898,7 @@ function buildChatNode(
   bucket: PromptBucket,
   index: Map<string, IndexedRecord>,
   boundariesByUuid: Map<string, RawRecord>,
-  awaySummaryByUuid: Map<string, RawRecord>,
+  _awaySummaryByUuid: Map<string, RawRecord>,
   scheduledFireByUuid: Map<string, RawRecord>,
   fileHistorySnapshots?: FileHistorySnapshot[],
 ): ChatNode | null {
@@ -1167,7 +1179,7 @@ function detectForkedFrom(
       typeof ff.sessionId === "string" &&
       ff.sessionId !== root.sessionId
     ) {
-      // eslint-disable-next-line no-console
+       
       console.warn(
         `[parser] inconsistent forkedFrom.sessionId inside bucket ${bucket.promptId}: ` +
           `root=${root.sessionId} vs record=${ff.sessionId} — keeping rootUser's`,
@@ -1265,8 +1277,7 @@ function linkChatNodeParents(
 function findScheduleWakeupAncestor(
   fireUuid: string,
   index: Map<string, IndexedRecord>,
-  records: RawRecord[],
-  scheduleWakeupToolUseIds: Set<string>,
+  scheduleWakeups: Array<{ ts: string; id: string }>,
 ): string | undefined {
   // The fire's parentUuid chain hits some prior turn's tail. The
   // ScheduleWakeup tool_use that *caused* the fire is in some earlier
@@ -1275,22 +1286,15 @@ function findScheduleWakeupAncestor(
   const fire = index.get(fireUuid);
   if (!fire?.timestamp) {
     // No timestamp, fall back to any known ScheduleWakeup id.
-    return scheduleWakeupToolUseIds.values().next().value;
+    return scheduleWakeups[0]?.id;
   }
   let bestId: string | undefined;
   let bestTs = "";
-  for (const r of records) {
-    if (r.type !== "assistant" || !r.timestamp) continue;
-    if (r.timestamp >= fire.timestamp) continue;
-    for (const b of blocksOf(r)) {
-      if (b.type !== "tool_use") continue;
-      const tu = b as { id?: string; name?: string };
-      if (tu.name !== "ScheduleWakeup" || !tu.id) continue;
-      if (!scheduleWakeupToolUseIds.has(tu.id)) continue;
-      if (r.timestamp > bestTs) {
-        bestTs = r.timestamp;
-        bestId = tu.id;
-      }
+  for (const sw of scheduleWakeups) {
+    if (sw.ts >= fire.timestamp) continue;
+    if (sw.ts > bestTs) {
+      bestTs = sw.ts;
+      bestId = sw.id;
     }
   }
   return bestId;

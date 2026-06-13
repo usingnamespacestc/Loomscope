@@ -29,11 +29,11 @@ function makeChatFlow(
     mainJsonlPath: "/tmp/test.jsonl",
     sidecarDir: "/tmp/test",
     cwd,
-    gitBranch: null,
+    gitBranch: undefined,
     createdAt: "2026-05-14T00:00:00Z",
     lastUpdatedAt: "2026-05-14T00:00:00Z",
     trigger: "user",
-    customTitle: null,
+    customTitle: undefined,
     chatNodes: commits.map(({ chatNodeId, sha, repo }) => ({
       kind: "chat",
       id: chatNodeId,
@@ -71,9 +71,9 @@ function makeChatFlow(
           },
         ],
       },
-    })) as ChatFlow["chatNodes"],
+    })) as unknown as ChatFlow["chatNodes"],
     linkedSessions: [],
-  };
+  } as unknown as ChatFlow;
 }
 
 const SID = "test-sid";

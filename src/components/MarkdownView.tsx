@@ -19,7 +19,6 @@
  */
 import { memo, useEffect, useRef, useState } from "react";
 
-import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -73,11 +72,46 @@ const sanitizeSchema = {
 // so it can scrub anything highlighter introduced (it won't, but
 // belt-and-suspenders).
 const REMARK_PLUGINS = [remarkGfm];
-const REHYPE_PLUGINS = [
+
+// (g) bundle split: rehype-highlight pulls in highlight.js — by far the
+// largest dependency in the markdown chunk (~150KB gz). Load it via a
+// dynamic import() so the bundler emits it as its OWN async chunk that
+// loads only once a MarkdownView actually mounts, instead of baking it
+// into the (eagerly-served) markdown chunk. Until it resolves, markdown
+// renders without syntax highlighting (code blocks still show, just
+// uncoloured); one re-render swaps the highlighter in when ready.
+//
+// Plugin arrays MUST stay module-level/stable (see note above) — so we
+// keep exactly two cached variants and only flip identity once, when
+// highlight finishes loading.
+let rehypeHighlightModule: unknown = null;
+let highlightLoad: Promise<void> | null = null;
+function loadHighlight(): Promise<void> {
+  if (rehypeHighlightModule) return Promise.resolve();
+  if (!highlightLoad) {
+    highlightLoad = import("rehype-highlight").then((m) => {
+      rehypeHighlightModule = m.default;
+    });
+  }
+  return highlightLoad;
+}
+
+const REHYPE_PLUGINS_BASE = [
   rehypeRaw,
-  [rehypeHighlight, { detect: true, ignoreMissing: true }],
   [rehypeSanitize, sanitizeSchema],
 ] as never;
+let REHYPE_PLUGINS_WITH_HL: unknown = null;
+function rehypePluginsFor(highlightReady: boolean): never {
+  if (!highlightReady || !rehypeHighlightModule) return REHYPE_PLUGINS_BASE;
+  if (!REHYPE_PLUGINS_WITH_HL) {
+    REHYPE_PLUGINS_WITH_HL = [
+      rehypeRaw,
+      [rehypeHighlightModule, { detect: true, ignoreMissing: true }],
+      [rehypeSanitize, sanitizeSchema],
+    ];
+  }
+  return REHYPE_PLUGINS_WITH_HL as never;
+}
 
 interface Props {
   children: string;
@@ -86,11 +120,28 @@ interface Props {
 }
 
 function MarkdownViewImpl({ children, components, className }: Props) {
+  // Re-render once highlight.js's async chunk lands so code blocks get
+  // syntax-highlighted (initial render uses the highlight-free plugin
+  // set). Stays `true` on later mounts since the module is cached.
+  const [highlightReady, setHighlightReady] = useState(
+    rehypeHighlightModule != null,
+  );
+  useEffect(() => {
+    if (highlightReady) return;
+    let alive = true;
+    void loadHighlight().then(() => {
+      if (alive) setHighlightReady(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [highlightReady]);
+
   return (
     <div className={className}>
       <Markdown
         remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
+        rehypePlugins={rehypePluginsFor(highlightReady)}
         components={components}
       >
         {children}

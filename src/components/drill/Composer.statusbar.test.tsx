@@ -64,7 +64,7 @@ function setInflight(state: "idle" | "running", startedAt: number | null) {
 
 function renderComposer() {
   return render(
-    <Composer sessionId={SID} cwd={CWD} chatFlow={null} />,
+    <Composer sessionId={SID} cwd={CWD} />,
   );
 }
 
@@ -134,7 +134,7 @@ describe("ComposerStatusBar", () => {
     expect(screen.getByTestId("composer-status-bar")).toBeTruthy();
     act(() => {
       setInflight("idle", null);
-      rerender(<Composer sessionId={SID} cwd={CWD} chatFlow={null} />);
+      rerender(<Composer sessionId={SID} cwd={CWD} />);
     });
     expect(screen.queryByTestId("composer-status-bar")).toBeNull();
   });
@@ -245,7 +245,7 @@ describe("ComposerStatusBar", () => {
       maxContextTokens: 200_000,
       lastModel: "claude-sonnet-4-6",
       hasInFlightWork: true,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any;
     sessions.set(SID, {
       ...blankSessionStateLite(),
@@ -339,7 +339,7 @@ function makeChatFlowWithLlmUsage(usage: Record<string, number>) {
         isCompactSummary: false,
         meta: {},
       },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     ] as any,
     orphans: [],
     flowEvents: [],

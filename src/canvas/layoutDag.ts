@@ -261,6 +261,28 @@ export function chatFlowLayoutSignature(
 }
 
 /**
+ * Shallow content equality for two card data objects, ignoring the
+ * `chatNode` reference (which is re-created on every parse/delta even
+ * when the node's content is identical — its visible state is fully
+ * captured by the derived scalar fields). Used by
+ * `refreshChatNodeContent` to preserve `data` identity for unchanged
+ * nodes so `React.memo`-wrapped cards skip re-render.
+ */
+function cardContentEqual(a: ChatNodeRFData, b: ChatNodeRFData): boolean {
+  for (const k in a) {
+    if (k === "chatNode") continue;
+    if (a[k] !== b[k]) return false;
+  }
+  // Guard against b having a key a lacks (shapes are identical in
+  // practice, but be safe against future field additions).
+  for (const k in b) {
+    if (k === "chatNode") continue;
+    if (!(k in a)) return false;
+  }
+  return true;
+}
+
+/**
  * EN: the content-side counterpart of the layout signature. Given an
  * ALREADY-laid-out node list (positions fixed by a dagre pass that is
  * correctly gated on `chatFlowLayoutSignature`) and the CURRENT
@@ -302,6 +324,15 @@ export function refreshChatNodeContent(
       n.data.childCount,
       chatFlow,
     );
+    // Preserve node + data identity when nothing the card displays
+    // changed. Without this, every content delta re-mints `data` for
+    // ALL nodes, so one streaming ChatNode forces React to reconcile
+    // all ~1500 card subtrees. React.memo on the cards only bites if
+    // unchanged nodes keep a stable `data` reference. `chatNode`'s ref
+    // churns on every parse/delta even when its content is unchanged,
+    // so it's excluded from the compare — every visible change is
+    // already reflected in the derived scalar fields.
+    if (cardContentEqual(n.data, data)) return n;
     changed = true;
     return { ...n, data };
   });

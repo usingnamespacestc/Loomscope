@@ -6,6 +6,7 @@
 // 状态 + seq 走得对不对。
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeSessionState } from "@/test/factories";
 
 import { useStore } from "@/store/index";
 import type {
@@ -25,13 +26,14 @@ function summary(o: Partial<WorkflowSummary> = {}): WorkflowSummary {
     hasInFlightWork: false,
     chainCount: 1,
     toolCount: 0,
-    fileTouchCount: 0,
     inputTokens: 0,
     outputTokens: 0,
     durationMs: 0,
     lastModel: "claude-opus-4-7",
     contextTokens: 0,
     maxContextTokens: 200000,
+    totalThinkingChars: 0,
+    toolUseFilePaths: [],
     ...o,
   };
 }
@@ -54,6 +56,7 @@ function seed(chatFlow: ChatFlow, appliedVersion: number | null = null): void {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),
@@ -238,6 +241,7 @@ describe("applyChatFlowDelta", () => {
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
       sessions.set(SID, {
+        ...makeSessionState(),
         ...sessions.get(SID)!,
         selectedNodeId: "a",
       });
@@ -294,6 +298,7 @@ describe("applyChatFlowDelta", () => {
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
       sessions.set(SID, {
+        ...makeSessionState(),
         chatFlow: null,
         foldedNodeIds: new Set(),
         foldedCompactIds: new Set(),

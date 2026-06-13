@@ -164,7 +164,7 @@ describe("PR-2 convergence — dropped summary delta + turn-end quiescence", () 
     // Max server version the client OBSERVED (e.g. via the dropped
     // delta's own seq leaking through a later drift-ping seq, or a
     // checkpoint) — ahead of appliedVersion ⇒ a real gap exists.
-    let observedServer = 6;
+    const observedServer = 6;
     const sched = createReconcileScheduler({
       debounceMs: RECONCILE_DEBOUNCE_MS,
       maxWaitMs: 1000,
@@ -220,7 +220,7 @@ describe("PR-2 convergence — dropped summary delta + turn-end quiescence", () 
 
   it("redundant signal after convergence is ack-only (no refetch, no re-render)", () => {
     let t = 0;
-    let reconcileRuns = 0;
+    const reconcileRuns = 0;
     // Already converged: appliedVersion 6, server 6.
     seed(
       flow([

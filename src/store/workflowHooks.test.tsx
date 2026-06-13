@@ -15,11 +15,12 @@ import { render, waitFor, cleanup } from "@testing-library/react";
 import type { ChatFlow, ChatNode, WorkFlow } from "@/data/types";
 import { useStore } from "@/store/index";
 import { useChatNodeWorkflow } from "@/store/workflowHooks";
+import { makeSessionState, makeWorkflowSummary } from "@/test/factories";
 
 const SID = "00000000-0000-4000-8000-0000000000cc";
 
 function summary(over: Partial<WorkFlow["summary"] & object> = {}) {
-  return {
+  return makeWorkflowSummary({
     assistantPreview: "preview",
         assistantText: [],
         hasInFlightWork: false,
@@ -31,7 +32,7 @@ function summary(over: Partial<WorkFlow["summary"] & object> = {}) {
     maxContextTokens: 200_000,
     toolUseFilePaths: [],
     ...over,
-  };
+  });
 }
 
 function chatNode(id: string, wf: Partial<WorkFlow> = {}): ChatNode {
@@ -69,6 +70,7 @@ function seed(cf: ChatFlow): void {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow: cf,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),

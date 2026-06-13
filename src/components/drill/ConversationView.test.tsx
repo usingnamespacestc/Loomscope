@@ -1,6 +1,7 @@
 // v0.8 M4 — ConversationView render + branchMemory + selection sync.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeSessionState } from "@/test/factories";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
 import { CanvasPanContext, type PanToChatNodeFn } from "@/canvas/CanvasPanContext";
@@ -62,6 +63,7 @@ function seed(cf: ChatFlow, selectedNodeId: string | null = null): void {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow: cf,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),
@@ -781,6 +783,7 @@ describe("ConversationView — P1 optimistic running-turn bubble", () => {
     useStore.setState((s) => {
       const m = new Map(s.inflightBySession);
       m.set(SID, {
+        ...makeSessionState(),
         state: inf.state,
         currentRun:
           inf.state === "running"

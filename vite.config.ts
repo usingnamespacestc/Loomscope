@@ -77,7 +77,9 @@ export default defineConfig({
     // adding @playwright/test as a Loomscope devDep — exclude the
     // dir from Vitest discovery so `npm test` doesn't try to import
     // a package that isn't installed here. Project-local Playwright
-    // install is v0.10 polish backlog.
-    exclude: ["e2e/**", "node_modules/**", "dist/**"],
+    // install is v0.10 polish backlog. e2e-smoke/** is the hermetic
+    // Playwright boot smoke (run in the playwright Docker image) —
+    // same deal: exclude it from Vitest discovery.
+    exclude: ["e2e/**", "e2e-smoke/**", "node_modules/**", "dist/**"],
   },
 });

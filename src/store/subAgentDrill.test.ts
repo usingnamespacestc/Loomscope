@@ -14,6 +14,7 @@
 //   - session switch evicts the prior session's cache
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeSessionState } from "@/test/factories";
 
 import { useStore } from "@/store/index";
 import {
@@ -104,6 +105,7 @@ function seedSession(cf: ChatFlow = makeChatFlow()) {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow: cf,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),
@@ -364,6 +366,7 @@ describe("resolveDrillView", () => {
       const sessions = new Map(s.sessions);
       const cur = sessions.get(SID)!;
       sessions.set(SID, {
+        ...makeSessionState(),
         ...cur,
         drillStack: [
           { kind: "chatnode", chatNodeId: CHAT_NODE_ID },

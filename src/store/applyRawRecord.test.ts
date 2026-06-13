@@ -6,6 +6,7 @@
 // ChatNode 生成 / dedup / 各种过滤是否正确。
 
 import { beforeEach, describe, expect, it } from "vitest";
+import { makeSessionState } from "@/test/factories";
 
 import type { ChatFlow, ChatNode } from "@/data/types";
 import type { RawRecord } from "@/parse/raw-record";
@@ -61,6 +62,7 @@ function seed(chatFlow: ChatFlow | null): void {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),

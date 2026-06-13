@@ -5,6 +5,7 @@
 // chip via `AskUserQuestionTranscript`.
 
 import { fireEvent, render, screen } from "@testing-library/react";
+import { makeSessionState } from "@/test/factories";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AskUserQuestionPanel } from "@/components/drill/AskUserQuestionPanel";
@@ -29,6 +30,7 @@ function seedSession(prompts: Array<{
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow: null,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),

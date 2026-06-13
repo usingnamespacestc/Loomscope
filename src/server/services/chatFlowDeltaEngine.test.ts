@@ -35,13 +35,14 @@ function summary(overrides: Partial<WorkflowSummary> = {}): WorkflowSummary {
     hasInFlightWork: false,
     chainCount: 1,
     toolCount: 0,
-    fileTouchCount: 0,
     inputTokens: 100,
     outputTokens: 50,
     durationMs: 1000,
     lastModel: "claude-opus-4-7",
     contextTokens: 1000,
     maxContextTokens: 200000,
+    totalThinkingChars: 0,
+    toolUseFilePaths: [],
     ...overrides,
   };
 }

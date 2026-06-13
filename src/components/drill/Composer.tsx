@@ -266,7 +266,6 @@ export function Composer({
   // exist yet). On success commitDraftSession swaps the draft id for
   // the real sid so subsequent sends use the normal postTurn path.
   const isDraft = sessionId.startsWith("draft-");
-  const draftSession = useStore((s) => s.draftSession);
   const commitDraftSession = useStore((s) => s.commitDraftSession);
   const markTurnSubmittedOptimistic = useStore(
     (s) => s.markTurnSubmittedOptimistic,

@@ -6,6 +6,7 @@
 // by details.test.tsx; here we just assert the dispatch + scope plumbing.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeSessionState } from "@/test/factories";
 import { fireEvent, render, screen } from "@testing-library/react";
 
 import { DrillPanel } from "@/components/drill/DrillPanel";
@@ -70,6 +71,7 @@ function chatFlow(id: string, nodes: ChatNode[]): ChatFlow {
 beforeEach(() => {
   useStore.setState((s) => ({
     sessions: new Map(s.sessions).set(SID, {
+      ...makeSessionState(),
       chatFlow: null,
       foldedNodeIds: new Set<string>(),
       foldedCompactIds: new Set<string>(),
@@ -112,6 +114,7 @@ describe("DrillPanel viewMode dispatch", () => {
     const cf = chatFlow(SID, [chatNode("p1"), chatNode("p2")]);
     useStore.setState((s) => ({
       sessions: new Map(s.sessions).set(SID, {
+        ...makeSessionState(),
         ...s.sessions.get(SID)!,
         chatFlow: cf,
         selectedNodeId: "p2",
@@ -135,6 +138,7 @@ describe("DrillPanel viewMode dispatch", () => {
     const sub = chatFlow("agent_xyz", [chatNode("sub-p1"), chatNode("sub-p2")]);
     useStore.setState((s) => ({
       sessions: new Map(s.sessions).set(SID, {
+        ...makeSessionState(),
         ...s.sessions.get(SID)!,
         chatFlow: top,
         selectedNodeId: "sub-p1",
@@ -207,6 +211,7 @@ describe("DrillPanel 2-tab strip (v0.8 M3)", () => {
     const cf = chatFlow(SID, [chatNode("p1")]);
     useStore.setState((s) => ({
       sessions: new Map(s.sessions).set(SID, {
+        ...makeSessionState(),
         ...s.sessions.get(SID)!,
         chatFlow: cf,
         selectedNodeId: "p1",
@@ -253,6 +258,7 @@ describe("DrillPanel 2-tab strip (v0.8 M3)", () => {
     const cf = chatFlow(SID, [chatNode("p1"), chatNode("p2")]);
     useStore.setState((s) => ({
       sessions: new Map(s.sessions).set(SID, {
+        ...makeSessionState(),
         ...s.sessions.get(SID)!,
         chatFlow: cf,
         selectedNodeId: "p2",

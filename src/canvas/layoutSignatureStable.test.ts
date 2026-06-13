@@ -259,6 +259,29 @@ describe("refreshChatNodeContent — content reaches the card w/o relayout", () 
     expect(other1.position).toEqual(other0.position);
   });
 
+  it("preserves node + data identity for unchanged nodes; re-mints only the changed one (memo-friendly)", () => {
+    const cf0 = smallFlow();
+    const laid = layoutChatFlow(cf0);
+    const cf1 = withStreamedReply(cf0, "cn2", "only cn2 changed");
+    const refreshed = refreshChatNodeContent(laid.nodes, cf1);
+
+    // The one node whose content changed gets a fresh node + fresh data.
+    const changed0 = laid.nodes.find((n) => n.id === "cn2")!;
+    const changed1 = refreshed.find((n) => n.id === "cn2")!;
+    expect(changed1).not.toBe(changed0);
+    expect(changed1.data).not.toBe(changed0.data);
+
+    // Every untouched node keeps BOTH its node and its data object
+    // identity, so React.memo-wrapped cards short-circuit re-render.
+    // (Before the fix this churned all N nodes on every content delta.)
+    for (const id of ["cn0", "cn1", "cn3", "cn4"]) {
+      const before = laid.nodes.find((n) => n.id === id)!;
+      const after = refreshed.find((n) => n.id === id)!;
+      expect(after).toBe(before);
+      expect(after.data).toBe(before.data);
+    }
+  });
+
   it("returns the same array reference when there are no chat nodes (no spurious churn)", () => {
     const empty = {
       id: SID,

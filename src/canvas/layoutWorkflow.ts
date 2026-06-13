@@ -391,7 +391,7 @@ export function previewToolResult(n: ToolCallNode): string {
   const block = n.resultBlock as
     | { content?: unknown }
     | undefined;
-  let content: unknown = block?.content;
+  const content: unknown = block?.content;
   if (typeof content === "string") {
     const first = content.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "";
     return truncate(first.trim(), PREVIEW_LEN);

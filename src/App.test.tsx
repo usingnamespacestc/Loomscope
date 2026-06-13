@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeSessionState } from "@/test/factories";
 import { render, screen, waitFor } from "@testing-library/react";
 
 import App from "./App";
@@ -77,6 +78,7 @@ describe("App shell", () => {
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
       sessions.set("sid", {
+        ...makeSessionState(),
         chatFlow: null,
         foldedNodeIds: new Set(),
         foldedCompactIds: new Set(),
@@ -107,6 +109,7 @@ describe("App shell", () => {
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
       sessions.set("sid", {
+        ...makeSessionState(),
         chatFlow: null,
         foldedNodeIds: new Set(),
         foldedCompactIds: new Set(),

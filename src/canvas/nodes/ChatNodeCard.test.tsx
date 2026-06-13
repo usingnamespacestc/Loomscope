@@ -88,7 +88,7 @@ function nodeProps(cn: ChatNode) {
     targetPosition: undefined,
     dragHandle: undefined,
     parentId: undefined,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any;
 }
 
@@ -270,7 +270,7 @@ describe("ChatNodeCard — fork indicator chip (v0.8 M5)", () => {
       targetPosition: undefined,
       dragHandle: undefined,
       parentId: undefined,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any;
   }
 
@@ -353,7 +353,7 @@ describe("ChatNodeCard — inner-compact chip (PR 2.4 hybrid)", () => {
       targetPosition: undefined,
       dragHandle: undefined,
       parentId: undefined,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any;
   }
 
@@ -441,7 +441,7 @@ describe("ChatNodeCard — slash branch /compact distinction + expand (v2.0.1)",
     render(
       withRF(
         <ChatNodeCard
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+           
           {...(slashProps("/compact", "Compacted (ctrl+o to see full summary)") as any)}
         />,
       ),
@@ -456,7 +456,7 @@ describe("ChatNodeCard — slash branch /compact distinction + expand (v2.0.1)",
     render(
       withRF(
         <ChatNodeCard
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+           
           {...(slashProps("/model", "model set to sonnet") as any)}
         />,
       ),
@@ -472,7 +472,7 @@ describe("ChatNodeCard — slash branch /compact distinction + expand (v2.0.1)",
     render(
       withRF(
         <ChatNodeCard
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+           
           {...(slashProps("/model", "model set to sonnet-4.6") as any)}
         />,
       ),
@@ -485,7 +485,7 @@ describe("ChatNodeCard — slash branch /compact distinction + expand (v2.0.1)",
     render(
       withRF(
         <ChatNodeCard
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+           
           {...(slashProps("/compact", `Compacted\n${long}`) as any)}
         />,
       ),

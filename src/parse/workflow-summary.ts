@@ -311,10 +311,23 @@ function computeChainCount(
   const llmIds = new Set<string>();
   for (const n of nodes) if (n.kind === "llm_call") llmIds.add(n.id);
   if (llmIds.size === 0) return 0;
+  // Build the lookup indexes ONCE here rather than rebuilding them
+  // inside hasInWorkflowLlmPredecessor for every llm_call (was O(N²) on
+  // a workflow with many llm_calls).
+  const byId = new Map<string, WorkNode>(nodes.map((n) => [n.id, n]));
+  const byResultUserUuid = new Map<string, WorkNode>();
+  for (const n of nodes) {
+    if ((n.kind === "tool_call" || n.kind === "delegate") && n.resultUserUuid) {
+      byResultUserUuid.set(n.resultUserUuid, n);
+    }
+  }
   let roots = 0;
   for (const n of nodes) {
     if (n.kind !== "llm_call") continue;
-    if (!hasInWorkflowLlmPredecessor(n, nodes, chainParentByUuid)) roots += 1;
+    if (
+      !hasInWorkflowLlmPredecessor(n, byId, byResultUserUuid, chainParentByUuid)
+    )
+      roots += 1;
   }
   return roots;
 }
@@ -353,23 +366,17 @@ function computeChainCount(
 // 地被识别为新的链 root。
 function hasInWorkflowLlmPredecessor(
   llm: LlmCallNode,
-  nodes: WorkNode[],
+  byId: Map<string, WorkNode>,
+  byResultUserUuid: Map<string, WorkNode>,
   chainParentByUuid?: Map<string, string>,
 ): boolean {
-  const byId = new Map<string, WorkNode>(nodes.map((n) => [n.id, n]));
-  const byResultUserUuid = new Map<string, WorkNode>();
-  for (const n of nodes) {
-    if ((n.kind === "tool_call" || n.kind === "delegate") && n.resultUserUuid) {
-      byResultUserUuid.set(n.resultUserUuid, n);
-    }
-  }
   const visited = new Set<string>([llm.id]);
   let cursor: string | null = llm.parentUuid;
   // Bound by 2 × records-ish so a malformed cycle can't wedge the walk.
   // Use chainParentByUuid as the upper bound when present (covers
   // transit records that don't become WorkNodes); fall back to nodes
   // length when no map provided.
-  const limit = (chainParentByUuid?.size ?? nodes.length) + nodes.length;
+  const limit = (chainParentByUuid?.size ?? byId.size) + byId.size;
   for (let i = 0; i < limit && cursor; i += 1) {
     const next = byId.get(cursor) ?? byResultUserUuid.get(cursor) ?? null;
     if (next) {

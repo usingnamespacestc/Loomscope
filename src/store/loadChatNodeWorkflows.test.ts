@@ -3,6 +3,7 @@
 // fetch, drive the action, assert on store state transitions.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeSessionState } from "@/test/factories";
 
 import type { ChatFlow, ChatNode, WorkFlow } from "@/data/types";
 import { useStore } from "@/store/index";
@@ -27,6 +28,9 @@ function chatNode(id: string, parent: string | null = null): ChatNode {
         totalThinkingChars: 0,
         contextTokens: 100,
         maxContextTokens: 200_000,
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 0,
         toolUseFilePaths: [],
       },
       nodes: [],
@@ -54,6 +58,7 @@ function seed(cf: ChatFlow): void {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow: cf,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),
@@ -266,6 +271,7 @@ describe("loadChatNodeWorkflows", () => {
         staleSince: 1,
       });
       sessions.set(SID, {
+        ...makeSessionState(),
         ...cur,
         workflowCache: cache,
         workflowSelectedNodeId: "tail-old",
@@ -318,6 +324,7 @@ describe("loadChatNodeWorkflows", () => {
         staleSince: 1,
       });
       sessions.set(SID, {
+        ...makeSessionState(),
         ...cur,
         workflowCache: cache,
         workflowSelectedNodeId: "l1", // user inspecting an EARLIER WorkNode

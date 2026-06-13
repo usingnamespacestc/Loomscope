@@ -23,6 +23,7 @@
 // M2/M4 territory.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeSessionState } from "@/test/factories";
 
 import type { ChatFlow, ChatNode } from "@/data/types";
 import { useStore } from "@/store/index";
@@ -110,6 +111,7 @@ function seed(cf: ChatFlow, foldedCompactIds: Set<string> = new Set()): void {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow: cf,
       foldedNodeIds: new Set(),
       foldedCompactIds,

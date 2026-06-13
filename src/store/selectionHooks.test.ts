@@ -1,4 +1,5 @@
 import { renderHook, act } from "@testing-library/react";
+import { makeSessionState } from "@/test/factories";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { useStore } from "@/store/index";
@@ -17,6 +18,7 @@ function seedSession() {
   // a session record to mutate.
   useStore.setState((s) => ({
     sessions: new Map(s.sessions).set(SID, {
+      ...makeSessionState(),
       chatFlow: null,
       foldedNodeIds: new Set<string>(),
       foldedCompactIds: new Set<string>(),

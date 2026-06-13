@@ -13,8 +13,11 @@ describe("MarkdownView — syntax highlight", () => {
   it("emits hljs-* token spans for fenced ts code blocks", async () => {
     const md = "```ts\nconst x: number = 42;\nfunction f() {}\n```";
     const { container } = render(<MarkdownView>{md}</MarkdownView>);
+    // rehype-highlight now loads via a dynamic import() (bundle split),
+    // so wait for the highlighted token spans rather than the bare
+    // <pre><code> (which renders before the highlighter chunk lands).
     await waitFor(() =>
-      expect(container.querySelector("pre code")).toBeTruthy(),
+      expect(container.querySelector(".hljs-keyword")).toBeTruthy(),
     );
     // language class survives sanitize
     const code = container.querySelector("pre code")!;

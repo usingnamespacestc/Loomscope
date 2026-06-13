@@ -5,6 +5,7 @@
 // via fireEvent, then read the resulting store state.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeSessionState } from "@/test/factories";
 import { fireEvent, render, cleanup } from "@testing-library/react";
 
 import { useKeyboardNav } from "@/hooks/useKeyboardNav";
@@ -43,6 +44,7 @@ function seed(cf: ChatFlow, selectedId: string | null): void {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow: cf,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),

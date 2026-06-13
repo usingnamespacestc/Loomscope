@@ -66,7 +66,7 @@ function makeChatFlowWithUsage(perTurn: Array<{ input: number; output: number }>
       trigger: "user" as const,
       isCompactSummary: false,
       meta: {},
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     })) as any,
     orphans: [],
     flowEvents: [],
@@ -79,7 +79,7 @@ function setActiveSessionWithUsage(
 ) {
   const cf = makeChatFlowWithUsage(perTurn);
   const sessions = new Map();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   sessions.set(SID, { chatFlow: cf } as any);
   useStore.setState({ sessions, activeSessionId: SID });
 }
@@ -166,7 +166,7 @@ describe("SessionUsageChip", () => {
     fireEvent.click(screen.getByTestId("session-usage-run-cost"));
     // Wait a tick for the async post.
     await new Promise((r) => setTimeout(r, 10));
-    expect(lastBody?.text).toBe("/cost");
+    expect((lastBody as Record<string, unknown> | null)?.text).toBe("/cost");
     expect(screen.queryByTestId("session-usage-modal")).toBeNull();
   });
 });
