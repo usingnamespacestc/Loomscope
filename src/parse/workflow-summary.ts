@@ -372,11 +372,18 @@ function hasInWorkflowLlmPredecessor(
 ): boolean {
   const visited = new Set<string>([llm.id]);
   let cursor: string | null = llm.parentUuid;
-  // Bound by 2 × records-ish so a malformed cycle can't wedge the walk.
-  // Use chainParentByUuid as the upper bound when present (covers
-  // transit records that don't become WorkNodes); fall back to nodes
-  // length when no map provided.
-  const limit = (chainParentByUuid?.size ?? byId.size) + byId.size;
+  // Bound the walk by THIS WorkFlow's node count + a small transit
+  // margin. An in-workflow llm predecessor is reachable within the
+  // workflow's own WorkNodes (each matched in byId, visited once) plus a
+  // few non-node transit hops (records the parser didn't materialise).
+  // Once we've walked past that, the chain has left this WorkFlow and no
+  // in-workflow predecessor exists — stop. Using `chainParentByUuid.size`
+  // (≈ whole-session record count) as the bound made this O(N) per
+  // ChatNode → O(N²) parse: a single-llm node would walk the entire
+  // session backward before giving up. `TRANSIT_MARGIN` covers the
+  // handful of consecutive non-WorkNode transit records seen in practice.
+  const TRANSIT_MARGIN = 64;
+  const limit = byId.size + TRANSIT_MARGIN;
   for (let i = 0; i < limit && cursor; i += 1) {
     const next = byId.get(cursor) ?? byResultUserUuid.get(cursor) ?? null;
     if (next) {
