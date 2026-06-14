@@ -49,6 +49,37 @@ function flow(): ChatFlow {
   } as ChatFlow;
 }
 
+// Large multi-compact session: N nodes with a compact every K.
+function largeFlow(n: number, compactEvery: number): ChatFlow {
+  const nodes: ChatNode[] = [];
+  for (let i = 0; i < n; i++) {
+    nodes.push(cn(`n${i}`, i === 0 ? null : `n${i - 1}`, i > 0 && i % compactEvery === 0));
+  }
+  return {
+    id: "big",
+    mainJsonlPath: "/x.jsonl",
+    sidecarDir: "/x",
+    chatNodes: nodes,
+    orphans: [],
+    flowEvents: [],
+    trigger: "user",
+  } as ChatFlow;
+}
+
+describe("planWindow — large session caps visible at budget (no dagre overflow)", () => {
+  it("a 1200-node, multi-compact flow windows to <= 1000 visible", () => {
+    const cf = largeFlow(1200, 100); // ~12 compacts
+    expect(visibleCount(cf, new Set())).toBe(1200); // unfolded: all visible
+    const result = planWindow(cf, new Set(), "n1199", 1000); // focus = latest
+    const visible = visibleCount(cf, result);
+    // eslint-disable-next-line no-console
+    console.log(`large-session window: 1200 ChatNodes -> ${visible} visible`);
+    expect(visible).toBeLessThanOrEqual(1000); // dagre never sees > 1000
+    // focus (latest) stays visible
+    expect(computeFoldProjection(cf, result).hidden.has("n1199")).toBe(false);
+  });
+});
+
 describe("planWindow (knapsack window policy)", () => {
   it("re-folds farthest segments until visible ≤ budget; focus stays visible", () => {
     const cf = flow();
