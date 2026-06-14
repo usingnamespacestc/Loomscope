@@ -149,7 +149,13 @@ export async function readRecordsIncremental(
   const stat = await fs.promises.stat(jsonlPath);
   const curSize = stat.size;
   const curMtime = stat.mtimeMs;
-  const canIncremental = !!prevState && prevState.byteSize <= curSize;
+  const canIncremental =
+    !!prevState &&
+    prevState.byteSize <= curSize &&
+    // #4a: same byteSize but changed mtime = an in-place rewrite to the
+    // SAME length. The append path would find no new bytes and hand back
+    // the stale cached records — force a full reparse instead.
+    !(prevState.byteSize === curSize && prevState.mtimeMs !== curMtime);
 
   if (!canIncremental) {
     const { records, parseFailures } = await readRecordsFromFile(jsonlPath);
@@ -322,7 +328,13 @@ export async function parseJsonlFileIncremental(
   // still re-build ChatFlow (cheap relative to file IO) so callers get
   // a fresh ChatFlow object even when nothing appended; the records
   // array reuses the prevState slice without re-reading the file.
-  const canIncremental = !!prevState && prevState.byteSize <= curSize;
+  // #4a: but an equal byteSize with a CHANGED mtime is an in-place
+  // rewrite (truncate + rewrite to the same length) — reusing the
+  // cached records would be stale, so force a full reparse.
+  const canIncremental =
+    !!prevState &&
+    prevState.byteSize <= curSize &&
+    !(prevState.byteSize === curSize && prevState.mtimeMs !== curMtime);
 
   if (!canIncremental) {
     const { records, parseFailures } = await readRecordsFromFile(jsonlPath);
