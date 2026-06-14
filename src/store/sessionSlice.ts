@@ -2,6 +2,7 @@ import type { StateCreator } from "zustand";
 
 import type { ChatFlow, ChatNode, DelegateNode, WorkFlow } from "@/data/types";
 import { blocksOf, isToolResultRecord } from "@/parse/raw-record";
+import { planWindow, WINDOW_BUDGET } from "@/store/windowPlan";
 import type { AgentMetadata } from "@/parse/sidecar";
 import type {
   DrillFrame,
@@ -356,7 +357,12 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         // subscriber so canvas / fold projection sees a populated set
         // on the very first render and doesn't flash "fully expanded
         // → folded" on session open.
-        foldedCompactIds: hydrateFoldedCompactIds(id, cf),
+        foldedCompactIds: planWindow(
+          cf,
+          hydrateFoldedCompactIds(id, cf),
+          null, // focus = latest on fresh load
+          WINDOW_BUDGET,
+        ),
         isLoading: false,
         error: null,
         lastUpdated: Date.now(),
@@ -1805,8 +1811,18 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     if (!isCompactChatNodeInFlow(cur.chatFlow, compactChatNodeId)) return;
     const next = new Set(cur.foldedCompactIds);
     next.delete(compactChatNodeId);
+    // #6: enforce the window budget — re-fold the segments farthest from
+    // the just-unfolded compact if this expand pushed visible over budget.
+    // No-op for sessions under the budget. `next` (user intent) is what
+    // persists; `windowed` is the bounded in-memory view fed to dagre.
+    const windowed = planWindow(
+      cur.chatFlow,
+      next,
+      compactChatNodeId,
+      WINDOW_BUDGET,
+    );
     const updated = new Map(sessions);
-    updated.set(sessionId, { ...cur, foldedCompactIds: next });
+    updated.set(sessionId, { ...cur, foldedCompactIds: windowed });
     set({ sessions: updated });
     // EN (v0.9.1): hover-pan auto-unfold passes persist:false so
     // transient navigation doesn't leak into the user's
@@ -1829,8 +1845,15 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     const next = new Set(cur.foldedCompactIds);
     if (next.has(compactChatNodeId)) next.delete(compactChatNodeId);
     else next.add(compactChatNodeId);
+    // #6: enforce window budget (no-op under budget).
+    const windowed = planWindow(
+      cur.chatFlow,
+      next,
+      compactChatNodeId,
+      WINDOW_BUDGET,
+    );
     const updated = new Map(sessions);
-    updated.set(sessionId, { ...cur, foldedCompactIds: next });
+    updated.set(sessionId, { ...cur, foldedCompactIds: windowed });
     set({ sessions: updated });
     persistUnfoldFromFolded(sessionId, next, cur.chatFlow);
   },
