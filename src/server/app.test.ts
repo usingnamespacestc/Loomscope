@@ -916,3 +916,43 @@ describe("GET /api/sessions/:id — incremental parse on append", () => {
     expect(b2.chatNodes.length).toBe(1);
   });
 });
+
+describe("GET /api/sessions/:id/git/diff — #15 repo allowlist", () => {
+  it("rejects a (repo, sha) not present in the session with 403", async () => {
+    const projectDir = path.join(tmpRoot, "-home-user-Proj");
+    const sid = "33333333-3333-4000-8000-000000000001";
+    await writeJsonl(path.join(projectDir, `${sid}.jsonl`), [
+      {
+        type: "user",
+        uuid: "u1",
+        sessionId: sid,
+        promptId: "p1",
+        cwd: "/home/user/Proj",
+        message: { role: "user", content: "Hi" },
+        timestamp: "2026-05-02T00:00:00.000Z",
+      },
+      {
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u1",
+        sessionId: sid,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "ok" }],
+          stop_reason: "end_turn",
+        },
+        timestamp: "2026-05-02T00:00:01.000Z",
+      },
+    ]);
+    // This session produced no git commits, so ANY (repo, sha) is outside
+    // it. Pre-#15 the handler would spawn `git -C /etc show …` — an
+    // arbitrary local-repo read primitive. Now it's rejected before git
+    // is ever spawned.
+    const res = await app.request(
+      `/api/sessions/${sid}/git/diff?repo=${encodeURIComponent("/etc")}&sha=deadbeef`,
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { code?: string };
+    expect(body.code).toBe("repo-not-in-session");
+  });
+});
