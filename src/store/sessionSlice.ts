@@ -2,6 +2,7 @@ import type { StateCreator } from "zustand";
 
 import type { ChatFlow, ChatNode, DelegateNode, WorkFlow } from "@/data/types";
 import { blocksOf, isToolResultRecord } from "@/parse/raw-record";
+import { computeUnfoldChainTo } from "@/canvas/foldProjection";
 import { planWindow, WINDOW_BUDGET } from "@/store/windowPlan";
 import type { AgentMetadata } from "@/parse/sidecar";
 import type {
@@ -1338,7 +1339,27 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
   setSelected: (sessionId, nodeId) => {
     const updated = new Map(get().sessions);
     const cur = updated.get(sessionId) ?? blankSessionState();
-    updated.set(sessionId, { ...cur, selectedNodeId: nodeId });
+    // #6b: selecting/jumping to a node that's currently folded away
+    // unfolds the chain to reveal it, then re-windows with the target as
+    // focus (evicting the farthest segments if that pushes over budget —
+    // a far jump slides the recent window out). No-op when the target is
+    // already visible (the unfold chain is empty), so normal selection is
+    // unchanged.
+    let foldedCompactIds = cur.foldedCompactIds;
+    if (nodeId && cur.chatFlow) {
+      const chain = computeUnfoldChainTo(cur.chatFlow, foldedCompactIds, nodeId);
+      if (chain.length > 0) {
+        const intent = new Set(foldedCompactIds);
+        for (const host of chain) intent.delete(host);
+        foldedCompactIds = planWindow(
+          cur.chatFlow,
+          intent,
+          nodeId,
+          WINDOW_BUDGET,
+        );
+      }
+    }
+    updated.set(sessionId, { ...cur, selectedNodeId: nodeId, foldedCompactIds });
     set({ sessions: updated });
   },
 
