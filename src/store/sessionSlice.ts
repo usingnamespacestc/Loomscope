@@ -658,6 +658,17 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     // strict +1.
     // 中: appliedVersion null 表示刚 baseline，任何 seq 都直接当起点；
     // 否则严格 +1。检测漏号触发 full refresh。
+    //
+    // Replay / duplicate guard: an SSE reconnect's catch-up can re-send
+    // deltas we've already applied (seq ≤ appliedVersion). Those are NOT
+    // gaps — drop them as a no-op instead of forcing a ~4s full refresh.
+    // Only a FORWARD gap (seq > appliedVersion+1 = missed deltas) needs a
+    // refresh, which the `!== expected` check below still catches.
+    // 中: SSE 重连补发会重放已应用的 delta(seq ≤ appliedVersion)，这不是
+    // 漏号，直接忽略;只有 forward gap 才需要 full refresh。
+    if (cur.appliedVersion != null && delta.seq <= cur.appliedVersion) {
+      return;
+    }
     const expected =
       cur.appliedVersion == null ? delta.seq : cur.appliedVersion + 1;
     if (delta.seq !== expected) {

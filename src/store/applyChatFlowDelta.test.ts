@@ -121,6 +121,42 @@ describe("applyChatFlowDelta", () => {
     expect(useStore.getState().refreshSession).not.toHaveBeenCalled();
   });
 
+  it("#5 replay delta (seq < appliedVersion) is a no-op — no refresh, no state change", () => {
+    seed(flow([cn("a")]), 5);
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 3, // already applied — an SSE reconnect catch-up replay
+      chatNode: cn("b", "a"),
+    } as ChatFlowDeltaEvent);
+    const s = useStore.getState().sessions.get(SID);
+    expect(s?.chatFlow?.chatNodes.map((c) => c.id)).toEqual(["a"]); // unchanged
+    expect(s?.appliedVersion).toBe(5); // unchanged
+    expect(useStore.getState().refreshSession).not.toHaveBeenCalled();
+  });
+
+  it("#5 delta at exactly appliedVersion is also a replay no-op", () => {
+    seed(flow([cn("a")]), 5);
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 5,
+      chatNode: cn("b", "a"),
+    } as ChatFlowDeltaEvent);
+    expect(
+      useStore.getState().sessions.get(SID)?.chatFlow?.chatNodes.map((c) => c.id),
+    ).toEqual(["a"]);
+    expect(useStore.getState().refreshSession).not.toHaveBeenCalled();
+  });
+
+  it("#5 forward gap (seq > appliedVersion+1) still forces a refresh", () => {
+    seed(flow([cn("a")]), 5);
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 8, // expected 6 — genuinely missed deltas
+      chatNode: cn("b", "a"),
+    } as ChatFlowDeltaEvent);
+    expect(useStore.getState().refreshSession).toHaveBeenCalledWith(SID);
+  });
+
   it("chatnode-added: appends new ChatNode", () => {
     seed(flow([cn("a")]));
     useStore.getState().applyChatFlowDelta(SID, {
