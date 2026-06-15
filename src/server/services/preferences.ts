@@ -206,7 +206,11 @@ export interface LoomscopePreferences {
 const DEFAULTS: LoomscopePreferences = {
   idleTimeoutMin: 30,
   useApiKey: false,
-  permissionMode: "default",
+  // Default to bypassPermissions for single-user local-trust use (Mode A,
+  // 127.0.0.1 bind, SSH-tunnel access) — matches `claude --dangerously-
+  // skip-permissions` and removes the per-tool approval prompt. Users
+  // who want the gated flow can still flip it back in Settings.
+  permissionMode: "bypassPermissions",
   respawnPerSend: true,
   enableHookHttpPath: true,
   enableHookSdkPath: true,
