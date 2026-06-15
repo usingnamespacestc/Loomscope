@@ -2,6 +2,43 @@
 
 All user-facing changes to Loomscope are noted here. v0.x history is highlights only — chronological detail in [`docs/devlog.md`](docs/devlog.md).
 
+## Unreleased — 2026-06-15
+
+Four-phase quality batch landed via `feat/canvas-windowing` (single PR, 14 commits across 4 stacked branches). Each phase ran self-driven via `/goal`, every slice gated through typecheck / typecheck:test / lint / build / vitest / e2e-smoke before commit. **vitest 747 → 1263 passed**, all gates green throughout. See [`docs/devlog.md`](docs/devlog.md) for the per-phase narrative.
+
+### Phase 1 — P0 toolchain fix (branch `improvements/p0-p1-p2-p3`)
+
+- **`npm run build` was broken** on a clean checkout (tsconfig pulled `*.test` into typecheck). Split `tsconfig.build.json` so build typechecks shippable code only; full check stays available as `npm run typecheck:test`.
+- **`npm run lint` couldn't run** (script existed, no config, eslint not installed; scattered `// eslint-disable` comments referenced a phantom linter). Added eslint 9 flat config + devDeps.
+- **e2e wasn't portable** (hardcoded private 256MB session, sibling-project Playwright symlink). Added `e2e-smoke/` running in the official Playwright Docker image.
+- Same commit also landed: P1 (`onlyRenderVisibleElements` virtualization, node `React.memo` + `data` identity preservation in `refreshChatNodeContent`, `ModelRibbonLayer` gate-before-subscribe, `removeSession` per-session-map leak fix, lazy `rehype-highlight` chunk: MarkdownView 498→330 KB), P3 (55 test-fixture type errors → `typecheck:test` 0; shared `makeSessionState` / `makeWorkflowSummary` factories; ECONNREFUSED test noise → 0; dead code removal incl. `signalClassifier`, `ssePending`, no-op subscribe stubs), P2 (csrf bypass allowlist regression test).
+
+### Phase 2 — Scale (branch `scale/windowed-canvas`)
+
+- **Parse O(N²) → O(N)** (two commits). `buildChatNode` no longer rebuilds `chainParentByUuid` per call (hoisted to `buildChatFlow`); `hasInWorkflowLlmPredecessor` bounded by workflow size + 64 transit margin (was `chainParentByUuid.size` ≈ whole-session). **Measured: 50k-turn synthetic from "unloadable (>300 s)" → 1.06 s; 10k 27 s → 230 ms; 1k 0.2 s → 32 ms.**
+- **Scale measurement + windowed-canvas design** docs added (`docs/perf-scale-measurement.md`, `docs/design-windowed-canvas.md`). Identified the secondary client wall: dagre's recursive acyclic DFS overflows at ~5k linearly-chained nodes (`RangeError`) — fix implemented in Phase 4.
+
+### Phase 3 — Correctness + security (branch `fix/correctness-security`)
+
+- **#5 — SSE reconnect replay no longer forces a full refresh.** Replayed deltas (`seq ≤ appliedVersion`) drop as a no-op; true forward gaps (`seq > appliedVersion+1`) still trigger `refreshSession`.
+- **#15 — `GET /api/sessions/:id/git/diff` no longer accepts an arbitrary `repo` path.** Cross-checked against the (repo, sha) tuples this session's parse output produced; mismatches return 403 before git is spawned.
+- **#4a — Incremental parse on same-size in-place rewrite.** Compare `mtimeMs` too: equal `byteSize` + changed `mtimeMs` → full reparse (was reusing stale cached records).
+- **#4b** (UTF-8 codepoint boundary on tail-read) deferred — transient cosmetic glitch, byte-offset rewrite is off-by-one risky.
+
+### Phase 4 — Client canvas windowing + test depth + perf eval (branch `feat/canvas-windowing`)
+
+- **Client canvas windowing (#6a + #6b).** Pure-client knapsack over the existing fold machinery (`src/store/windowPlan.ts`): cap visible (laid-out) ChatNodes at 1000 by re-folding the inter-compact segments farthest from the focus when an expand pushes over budget. Focus is never hidden. Wired into the load path and both unfold actions; no-op for sessions under budget so existing fold behaviour is unchanged. `setSelected` now also reveals + re-windows a folded target via `computeUnfoldChainTo` + `planWindow`. **Verified: a 1200-node multi-compact flow windows to 1000 visible; dagre never sees more, so no `RangeError` regardless of conversation length.** #6c (>500 single-segment fallback) deferred (touches fold/range core, only triggers on the never-compacted edge case).
+- **SSE end-to-end integration test (#1)** — `e2e-smoke/sse.spec.ts` drives the real pipeline: append a turn to the watched jsonl → chokidar → delta engine → SSE → client `EventSource` → `applyChatFlowDelta` → new ChatNode renders without a page reload. Idempotent (resets baseline each run).
+- **Deeper e2e (#2)** — `e2e-smoke/interaction-deep.spec.ts`: select / conversation-bubble / pan / zoom / hover-dwell / best-effort edge ribbon, all asserting the app stays alive.
+- **P1 perf evaluation (#5)** — `docs/p1-perf-eval.md`: each P1 optimization confirmed engaged with numbers (1000 nodes → 4 DOM cards, memo confines a delta to one card, removeSession clears all maps, ribbon idle when unhovered, highlight.js 166 KB lazy chunk).
+- **Composer UI nit + default permission mode.** `+` and pinned `⊞` (/compact) buttons grouped into a left cluster (previously `justify-between` floated `⊞` to the centre). `permissionMode` default changed to `"bypassPermissions"` — matches the single-user local-trust deployment model (127.0.0.1 bind + SSH-tunnel access). Users can still flip back to `"default"` in Settings.
+
+### Test count
+
+1263 unit tests + 3 e2e specs (was 1013 unit + 1 e2e in rc.3).
+
+---
+
 ## [2.0.0-rc.3] — 2026-05-13
 
 v2.1 Delta-SSE rewrite + v2.2 raw-record fast path land together. The combined effect on the dev's main 137 MB / 664-ChatNode session: end-to-end "CC terminal writes jsonl → DOM shows the change" went from ~6 s to ~100-200 ms.
