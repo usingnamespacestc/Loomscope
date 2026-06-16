@@ -20,7 +20,6 @@ import { useTranslation } from "react-i18next";
 import { useFoldAnchor } from "@/canvas/FoldAnchorContext";
 import { lat as cardLat } from "@/sse/latencyProbe";
 import { type ChatNodeRFNode } from "@/canvas/layoutDag";
-import { ActiveToolCallsChips } from "@/canvas/nodes/chrome/ActiveToolCallChip";
 import { NodeIdLine } from "@/canvas/nodes/chrome/NodeIdLine";
 import { TokenBar } from "@/canvas/nodes/chrome/TokenBar";
 import { useStore } from "@/store/index";
@@ -399,15 +398,6 @@ function ChatNodeCardImpl({ id, data }: NodeProps<ChatNodeRFNode>) {
         />
       )}
 
-      {/* Plan B (2026-06-16): hook-driven "tool running" placeholders on
-          the currently-running ChatNode. PreToolUse hooks beat the jsonl
-          fsync by ~3 s, so this strip gives instant visibility into what
-          the agent is doing. PostToolUse / Stop / next UserPromptSubmit
-          remove the entries. Gated on `running` so it never paints on
-          past turns. */}
-      {running && activeSessionId && (
-        <ActiveToolCallsChips sessionId={activeSessionId} />
-      )}
 
       {/* Stats row — wraps to a second line when 7+ chips appear so a
           chip-rich ChatNode (llm + chain + tool + thinking + own-file +
