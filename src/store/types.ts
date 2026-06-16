@@ -182,6 +182,13 @@ export interface SubAgentCacheEntry {
   lastAccess: number;
 }
 
+/** A single TodoWrite entry, extracted from PreToolUse hook payload. */
+export interface TodoItem {
+  content: string;
+  /** CC's TodoWrite spec: pending | in_progress | completed (+ unknown). */
+  status: string;
+}
+
 export interface ActiveToolCall {
   /** PreToolUse hook's `tool_use_id` — the join key with PostToolUse. */
   toolUseId: string;
@@ -313,6 +320,15 @@ export interface SessionState {
   // 中: PreToolUse hook 实时占位。PostToolUse 删；Stop/UserPromptSubmit
   // 整图清。纯 UI，不进 chatFlow。
   activeToolCalls: Map<string, ActiveToolCall>;
+  // EN (2026-06-16): the most recent TodoWrite payload's todos. Surfaces
+  // CC-terminal-style "current task" text on ComposerStatusBar (the
+  // `in_progress` item, falling back to the latest `pending` if none).
+  // Captured from PreToolUse when tool_name === "TodoWrite"; cleared on
+  // Stop / next UserPromptSubmit (same lifecycle as activeToolCalls).
+  // null = no todos seen yet this turn (or last turn ended).
+  // 中: 最近 TodoWrite 的 todos 数组。状态栏显示 in_progress 那条作
+  // "当前在干什么"。新 turn / Stop 清。
+  latestTodos: TodoItem[] | null;
   // EN: epoch-ms of the most recent UserPromptSubmit OR Stop hook
   // delivery. Lets `useSessionTurnRunning` detect whether the user
   // has these hooks wired at all — if 0 OR older than 30 min, the

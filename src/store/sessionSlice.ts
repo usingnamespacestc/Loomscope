@@ -11,6 +11,7 @@ import type {
   SessionSlice,
   SessionState,
   SubAgentCacheEntry,
+  TodoItem,
   WorkflowCacheEntry,
 } from "@/store/types";
 
@@ -68,6 +69,7 @@ export function blankSessionState(): SessionState {
     serverVersion: null,
     rawAppliedRecordUuids: new Set<string>(),
     activeToolCalls: new Map(),
+    latestTodos: null,
   };
 }
 
@@ -1166,6 +1168,8 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         // (covers a missed PostToolUse on the previous turn).
         activeToolCalls:
           next.activeToolCalls.size > 0 ? new Map() : next.activeToolCalls,
+        // Plan B: clear stale TodoWrite carryover from previous turn.
+        latestTodos: null,
       };
     } else if (event === "Stop") {
       next = {
@@ -1178,6 +1182,11 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         // PostToolUse, matching the existing currentTurn=null intent.)
         activeToolCalls:
           next.activeToolCalls.size > 0 ? new Map() : next.activeToolCalls,
+        // Note: latestTodos is NOT cleared on Stop — CC fires Stop
+        // after every assistant message during tool loops, but the
+        // user's mental model of "current task" persists across the
+        // turn. UserPromptSubmit (= user pressed Enter again) is the
+        // honest "new turn, drop stale todos" trigger.
       };
     }
     // Plan B (2026-06-16): PreToolUse / PostToolUse → activeToolCalls
@@ -1194,14 +1203,39 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       const toolName =
         typeof ex.tool_name === "string" ? ex.tool_name : "";
       if (toolUseId && toolName) {
-        const m = new Map(next.activeToolCalls);
-        m.set(toolUseId, {
-          toolUseId,
-          toolName,
-          toolInput: ex.tool_input,
-          since: Date.now(),
-        });
-        next = { ...next, activeToolCalls: m };
+        // TodoWrite is metadata, not a "real" tool action — capture its
+        // payload into latestTodos for the status bar, but DON'T add it
+        // to activeToolCalls (we don't want a "⚙️ TodoWrite" chip
+        // when the user explicitly wants the task text instead).
+        if (toolName === "TodoWrite") {
+          const input = ex.tool_input as { todos?: unknown } | undefined;
+          const todos = Array.isArray(input?.todos) ? input.todos : null;
+          if (todos) {
+            const parsed: TodoItem[] = [];
+            for (const t of todos) {
+              if (t && typeof t === "object") {
+                const tt = t as Record<string, unknown>;
+                const content =
+                  typeof tt.content === "string" ? tt.content : "";
+                const status =
+                  typeof tt.status === "string" ? tt.status : "pending";
+                if (content) parsed.push({ content, status });
+              }
+            }
+            if (parsed.length > 0) {
+              next = { ...next, latestTodos: parsed };
+            }
+          }
+        } else {
+          const m = new Map(next.activeToolCalls);
+          m.set(toolUseId, {
+            toolUseId,
+            toolName,
+            toolInput: ex.tool_input,
+            since: Date.now(),
+          });
+          next = { ...next, activeToolCalls: m };
+        }
       }
     } else if (event === "PostToolUse") {
       const ex = payload.extras as Record<string, unknown>;
