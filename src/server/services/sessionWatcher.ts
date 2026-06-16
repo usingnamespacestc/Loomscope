@@ -48,6 +48,7 @@ import { FSWatcher, watch } from "chokidar";
 
 import { parseAgentId } from "@/parse/sidecar";
 import { invalidateSession } from "@/server/services/chatFlowCache";
+import { lat, LOOM_LAT_ENABLED } from "@/server/services/latencyProbe";
 import { broadcast } from "@/server/services/sseHub";
 import { tasksDirFor } from "@/server/services/taskList";
 
@@ -208,6 +209,9 @@ function scheduleFire(
     cur.pendingTimer = null;
     cur.lastFireAt = Date.now();
     cur.reason = "change"; // reset for the next burst
+    if (LOOM_LAT_ENABLED) {
+      lat("chokidar-fire", { filePath, reason: fireReason, scheduledDelayMs: delay });
+    }
     handleEvent(filePath, fireReason);
   }, delay);
 }

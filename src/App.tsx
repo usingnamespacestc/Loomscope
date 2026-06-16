@@ -37,6 +37,7 @@ import {
   SSE_WATCHDOG_TICK_MS,
   createSseWatchdog,
 } from "@/sse/stalenessWatchdog";
+import { lat as clientLat } from "@/sse/latencyProbe";
 import { normalizeSignal } from "@/sse/signalNormalizer";
 import {
   RECONCILE_DEBOUNCE_MS,
@@ -366,8 +367,16 @@ export default function App() {
         const payload = JSON.parse((ev as MessageEvent).data) as {
           type: string;
           seq: number;
+          chatNode?: { id?: string };
+          chatNodeId?: string;
           [k: string]: unknown;
         };
+        clientLat("client-recv-delta", {
+          sessionId: activeId,
+          type: payload.type,
+          seq: payload.seq,
+          uuid: payload.chatNode?.id ?? payload.chatNodeId,
+        });
         useStore.getState().applyChatFlowDelta(
           activeId,
           payload as Parameters<
@@ -391,11 +400,19 @@ export default function App() {
       try {
         const payload = JSON.parse((ev as MessageEvent).data) as {
           sessionId: string;
-          records: Parameters<
+          records: (Parameters<
             ReturnType<typeof useStore.getState>["applyRawRecord"]
-          >[1][];
+          >[1] & { uuid?: string; type?: string; timestamp?: string })[];
         };
         if (payload.sessionId !== activeId) return;
+        for (const r of payload.records) {
+          clientLat("client-recv-rawrecords", {
+            sessionId: activeId,
+            uuid: r.uuid,
+            type: r.type,
+            recordTs: r.timestamp,
+          });
+        }
         const apply = useStore.getState().applyRawRecord;
         for (const r of payload.records) apply(activeId, r);
       } catch (err) {

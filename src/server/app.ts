@@ -48,6 +48,10 @@ import {
 } from "@/server/services/sseHub";
 import { setDriftDetectionInterval } from "@/server/services/driftDetection";
 import { findForkClosure } from "@/server/services/forkTree";
+import {
+  lat,
+  LOOM_LAT_ENABLED as LAT_ENABLED,
+} from "@/server/services/latencyProbe";
 import { locateSessionJsonl } from "@/server/services/locateJsonl";
 import { initHookLifecycleReducer } from "@/server/services/hookLifecycleReducer";
 import { initPendingPermissionTracker } from "@/server/services/pendingPermissionTracker";
@@ -272,6 +276,16 @@ export function createApp(opts: AppOptions) {
             closure,
           });
           if (newRecords.length > 0) {
+            if (LAT_ENABLED) {
+              for (const r of newRecords) {
+                lat("peek-broadcast", {
+                  sessionId,
+                  uuid: r.uuid,
+                  type: r.type,
+                  recordTs: r.timestamp,
+                });
+              }
+            }
             broadcastSse(sessionId, {
               event: "raw-records",
               data: { sessionId, records: newRecords },

@@ -40,6 +40,7 @@
 // client 不变；PR D2 才 cutover。
 
 import type { ChatFlow, ChatNode, WorkflowSummary } from "@/data/types";
+import { lat, LOOM_LAT_ENABLED } from "@/server/services/latencyProbe";
 import { broadcast } from "@/server/services/sseHub";
 import {
   chatNodeSig,
@@ -182,8 +183,29 @@ export async function processFresh(
   chains.set(sessionId, pending);
   await prev;
   try {
+    const buildEndedAt = Date.now();
     const deltas = computeDeltas(sessionId, fresh);
+    if (LOOM_LAT_ENABLED) {
+      lat("delta-broadcast", {
+        sessionId,
+        deltaCount: deltas.length,
+        buildEndedAt,
+        phase: "summary",
+      });
+    }
     for (const d of deltas) {
+      if (LOOM_LAT_ENABLED) {
+        // Per-delta stamp with a join key into the client side. Each
+        // delta shape carries `chatNode.id` (added) or `chatNodeId`
+        // (summary-updated / removed); the matching one is the join key.
+        const dd = d as { chatNode?: { id?: string }; chatNodeId?: string };
+        lat("delta-broadcast", {
+          sessionId,
+          type: d.type,
+          seq: d.seq,
+          uuid: dd.chatNode?.id ?? dd.chatNodeId,
+        });
+      }
       broadcast(sessionId, { event: "delta", data: d });
     }
     return deltas;

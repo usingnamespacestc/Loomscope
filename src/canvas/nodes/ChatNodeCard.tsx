@@ -14,10 +14,11 @@
 
 import { Handle, Position } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
-import { memo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useFoldAnchor } from "@/canvas/FoldAnchorContext";
+import { lat as cardLat } from "@/sse/latencyProbe";
 import { type ChatNodeRFNode } from "@/canvas/layoutDag";
 import { NodeIdLine } from "@/canvas/nodes/chrome/NodeIdLine";
 import { TokenBar } from "@/canvas/nodes/chrome/TokenBar";
@@ -38,6 +39,16 @@ export const ChatNodeCard = memo(ChatNodeCardImpl);
 function ChatNodeCardImpl({ id, data }: NodeProps<ChatNodeRFNode>) {
   const { t } = useTranslation();
   const cn = data.chatNode;
+  // [LAT] first-DOM-mount stamp. Empty-deps useEffect so it fires once
+  // per mount (the join key into the full pipeline trace). No-op when
+  // window.__LOOM_LAT__ is unset.
+  useEffect(() => {
+    cardLat("client-mount-chatnode", {
+      uuid: id,
+      recordTs: cn.userMessage?.timestamp,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Selection now subscribes per-card from the store rather than
   // arriving via NodeProps. The canvas wrapper used to recompute
   // `decoratedNodes = nodes.map(...)` on every selection change, which

@@ -3,6 +3,7 @@ import type { StateCreator } from "zustand";
 import type { ChatFlow, ChatNode, DelegateNode, WorkFlow } from "@/data/types";
 import { blocksOf, isToolResultRecord } from "@/parse/raw-record";
 import { computeUnfoldChainTo } from "@/canvas/foldProjection";
+import { lat as storeLat } from "@/sse/latencyProbe";
 import { planWindow, WINDOW_BUDGET } from "@/store/windowPlan";
 import type { AgentMetadata } from "@/parse/sidecar";
 import type {
@@ -649,6 +650,14 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
   },
 
   applyChatFlowDelta: (sessionId, delta) => {
+    storeLat("client-applied-delta", {
+      sessionId,
+      type: delta.type,
+      seq: delta.seq,
+      uuid:
+        (delta as { chatNode?: { id?: string } }).chatNode?.id ??
+        (delta as { chatNodeId?: string }).chatNodeId,
+    });
     const sessions = get().sessions;
     const cur = sessions.get(sessionId);
     if (!cur || !cur.chatFlow) {
@@ -848,6 +857,12 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
   // system / sidechain / meta / compactSummary 跳过——靠 ground-
   // truth delta 兜底。
   applyRawRecord: (sessionId, record) => {
+    storeLat("client-applied-raw", {
+      sessionId,
+      uuid: record.uuid,
+      type: record.type,
+      recordTs: record.timestamp,
+    });
     const sessions = get().sessions;
     const cur = sessions.get(sessionId);
     if (!cur || !cur.chatFlow) return;
