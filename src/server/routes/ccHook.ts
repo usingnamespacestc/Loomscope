@@ -147,6 +147,13 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
       }
     }),
     async (c) => {
+      // [DEBUG 2026-06-16, debug/sse-latency branch only]
+      // Prove CC is actually firing hooks to us. Logs the event + outcome.
+      const _debugEvent = c.req.query("event") ?? "?";
+      const _debugHasSecret = c.req.header("x-loomscope-secret") ? "Y" : "N";
+      process.stderr.write(
+        `[HOOK-ARRIVED] event=${_debugEvent} hasSecret=${_debugHasSecret} now=${Date.now()}\n`,
+      );
       // Auth: constant-time compare. Header missing OR mismatch → 403.
       // Use the `?? ""` so the constant-time fn always operates on
       // strings (guards against the comparison short-circuiting on
