@@ -485,6 +485,25 @@ export interface SessionSlice {
    *  delta 通过同 id 在 applyChatFlowDelta 里替换掉。
    */
   applyRawRecord: (sessionId: string, record: RawRecord) => void;
+  /** EN (2026-06-16): apply a streaming-text chunk extracted from an
+   *  SDK `sdk-message` SSE frame (Loomscope-spawned sessions only). The
+   *  caller pulls the text content out of the SDKAssistantMessage; we
+   *  do the same host-find + append work that applyRawRecord does for
+   *  the jsonl path. Skips text already absorbed via raw-record (same
+   *  promptId+content match) so we don't double-count when both
+   *  channels eventually deliver. Caller passes a stable `chunkId`
+   *  (the SDK message id when available) so a re-delivery is a no-op.
+   *  中: 把 SDK sdk-message 帧里的流式 text 喂进来。复用 applyRawRecord
+   *  的 host-find + append；jsonl 兜底用同 id 替换的现有路径不变。 */
+  applyAssistantStreamText: (
+    sessionId: string,
+    args: {
+      promptId: string;
+      chunkId: string;
+      text: string;
+      model?: string;
+    },
+  ) => void;
   // EN: bump lastInvalidateAt for `sessionId` to now. Called from the
   // SSE `invalidate` handler in App.tsx so liveness UI flips into
   // active state.
