@@ -43,6 +43,7 @@ import type { PointerEvent as RPointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import { postNewSession } from "@/api/newSession";
+import { ActiveToolCallsChips } from "@/canvas/nodes/chrome/ActiveToolCallChip";
 import { postInterrupt, postTurn } from "@/api/turns";
 import { ConfirmBanner } from "@/components/ConfirmBanner";
 import { DeferralBanner } from "@/components/drill/DeferralBanner";
@@ -1486,6 +1487,12 @@ function ComposerStatusBar({ sessionId }: { sessionId: string }) {
           })}
         </span>
       )}
+      {/* Plan B (2026-06-16): hook-driven tool-call chips fixed to the
+          composer status bar — always visible regardless of canvas
+          scroll / zoom / virtualization, mirroring the CC-terminal
+          "still thinking..." status line. PreToolUse fires ~3 s ahead
+          of the jsonl flush so the user sees activity in real time. */}
+      <ActiveToolCallsChips sessionId={sessionId} />
       {hasTokens && (
         <span
           className="ml-auto inline-flex items-center gap-1.5 font-mono text-blue-700"

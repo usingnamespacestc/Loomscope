@@ -44,8 +44,8 @@ export function ActiveToolCallsChips({ sessionId }: { sessionId: string }) {
   const calls = Array.from(activeToolCalls.values());
 
   return (
-    <div
-      className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]"
+    <span
+      className="inline-flex flex-wrap items-center gap-1"
       data-testid="active-tool-calls"
     >
       {calls.map((c) => {
@@ -67,6 +67,6 @@ export function ActiveToolCallsChips({ sessionId }: { sessionId: string }) {
           </span>
         );
       })}
-    </div>
+    </span>
   );
 }
