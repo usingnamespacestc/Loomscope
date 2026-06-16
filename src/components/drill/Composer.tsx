@@ -43,7 +43,10 @@ import type { PointerEvent as RPointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import { postNewSession } from "@/api/newSession";
-import { ActiveToolCallsChips } from "@/canvas/nodes/chrome/ActiveToolCallChip";
+import {
+  summariseTodos,
+  useSpinnerWord,
+} from "@/components/drill/statusBarBits";
 import { postInterrupt, postTurn } from "@/api/turns";
 import { ConfirmBanner } from "@/components/ConfirmBanner";
 import { DeferralBanner } from "@/components/drill/DeferralBanner";
@@ -1378,6 +1381,12 @@ function ComposerStatusBar({ sessionId }: { sessionId: string }) {
   const inflight = useStore((s) => getInflight(s, sessionId));
   const sdkStartedAt = inflight.currentRun?.startedAt ?? null;
   const sdkRunning = inflight.state === "running" && sdkStartedAt !== null;
+  // Plan B v2 (2026-06-16): TodoWrite-derived "current task" text,
+  // pulled from PreToolUse hooks. Mirrors CC terminal's
+  // "分析数据 → 锁定瓶颈 → 出修复建议" line.
+  const latestTodos = useStore(
+    (s) => s.sessions.get(sessionId)?.latestTodos ?? null,
+  );
 
   const hookTurn = useSessionTurnRunning(sessionId);
   const lastTurnUserSubmittedAt = useStore(
@@ -1458,6 +1467,12 @@ function ComposerStatusBar({ sessionId }: { sessionId: string }) {
   }, [isRunning]);
   void tick;
 
+  // Plan B v2: CC-terminal-style status line bits. Hooks MUST sit
+  // above the early return below so React's rules-of-hooks holds —
+  // useSpinnerWord no-ops when running=false anyway.
+  const spinner = useSpinnerWord(isRunning);
+  const todoText = summariseTodos(latestTodos);
+
   // Hide the bar entirely when there's nothing to show — no in-flight
   // turn AND no usage data yet (fresh session before first reply).
   if (!isRunning && !hasTokens) return null;
@@ -1474,25 +1489,34 @@ function ComposerStatusBar({ sessionId }: { sessionId: string }) {
       data-elapsed-sec={elapsedSec ?? undefined}
       className="flex items-center gap-2 border-t border-blue-100 bg-blue-50/60 px-3 py-1 text-[11px] text-blue-800"
     >
-      {isRunning && (
+      {spinner && (
         <span
-          aria-hidden="true"
-          className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500"
-        />
+          className="inline-flex items-center gap-1 font-medium"
+          data-testid="composer-status-spinner"
+        >
+          <span aria-hidden className="animate-pulse text-blue-500">
+            ✻
+          </span>
+          <span>{spinner}…</span>
+        </span>
+      )}
+      {todoText && (
+        <span
+          className="truncate text-blue-900"
+          style={{ maxWidth: "40ch" }}
+          title={todoText}
+          data-testid="composer-status-todo"
+        >
+          {todoText}
+        </span>
       )}
       {elapsedSec != null && (
-        <span>
+        <span className="text-blue-600">
           {t("composer.status_running", {
             elapsed: formatElapsed(elapsedSec),
           })}
         </span>
       )}
-      {/* Plan B (2026-06-16): hook-driven tool-call chips fixed to the
-          composer status bar — always visible regardless of canvas
-          scroll / zoom / virtualization, mirroring the CC-terminal
-          "still thinking..." status line. PreToolUse fires ~3 s ahead
-          of the jsonl flush so the user sees activity in real time. */}
-      <ActiveToolCallsChips sessionId={sessionId} />
       {hasTokens && (
         <span
           className="ml-auto inline-flex items-center gap-1.5 font-mono text-blue-700"
