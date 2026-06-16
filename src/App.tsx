@@ -602,15 +602,59 @@ export default function App() {
       try {
         const payload = JSON.parse((ev as MessageEvent).data) as {
           type: string;
+          // SDKAssistantMessage shape (mirrors the SDK)
+          message?: {
+            id?: string;
+            model?: string;
+            content?: Array<{ type?: string; text?: string }>;
+          };
+          parent_tool_use_id?: string | null;
+          session_id?: string;
+          // some SDKMessage frames carry the prompt id under different
+          // keys; we look for the most likely candidates
+          promptId?: string;
+          parent_prompt_id?: string;
         };
         useStore.getState().markSessionActivity(activeId);
         useStore.getState().setRespawnNotice(activeId, null);
-        // v2.0.1 PR A: rate_limit_event now routed via dedicated
-        // `sdk-rate-limit` SSE event below — this comment marks the
-        // spot where the older "TODO route specific types" intent
-        // was finally honored.
-        // 中: rate_limit_event 走专用 `sdk-rate-limit` 事件了，下面 handler。
-        void payload; // other types still flow through here as opaque
+        // 2026-06-16: stream assistant text into the host ChatNode the
+        // moment the SDK delivers it, instead of waiting for jsonl to
+        // flush (~3 s on terminal CC). Loomscope-spawned sessions only;
+        // terminal-CC sessions don't generate sdk-message frames at all.
+        // 中: 把 SDK assistant 消息的 text 立刻喂给宿主 ChatNode，不再
+        // 等 jsonl flush。仅 Loomscope spawn 的 session 有效。
+        if (payload.type === "assistant" && payload.message) {
+          const content = payload.message.content;
+          if (Array.isArray(content)) {
+            const text = content
+              .filter(
+                (b): b is { type: "text"; text: string } =>
+                  b?.type === "text" && typeof b.text === "string",
+              )
+              .map((b) => b.text)
+              .join("");
+            const chunkId = payload.message.id;
+            // The SDK doesn't pass promptId on the frame itself, but
+            // each turn opens with a user record (raw-record) whose
+            // promptId becomes the placeholder ChatNode id. We try a
+            // few fields, falling back to the latest ChatNode in the
+            // flow (which IS the running placeholder by design).
+            let promptId: string | undefined =
+              payload.promptId ?? payload.parent_prompt_id;
+            if (!promptId) {
+              const cf = useStore.getState().sessions.get(activeId)?.chatFlow;
+              promptId = cf?.chatNodes[cf.chatNodes.length - 1]?.id;
+            }
+            if (text && chunkId && promptId) {
+              useStore.getState().applyAssistantStreamText(activeId, {
+                promptId,
+                chunkId,
+                text,
+                model: payload.message.model,
+              });
+            }
+          }
+        }
       } catch {
         /* ignore */
       }

@@ -1054,6 +1054,64 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     // 中: 其他类型 MVP 暂不处理。
   },
 
+  applyAssistantStreamText: (sessionId, { promptId, chunkId, text, model }) => {
+    if (!text) return;
+    const sessions = get().sessions;
+    const cur = sessions.get(sessionId);
+    if (!cur || !cur.chatFlow) return;
+    // Reuse rawAppliedRecordUuids as the dedup set across BOTH the
+    // jsonl-driven applyRawRecord path AND this SDK-driven path: each
+    // chunk has a stable id (the SDK message id) that we treat as a
+    // pseudo-uuid. When the jsonl record eventually lands with its own
+    // uuid (different), applyChatFlowDelta's existsIdx-by-promptId
+    // path will replace the placeholder ChatNode wholesale, so dual
+    // counting is bounded to the in-flight window — but skipping
+    // chunks we already absorbed is still correct (and free).
+    const dedupKey = `sdk:${chunkId}`;
+    if (cur.rawAppliedRecordUuids.has(dedupKey)) return;
+    const idx = cur.chatFlow.chatNodes.findIndex((c) => c.id === promptId);
+    if (idx < 0) return; // no host placeholder yet — wait for the user record
+    const host = cur.chatFlow.chatNodes[idx];
+    const oldSummary = host.workflow.summary;
+    const oldText = oldSummary?.assistantText ?? [];
+    const newAssistantText = [...oldText, text];
+    const newSummary = {
+      ...oldSummary,
+      assistantPreview: text.slice(0, 240),
+      assistantText: newAssistantText,
+      llmCount: (oldSummary?.llmCount ?? 0) + 1,
+      hasInFlightWork: true,
+      chainCount: oldSummary?.chainCount ?? 1,
+      toolCount: oldSummary?.toolCount ?? 0,
+      totalThinkingChars: oldSummary?.totalThinkingChars ?? 0,
+      contextTokens: oldSummary?.contextTokens ?? 0,
+      maxContextTokens: oldSummary?.maxContextTokens ?? 0,
+      inputTokens: oldSummary?.inputTokens ?? 0,
+      outputTokens: oldSummary?.outputTokens ?? 0,
+      durationMs: oldSummary?.durationMs ?? null,
+      toolUseFilePaths: oldSummary?.toolUseFilePaths ?? [],
+      lastModel: model ?? oldSummary?.lastModel,
+    };
+    const updatedNode: ChatNode = {
+      ...host,
+      workflow: { ...host.workflow, summary: newSummary },
+    };
+    const arr = cur.chatFlow.chatNodes.slice();
+    arr[idx] = updatedNode;
+    const cf: ChatFlow = { ...cur.chatFlow, chatNodes: arr };
+    const nextUuids = new Set(cur.rawAppliedRecordUuids);
+    nextUuids.add(dedupKey);
+    capSetFifo(nextUuids, RAW_APPLIED_UUID_CAP);
+    const updated = new Map(sessions);
+    updated.set(sessionId, {
+      ...cur,
+      chatFlow: cf,
+      rawAppliedRecordUuids: nextUuids,
+      lastUpdated: Date.now(),
+    });
+    set({ sessions: updated });
+  },
+
   markSessionActivity: (sessionId) => {
     const sessions = get().sessions;
     const cur = sessions.get(sessionId);
