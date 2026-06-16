@@ -26,6 +26,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { useStore } from "@/store/index";
+import { makeSessionState } from "@/test/factories";
 import type { ChatFlow, ChatNode, WorkflowSummary } from "@/data/types";
 import { normalizeSignal } from "@/sse/signalNormalizer";
 import {
@@ -82,6 +83,7 @@ function seed(chatFlow: ChatFlow, appliedVersion: number | null): void {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),

@@ -182,6 +182,18 @@ export interface SubAgentCacheEntry {
   lastAccess: number;
 }
 
+export interface ActiveToolCall {
+  /** PreToolUse hook's `tool_use_id` — the join key with PostToolUse. */
+  toolUseId: string;
+  /** `tool_name` from the hook (e.g. "Bash", "Read", "Write", "TodoWrite"). */
+  toolName: string;
+  /** `tool_input` from the hook. Free-form JSON; the chip surfaces the
+   *  first useful one-line summary (e.g. for Bash, `input.command`). */
+  toolInput: unknown;
+  /** epoch-ms when the PreToolUse hook arrived. Drives the "Ns" counter. */
+  since: number;
+}
+
 export interface SessionState {
   chatFlow: ChatFlow | null;
   // ChatFlow-layer fold state. v0.5 used this for the drill-down
@@ -287,6 +299,20 @@ export interface SessionState {
   // 非 null = "正在跑" 的权威信号；用户没勾这俩 hook 时回落到旧逻辑。
   // 10 分钟内没收到 Stop 则视为 stale 自动清除（防止 hook 丢一次卡死）。
   currentTurn: { startedAt: number } | null;
+  // EN (2026-06-16, Plan B): per-running-tool-call placeholders sourced
+  // from PreToolUse hooks — they arrive in real time (HTTP, before CC
+  // fsyncs the jsonl). The canvas's currently-running ChatNode card
+  // surfaces these as transient "⚙️ Bash: ls /etc/hostname" chips so
+  // tool activity is visible during the ~3s jsonl-flush window. Keyed
+  // on the hook's `tool_use_id` so PostToolUse can remove the matching
+  // entry. Stop / UserPromptSubmit clear the whole map (covers a missed
+  // PostToolUse). Pure presentation: never touches chatFlow / WorkFlow
+  // — when the real tool_call WorkNode lands via the jsonl-driven
+  // delta, the chip is just stale UI and gets removed on the next
+  // PostToolUse or Stop. Empty map = no placeholders shown.
+  // 中: PreToolUse hook 实时占位。PostToolUse 删；Stop/UserPromptSubmit
+  // 整图清。纯 UI，不进 chatFlow。
+  activeToolCalls: Map<string, ActiveToolCall>;
   // EN: epoch-ms of the most recent UserPromptSubmit OR Stop hook
   // delivery. Lets `useSessionTurnRunning` detect whether the user
   // has these hooks wired at all — if 0 OR older than 30 min, the
