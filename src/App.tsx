@@ -52,6 +52,12 @@ import {
   type DrillBreadcrumbItem,
 } from "@/store/sessionSlice";
 
+// [DEBUG branch] expose store to window for console inspection
+// (e.g. `useStore.getState().sessions.get(sid)?.activeToolCalls`).
+if (typeof window !== "undefined") {
+  (window as unknown as { useStore: typeof useStore }).useStore = useStore;
+}
+
 export default function App() {
   useKeyboardNav();
   // P5/P2/P3 (2026-05-17): bumping this forces the session
