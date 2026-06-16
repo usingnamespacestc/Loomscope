@@ -11,31 +11,15 @@
 // none in_progress). Returns "" when nothing to show.
 import { useEffect, useState } from "react";
 
+import { CC_SPINNER_WORDS } from "@/components/drill/spinnerWords";
 import type { TodoItem } from "@/store/types";
 
-// CC-vibe spinner words. Short, idle-time-friendly, varied enough that
-// rotation feels alive across a 30-60 s burst. Picked to read well in
-// both English and as a flavour token; localising them would defeat the
-// "this is just decoration" mood.
-const SPINNER_WORDS = [
-  "Pondering",
-  "Brewing",
-  "Cooking",
-  "Baking",
-  "Thinking",
-  "Forging",
-  "Crafting",
-  "Spinning",
-  "Conjuring",
-  "Hatching",
-  "Bubbling",
-  "Whirring",
-  "Tinkering",
-  "Wrangling",
-  "Plotting",
-  "Hustling",
-  "Thundering",
-] as const;
+// 1:1 with the spinner word list Claude Code's TUI rotates through —
+// extracted verbatim from the bundled CLI binary (v2.1.178, 179 entries).
+// Matching CC's list means our status bar reads identically to the
+// terminal across the whole "Thundering / Razzmatazzing / Pondering"
+// menagerie. See `spinnerWords.ts`.
+const SPINNER_WORDS = CC_SPINNER_WORDS;
 
 const ROTATE_MS = 3000;
 
