@@ -68,6 +68,7 @@ export function blankSessionState(): SessionState {
     appliedVersion: null,
     serverVersion: null,
     rawAppliedRecordUuids: new Set<string>(),
+    activeToolCalls: new Map(),
   };
 }
 
@@ -1176,9 +1177,56 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         // overwritten by the next UserPromptSubmit when the user
         // sends a new turn.
         lastTurnUserSubmittedAt: ts,
+        // Plan B: new turn clears any leftover tool-call placeholders
+        // (covers a missed PostToolUse on the previous turn).
+        activeToolCalls:
+          next.activeToolCalls.size > 0 ? new Map() : next.activeToolCalls,
       };
     } else if (event === "Stop") {
-      next = { ...next, currentTurn: null, lastTurnHookAt: Date.now() };
+      next = {
+        ...next,
+        currentTurn: null,
+        lastTurnHookAt: Date.now(),
+        // Plan B: assistant turn ended → drop all in-flight tool-call
+        // placeholders. (PostToolUse on each tool should have already
+        // pulled them; this is the structural fallback for a missed
+        // PostToolUse, matching the existing currentTurn=null intent.)
+        activeToolCalls:
+          next.activeToolCalls.size > 0 ? new Map() : next.activeToolCalls,
+      };
+    }
+    // Plan B (2026-06-16): PreToolUse / PostToolUse → activeToolCalls
+    // map. Drives the canvas's "⚙️ tool running" chip on the latest
+    // ChatNode card during the ~3 s jsonl-flush window — hooks arrive
+    // ahead of disk, so we get tool visibility before the real
+    // tool_call WorkNode lands. Keyed by tool_use_id so PostToolUse
+    // removes the matching entry exactly. No-op when tool_use_id is
+    // missing (defensive — shouldn't happen with real CC).
+    if (event === "PreToolUse") {
+      const ex = payload.extras as Record<string, unknown>;
+      const toolUseId =
+        typeof ex.tool_use_id === "string" ? ex.tool_use_id : "";
+      const toolName =
+        typeof ex.tool_name === "string" ? ex.tool_name : "";
+      if (toolUseId && toolName) {
+        const m = new Map(next.activeToolCalls);
+        m.set(toolUseId, {
+          toolUseId,
+          toolName,
+          toolInput: ex.tool_input,
+          since: Date.now(),
+        });
+        next = { ...next, activeToolCalls: m };
+      }
+    } else if (event === "PostToolUse") {
+      const ex = payload.extras as Record<string, unknown>;
+      const toolUseId =
+        typeof ex.tool_use_id === "string" ? ex.tool_use_id : "";
+      if (toolUseId && next.activeToolCalls.has(toolUseId)) {
+        const m = new Map(next.activeToolCalls);
+        m.delete(toolUseId);
+        next = { ...next, activeToolCalls: m };
+      }
     }
     // v0.11: Notification — capture into state for future UI use.
     // No active consumer yet; the data is here so v∞.1 (composer

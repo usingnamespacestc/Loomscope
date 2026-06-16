@@ -24,6 +24,7 @@ import {
 } from "@/canvas/layoutDag";
 import { chatFlowContentSignature } from "@/utils/chatFlowSig";
 import { useStore } from "@/store/index";
+import { makeSessionState } from "@/test/factories";
 import type { ChatFlow, ChatNode } from "@/data/types";
 
 const SID = "siglong-0000-4000-8000-000000000001";
@@ -81,6 +82,7 @@ beforeEach(() => {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow: cf,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),
