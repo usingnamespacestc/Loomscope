@@ -37,10 +37,15 @@
 //   - awaitWriteFinish: small stability window so we don't fire mid-
 //     write while CC is still flushing a multi-line append. 80 ms is
 //     enough headroom without making the live tail feel sluggish.
-//   - usePolling: false on Linux — inotify-based watching is reliable
-//     on native FS. WSL2 + Windows-mounted /mnt/c paths would need
-//     polling, but ~/.claude/projects is on the Linux side, so native
-//     watch wins.
+//   - usePolling: true — REVISED 2026-06-16. The inotify default missed
+//     30+ second windows on the user's main session: Claude Code writes
+//     records but doesn't fsync immediately, and inotify only fires when
+//     the kernel flushes the inode (which can lag tens of seconds on
+//     buffered writes). Polling sees the file size grow as soon as bytes
+//     hit the page cache, even without fsync, so visibility tracks the
+//     write() syscall instead of the disk flush. The interval (~150 ms)
+//     bounds tail latency at one sub-second tick; CPU cost is one stat()
+//     per session per tick — negligible vs the user-visible improvement.
 
 import * as path from "node:path";
 
@@ -218,6 +223,10 @@ function ensureWatcher(): FSWatcher {
     persistent: true,
     ignoreInitial: true,
     // No awaitWriteFinish — we throttle manually via scheduleFire.
+    // See top-of-file note on the inotify → polling switch.
+    usePolling: true,
+    interval: 150,
+    binaryInterval: 300,
   });
   // change = existing file modified; add = new file appeared. For
   // main jsonl, only `change` matters (file already existed when we
