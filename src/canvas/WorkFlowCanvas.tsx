@@ -22,7 +22,6 @@ import {
 } from "@/canvas/WorkFlowPanContext";
 
 import {
-  Background,
   Controls,
   ReactFlow,
   ReactFlowProvider,
@@ -47,6 +46,7 @@ import { ToolCallCard } from "@/canvas/nodes/worknodes/ToolCallCard";
 import { DelegateCard } from "@/canvas/nodes/worknodes/DelegateCard";
 import { CompactCard } from "@/canvas/nodes/worknodes/CompactCard";
 import { AttachmentCard } from "@/canvas/nodes/worknodes/AttachmentCard";
+import { SafeBackground } from "@/canvas/SafeBackground";
 import type { ChatNode } from "@/data/types";
 import { useStore } from "@/store/index";
 import { useChatNodeWorkflow } from "@/store/workflowHooks";
@@ -343,7 +343,7 @@ function CanvasInner({ chatNode, sessionId }: WorkFlowCanvasProps) {
       deleteKeyCode={null}
       panOnDrag={true}
     >
-      <Background gap={24} size={1} color="#d1d5db" />
+      <SafeBackground gap={24} size={1} color="#d1d5db" />
       <Controls
         position="bottom-left"
         showInteractive={false}

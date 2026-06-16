@@ -16,7 +16,6 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "r
 import { useTranslation } from "react-i18next";
 
 import {
-  Background,
   Controls,
   ReactFlow,
   ReactFlowProvider,
@@ -50,6 +49,7 @@ import {
 } from "@/canvas/layoutDag";
 import { chatFlowContentSignature } from "@/utils/chatFlowSig";
 import { ModelRibbonLayer } from "@/canvas/ModelRibbonLayer";
+import { SafeBackground } from "@/canvas/SafeBackground";
 import { AwaySummaryNodeCard } from "@/canvas/nodes/AwaySummaryNodeCard";
 import { ChatFoldNodeCard } from "@/canvas/nodes/ChatFoldNodeCard";
 import { ChatNodeCard } from "@/canvas/nodes/ChatNodeCard";
@@ -964,7 +964,7 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
       deleteKeyCode={null}
       panOnDrag={true}
     >
-      <Background gap={24} size={1} color="#d1d5db" />
+      <SafeBackground gap={24} size={1} color="#d1d5db" />
       <Controls
         position="bottom-left"
         showInteractive={false}
