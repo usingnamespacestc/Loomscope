@@ -2,6 +2,7 @@
 // gets a focused fixture verifying the spec'd fields surface.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeSessionState } from "@/test/factories";
 import { fireEvent, render, screen } from "@testing-library/react";
 
 import { ChatNodeDetail } from "@/components/drill/ChatNodeDetail";
@@ -650,6 +651,7 @@ function seedSession(): void {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID2, {
+      ...makeSessionState(),
       chatFlow: null as unknown as ChatFlow,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),

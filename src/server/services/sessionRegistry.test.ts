@@ -628,7 +628,7 @@ describe("SessionRegistry", () => {
         priority: "next",
       });
       await flush();
-      expect(capturedOpts?.model).toBe("claude-haiku-4-5-20251001");
+      expect((capturedOpts as Record<string, unknown> | null)?.model).toBe("claude-haiku-4-5-20251001");
     });
 
     it("setEffort updates opts.effort; spawn forwards it", async () => {
@@ -649,7 +649,7 @@ describe("SessionRegistry", () => {
         priority: "next",
       });
       await flush();
-      expect(capturedOpts?.effort).toBe("high");
+      expect((capturedOpts as Record<string, unknown> | null)?.effort).toBe("high");
     });
 
     it("setFastMode updates opts.fastMode; spawn forwards it", async () => {
@@ -670,7 +670,7 @@ describe("SessionRegistry", () => {
         priority: "next",
       });
       await flush();
-      expect(capturedOpts?.fastMode).toBe(true);
+      expect((capturedOpts as Record<string, unknown> | null)?.fastMode).toBe(true);
     });
 
     it("unset model/effort/fastMode are omitted from spawn options (SDK default)", async () => {

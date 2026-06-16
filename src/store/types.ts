@@ -640,11 +640,8 @@ export type LiveChannelState = "idle" | "connecting" | "open" | "error";
 export type LiveChannelName = "session" | "workspaces";
 
 export interface LiveEventSlice {
-  ssePending: Map<string, unknown>;
   liveStatus: Record<LiveChannelName, LiveChannelState>;
   setLiveStatus: (channel: LiveChannelName, state: LiveChannelState) => void;
-  subscribeSession: (sessionId: string) => void;
-  unsubscribeSession: (sessionId: string) => void;
 }
 
 // CC TaskList — read-only mirror of `~/.claude/tasks/<sid>/*.json`,

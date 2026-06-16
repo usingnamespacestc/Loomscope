@@ -15,7 +15,7 @@
 // truncated body. Doesn't claim selection (e.stopPropagation on
 // click — like ChatFoldNodeCard).
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import type { Node as RFNode, NodeProps } from "@xyflow/react";
 
@@ -59,7 +59,9 @@ function relativeAge(iso: string | undefined): string {
   return new Date(t).toLocaleDateString();
 }
 
-export function AwaySummaryNodeCard({ data }: NodeProps<AwaySummaryRFNode>) {
+export const AwaySummaryNodeCard = memo(AwaySummaryNodeCardImpl);
+
+function AwaySummaryNodeCardImpl({ data }: NodeProps<AwaySummaryRFNode>) {
   const [expanded, setExpanded] = useState(false);
 
   const onClick = (e: React.MouseEvent) => {

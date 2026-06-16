@@ -15,6 +15,7 @@
 // stop propagation here to keep selection on the previously-selected
 // real ChatNode (the chatFold is view-only, not a selectable node).
 
+import { memo } from "react";
 import { Handle, Position } from "@xyflow/react";
 import type { Node as RFNode, NodeProps } from "@xyflow/react";
 
@@ -48,7 +49,9 @@ export interface ChatFoldNodeData extends Record<string, unknown> {
 
 export type ChatFoldRFNode = RFNode<ChatFoldNodeData, "chatFold">;
 
-export function ChatFoldNodeCard({ data }: NodeProps<ChatFoldRFNode>) {
+export const ChatFoldNodeCard = memo(ChatFoldNodeCardImpl);
+
+function ChatFoldNodeCardImpl({ data }: NodeProps<ChatFoldRFNode>) {
   const activeId = useStore((s) => s.activeSessionId);
   const unfold = useStore((s) => s.unfoldCompact);
   // Route through FoldAnchorContext when present so the viewport

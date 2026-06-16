@@ -149,7 +149,13 @@ export async function readRecordsIncremental(
   const stat = await fs.promises.stat(jsonlPath);
   const curSize = stat.size;
   const curMtime = stat.mtimeMs;
-  const canIncremental = !!prevState && prevState.byteSize <= curSize;
+  const canIncremental =
+    !!prevState &&
+    prevState.byteSize <= curSize &&
+    // #4a: same byteSize but changed mtime = an in-place rewrite to the
+    // SAME length. The append path would find no new bytes and hand back
+    // the stale cached records — force a full reparse instead.
+    !(prevState.byteSize === curSize && prevState.mtimeMs !== curMtime);
 
   if (!canIncremental) {
     const { records, parseFailures } = await readRecordsFromFile(jsonlPath);
@@ -322,7 +328,13 @@ export async function parseJsonlFileIncremental(
   // still re-build ChatFlow (cheap relative to file IO) so callers get
   // a fresh ChatFlow object even when nothing appended; the records
   // array reuses the prevState slice without re-reading the file.
-  const canIncremental = !!prevState && prevState.byteSize <= curSize;
+  // #4a: but an equal byteSize with a CHANGED mtime is an in-place
+  // rewrite (truncate + rewrite to the same length) — reusing the
+  // cached records would be stale, so force a full reparse.
+  const canIncremental =
+    !!prevState &&
+    prevState.byteSize <= curSize &&
+    !(prevState.byteSize === curSize && prevState.mtimeMs !== curMtime);
 
   if (!canIncremental) {
     const { records, parseFailures } = await readRecordsFromFile(jsonlPath);
@@ -734,6 +746,16 @@ export function buildChatFlow(
     }
     reusable = new Map(reuse.prevChatFlow.chatNodes.map((cn) => [cn.id, cn]));
   }
+  // chain-participant uuid → parentUuid map (CC isChainParticipant).
+  // Built ONCE here from the full index and shared across all buckets —
+  // it's purely a function of `indexByUuid`, identical for every
+  // ChatNode. Building it inside buildChatNode (per ChatNode) made parse
+  // O(N²): each of N ChatNodes re-scanned all N records.
+  const chainParentByUuid = new Map<string, string>();
+  for (const [uuid, ir] of indexByUuid) {
+    if (ir.type === "progress") continue;
+    if (ir.parentUuid) chainParentByUuid.set(uuid, ir.parentUuid);
+  }
   const chatNodes: ChatNode[] = [];
   for (const bucket of bucketsByPid.values()) {
     if (reusable && !dirtyPromptIds.has(bucket.promptId)) {
@@ -749,6 +771,7 @@ export function buildChatFlow(
       boundariesByUuid,
       awaySummaryByUuid,
       scheduledFireByUuid,
+      chainParentByUuid,
       snapshotsByPid.get(bucket.promptId),
     );
     if (cn) chatNodes.push(cn);
@@ -794,15 +817,27 @@ export function buildChatFlow(
   }
 
   // Attach scheduled triggerSource (workNodeId = the ScheduleWakeup tool_use
-  // block id of the most-recent ScheduleWakeup before the fire). We resolve
-  // by walking the fire.parentUuid chain to find a tool_use we know about.
+  // block id of the most-recent ScheduleWakeup before the fire).
+  // Precompute the (small) list of ScheduleWakeup tool_uses ONCE so the
+  // per-fire lookup scans it instead of re-scanning ALL records each time
+  // (was O(fires × records)).
+  const scheduleWakeups: Array<{ ts: string; id: string }> = [];
+  for (const r of records) {
+    if (r.type !== "assistant" || !r.timestamp) continue;
+    for (const b of blocksOf(r)) {
+      if (b.type !== "tool_use") continue;
+      const tu = b as { id?: string; name?: string };
+      if (tu.name !== "ScheduleWakeup" || !tu.id) continue;
+      if (!scheduleWakeupToolUseIds.has(tu.id)) continue;
+      scheduleWakeups.push({ ts: r.timestamp, id: tu.id });
+    }
+  }
   for (const cn of chatNodes) {
     if (cn.trigger !== "scheduled" || !cn.meta.scheduledFireUuid) continue;
     const wid = findScheduleWakeupAncestor(
       cn.meta.scheduledFireUuid,
       indexByUuid,
-      records,
-      scheduleWakeupToolUseIds,
+      scheduleWakeups,
     );
     if (wid) cn.triggerSource = { workNodeId: wid };
   }
@@ -886,8 +921,9 @@ function buildChatNode(
   bucket: PromptBucket,
   index: Map<string, IndexedRecord>,
   boundariesByUuid: Map<string, RawRecord>,
-  awaySummaryByUuid: Map<string, RawRecord>,
+  _awaySummaryByUuid: Map<string, RawRecord>,
   scheduledFireByUuid: Map<string, RawRecord>,
+  chainParentByUuid: Map<string, string>,
   fileHistorySnapshots?: FileHistorySnapshot[],
 ): ChatNode | null {
   // Root user record preference (highest → lowest):
@@ -993,28 +1029,10 @@ function buildChatNode(
     compactRecord: compactUser,
     boundaryRecord: boundaryRec,
   });
-  // Build chain-participant uuid → parentUuid map for chainCount's
-  // transit walk. Drawn from the FULL record index (not just
-  // bucket.records) so transit records that the parser excludes from
-  // bucketing — compact_boundary (jsonl.ts:469 unpaired-skip),
-  // unbucketed user records (no promptId) — still appear here.
-  // Mirrors CC's isChainParticipant (utils/sessionStorage.ts:154):
-  // user / assistant / attachment / system are chain participants;
-  // progress is not. Walking too far (across ChatNode boundaries) is
-  // safe: byId lookup matches only THIS WorkFlow's WorkNodes, so a
-  // stray cross-bucket walk just continues until terminating.
-  const chainParentByUuid = new Map<string, string>();
-  for (const [uuid, ir] of index) {
-    if (ir.type === "progress") continue;
-    // compact_boundary records have parentUuid=null +
-    // logicalParentUuid pointing at the pre-compact tail. Don't
-    // splice via logicalParentUuid here: compact is a real
-    // information-flow break (prior turn content replaced with
-    // summary), not a transit, so the walk should DEAD-END at the
-    // boundary and let the post-compact llm_call register as a
-    // chain root.
-    if (ir.parentUuid) chainParentByUuid.set(uuid, ir.parentUuid);
-  }
+  // `chainParentByUuid` (chain-participant uuid → parentUuid, drawn
+  // from the FULL record index) is built ONCE in buildChatFlow and
+  // passed in — it's identical for every ChatNode, so building it here
+  // per-call was the parse O(N²). Mirrors CC's isChainParticipant.
   // v0.10 polish (lazy ChatFlow B1): pre-compute summary stats so the
   // lite ChatFlow endpoint can ship them inline. ~100-200B per
   // ChatNode — negligible against the workflow.nodes payload.
@@ -1167,7 +1185,7 @@ function detectForkedFrom(
       typeof ff.sessionId === "string" &&
       ff.sessionId !== root.sessionId
     ) {
-      // eslint-disable-next-line no-console
+       
       console.warn(
         `[parser] inconsistent forkedFrom.sessionId inside bucket ${bucket.promptId}: ` +
           `root=${root.sessionId} vs record=${ff.sessionId} — keeping rootUser's`,
@@ -1265,8 +1283,7 @@ function linkChatNodeParents(
 function findScheduleWakeupAncestor(
   fireUuid: string,
   index: Map<string, IndexedRecord>,
-  records: RawRecord[],
-  scheduleWakeupToolUseIds: Set<string>,
+  scheduleWakeups: Array<{ ts: string; id: string }>,
 ): string | undefined {
   // The fire's parentUuid chain hits some prior turn's tail. The
   // ScheduleWakeup tool_use that *caused* the fire is in some earlier
@@ -1275,22 +1292,15 @@ function findScheduleWakeupAncestor(
   const fire = index.get(fireUuid);
   if (!fire?.timestamp) {
     // No timestamp, fall back to any known ScheduleWakeup id.
-    return scheduleWakeupToolUseIds.values().next().value;
+    return scheduleWakeups[0]?.id;
   }
   let bestId: string | undefined;
   let bestTs = "";
-  for (const r of records) {
-    if (r.type !== "assistant" || !r.timestamp) continue;
-    if (r.timestamp >= fire.timestamp) continue;
-    for (const b of blocksOf(r)) {
-      if (b.type !== "tool_use") continue;
-      const tu = b as { id?: string; name?: string };
-      if (tu.name !== "ScheduleWakeup" || !tu.id) continue;
-      if (!scheduleWakeupToolUseIds.has(tu.id)) continue;
-      if (r.timestamp > bestTs) {
-        bestTs = r.timestamp;
-        bestId = tu.id;
-      }
+  for (const sw of scheduleWakeups) {
+    if (sw.ts >= fire.timestamp) continue;
+    if (sw.ts > bestTs) {
+      bestTs = sw.ts;
+      bestId = sw.id;
     }
   }
   return bestId;

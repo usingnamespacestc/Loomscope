@@ -111,7 +111,7 @@ describe("NewSessionModal", () => {
     let validateCalled = false;
     let newCalled = false;
     let activatedSid: string | null = null;
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       const u = String(url);
       if (u.includes("/api/fs/validate-cwd")) {
         validateCalled = true;

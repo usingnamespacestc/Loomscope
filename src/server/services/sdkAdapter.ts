@@ -69,7 +69,7 @@ if (_entrypointOverride && _entrypointOverride.trim() !== "") {
   // process.env in node:child_process.
   // 中: 模块加载时即写入；SDK library 之后 spawn 子进程时继承。
   process.env.CLAUDE_CODE_ENTRYPOINT = _entrypointOverride.trim();
-  // eslint-disable-next-line no-console
+   
   console.log(
     `[sdkAdapter] CLAUDE_CODE_ENTRYPOINT overridden to "${process.env.CLAUDE_CODE_ENTRYPOINT}" via LOOMSCOPE_CC_ENTRYPOINT_OVERRIDE — Anthropic billing will see this value. See docs/handoff-sdk-credit-2026-06-15.md.`,
   );

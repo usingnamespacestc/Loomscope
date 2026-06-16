@@ -44,7 +44,7 @@ describe("AwaySummaryNodeCard", () => {
     const long = "a".repeat(200);
     render(
       withRF(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         <AwaySummaryNodeCard {...(NOOP_NODE_PROPS as any)} data={defaultData({ content: long })} />,
       ),
     );
@@ -63,7 +63,7 @@ describe("AwaySummaryNodeCard", () => {
   it("renders short content untruncated", () => {
     render(
       withRF(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         <AwaySummaryNodeCard {...(NOOP_NODE_PROPS as any)} data={defaultData({ content: "hi there" })} />,
       ),
     );
@@ -76,7 +76,7 @@ describe("AwaySummaryNodeCard", () => {
     const long = "x".repeat(180);
     render(
       withRF(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         <AwaySummaryNodeCard {...(NOOP_NODE_PROPS as any)} data={defaultData({ content: long })} />,
       ),
     );
@@ -92,7 +92,7 @@ describe("AwaySummaryNodeCard", () => {
     render(
       withRF(
         <AwaySummaryNodeCard
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+           
           {...(NOOP_NODE_PROPS as any)}
           data={defaultData({ timestamp: fiveMinAgo })}
         />,
@@ -105,7 +105,7 @@ describe("AwaySummaryNodeCard", () => {
   it("falls back to '（无内容）' when content is empty", () => {
     render(
       withRF(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         <AwaySummaryNodeCard {...(NOOP_NODE_PROPS as any)} data={defaultData({ content: "" })} />,
       ),
     );

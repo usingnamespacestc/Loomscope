@@ -35,7 +35,7 @@ afterEach(() => {
 });
 
 function renderComposer() {
-  return render(<Composer sessionId={SID} cwd={CWD} chatFlow={null} />);
+  return render(<Composer sessionId={SID} cwd={CWD} />);
 }
 
 describe("Composer — pinned /compact slash button", () => {
@@ -86,7 +86,7 @@ describe("Composer — pinned /compact slash button", () => {
     fireEvent.click(screen.getByTestId("confirm-banner-cancel"));
     expect(screen.queryByTestId("confirm-banner")).toBeNull();
     expect(
-      fetchMock.mock.calls.some((c) => String(c[0]).includes("/turns")),
+      fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).includes("/turns")),
     ).toBe(false);
   });
 
@@ -116,13 +116,13 @@ describe("Composer — pinned /compact slash button", () => {
     await waitFor(() => {
       expect(lastBody).not.toBeNull();
     });
-    expect(lastBody?.text).toBe("/compact");
-    expect(lastBody?.priority).toBe("next");
+    expect((lastBody as Record<string, unknown> | null)?.text).toBe("/compact");
+    expect((lastBody as Record<string, unknown> | null)?.priority).toBe("next");
     // Slash commands run BEFORE LLM sampling; per-turn settings
     // shouldn't apply. Body should not carry model/effort/fastMode.
-    expect("model" in (lastBody as Record<string, unknown>)).toBe(false);
-    expect("effort" in (lastBody as Record<string, unknown>)).toBe(false);
-    expect("fastMode" in (lastBody as Record<string, unknown>)).toBe(false);
+    expect("model" in (lastBody as unknown as Record<string, unknown>)).toBe(false);
+    expect("effort" in (lastBody as unknown as Record<string, unknown>)).toBe(false);
+    expect("fastMode" in (lastBody as unknown as Record<string, unknown>)).toBe(false);
   });
 
   it("button disabled while inflight is running (don't queue while running)", () => {

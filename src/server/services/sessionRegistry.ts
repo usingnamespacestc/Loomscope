@@ -1551,7 +1551,7 @@ export class SessionRegistry {
       // priority field present on QueuedCommand-shaped sends — for
       // a brand-new session there's no other queue, so any priority
       // works; "next" matches the existing-session default.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
 
     // Manually iterate until first message with session_id arrives.

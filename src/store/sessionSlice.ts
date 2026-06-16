@@ -2,6 +2,8 @@ import type { StateCreator } from "zustand";
 
 import type { ChatFlow, ChatNode, DelegateNode, WorkFlow } from "@/data/types";
 import { blocksOf, isToolResultRecord } from "@/parse/raw-record";
+import { computeUnfoldChainTo } from "@/canvas/foldProjection";
+import { planWindow, WINDOW_BUDGET } from "@/store/windowPlan";
 import type { AgentMetadata } from "@/parse/sidecar";
 import type {
   DrillFrame,
@@ -14,7 +16,32 @@ import type {
 
 const EMPTY_VIEWPORT = { x: 0, y: 0, zoom: 1 };
 
-function blankSessionState(): SessionState {
+// FIFO caps on per-session collections that otherwise grow for the
+// whole session lifetime on a long live tail. Generous enough that
+// normal sessions never hit them — they only bound the pathological
+// multi-day / 256MB-session case (rawAppliedRecordUuids accumulates one
+// entry per absorbed record; workflowViewports one per drilled
+// ChatNode). Exported for direct unit testing.
+export const RAW_APPLIED_UUID_CAP = 50_000;
+export const WORKFLOW_VIEWPORT_CAP = 256;
+
+/** Drop oldest entries (Set/Map preserve insertion order) until size ≤ cap. */
+export function capSetFifo<T>(set: Set<T>, cap: number): void {
+  while (set.size > cap) {
+    const oldest = set.values().next().value as T | undefined;
+    if (oldest === undefined) break;
+    set.delete(oldest);
+  }
+}
+export function capMapFifo<K, V>(map: Map<K, V>, cap: number): void {
+  while (map.size > cap) {
+    const oldest = map.keys().next().value as K | undefined;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
+export function blankSessionState(): SessionState {
   return {
     chatFlow: null,
     foldedNodeIds: new Set<string>(),
@@ -331,7 +358,12 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         // subscriber so canvas / fold projection sees a populated set
         // on the very first render and doesn't flash "fully expanded
         // → folded" on session open.
-        foldedCompactIds: hydrateFoldedCompactIds(id, cf),
+        foldedCompactIds: planWindow(
+          cf,
+          hydrateFoldedCompactIds(id, cf),
+          null, // focus = latest on fresh load
+          WINDOW_BUDGET,
+        ),
         isLoading: false,
         error: null,
         lastUpdated: Date.now(),
@@ -633,6 +665,17 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     // strict +1.
     // 中: appliedVersion null 表示刚 baseline，任何 seq 都直接当起点；
     // 否则严格 +1。检测漏号触发 full refresh。
+    //
+    // Replay / duplicate guard: an SSE reconnect's catch-up can re-send
+    // deltas we've already applied (seq ≤ appliedVersion). Those are NOT
+    // gaps — drop them as a no-op instead of forcing a ~4s full refresh.
+    // Only a FORWARD gap (seq > appliedVersion+1 = missed deltas) needs a
+    // refresh, which the `!== expected` check below still catches.
+    // 中: SSE 重连补发会重放已应用的 delta(seq ≤ appliedVersion)，这不是
+    // 漏号，直接忽略;只有 forward gap 才需要 full refresh。
+    if (cur.appliedVersion != null && delta.seq <= cur.appliedVersion) {
+      return;
+    }
     const expected =
       cur.appliedVersion == null ? delta.seq : cur.appliedVersion + 1;
     if (delta.seq !== expected) {
@@ -827,6 +870,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         // 中: 节点已存在仍标记 uuid 已应用，避免后续重复尝试。
         const nextUuids = new Set(cur.rawAppliedRecordUuids);
         nextUuids.add(record.uuid);
+        capSetFifo(nextUuids, RAW_APPLIED_UUID_CAP);
         const updated = new Map(sessions);
         updated.set(sessionId, { ...cur, rawAppliedRecordUuids: nextUuids });
         set({ sessions: updated });
@@ -912,6 +956,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         effectiveSelected === prevTail ? placeholder.id : cur.selectedNodeId;
       const nextUuids = new Set(cur.rawAppliedRecordUuids);
       nextUuids.add(record.uuid);
+      capSetFifo(nextUuids, RAW_APPLIED_UUID_CAP);
       const updated = new Map(sessions);
       updated.set(sessionId, {
         ...cur,
@@ -975,6 +1020,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
       const cf: ChatFlow = { ...cur.chatFlow, chatNodes: arr };
       const nextUuids = new Set(cur.rawAppliedRecordUuids);
       nextUuids.add(record.uuid);
+      capSetFifo(nextUuids, RAW_APPLIED_UUID_CAP);
       const updated = new Map(sessions);
       updated.set(sessionId, {
         ...cur,
@@ -1215,16 +1261,52 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
   },
 
   removeSession: (id) => {
-    const sessions = new Map(get().sessions);
-    if (sessions.has(id)) {
-      sessions.delete(id);
-      set({ sessions });
+    const state = get();
+    const sessions = new Map(state.sessions);
+    const removed = sessions.get(id);
+    sessions.delete(id);
+
+    // Evict every *parallel* per-session map so a visited-then-removed
+    // session can't leak for the app's lifetime. workflowViewports lives
+    // inside SessionState (gc'd by the sessions.delete above) — these are
+    // the separate top-level maps in taskList/sdkChannel/gitFiles slices.
+    // Identity is preserved when the key is absent so we don't churn
+    // subscribers for maps the session never touched.
+    const del = <V>(m: Map<string, V>): Map<string, V> => {
+      if (!m.has(id)) return m;
+      const next = new Map(m);
+      next.delete(id);
+      return next;
+    };
+
+    // pendingFilesByChatNode is keyed by ChatNode id, not session id —
+    // derive the removed session's node ids to evict its entries.
+    let pendingFilesByChatNode = state.pendingFilesByChatNode;
+    const chatNodes = removed?.chatFlow?.chatNodes;
+    if (chatNodes && chatNodes.length && pendingFilesByChatNode.size) {
+      const next = new Map(pendingFilesByChatNode);
+      let touched = false;
+      for (const cn of chatNodes) {
+        if (next.delete(cn.id)) touched = true;
+      }
+      if (touched) pendingFilesByChatNode = next;
     }
-    // If the removed session was active, clear the pointer — App.tsx
-    // shows the empty-state CTA when activeSessionId is null.
-    if (get().activeSessionId === id) {
-      set({ activeSessionId: null });
-    }
+
+    set({
+      sessions,
+      tasksBySession: del(state.tasksBySession),
+      inflightBySession: del(state.inflightBySession),
+      rateLimitBySession: del(state.rateLimitBySession),
+      deferralBySession: del(state.deferralBySession),
+      committedFilesBySession: del(state.committedFilesBySession),
+      gitFilesFetchStatus: del(state.gitFilesFetchStatus),
+      gitFilesFetchError: del(state.gitFilesFetchError),
+      committedFilesFetchedAt: del(state.committedFilesFetchedAt),
+      pendingFilesByChatNode,
+      // If the removed session was active, clear the pointer — App.tsx
+      // shows the empty-state CTA when activeSessionId is null.
+      ...(state.activeSessionId === id ? { activeSessionId: null } : {}),
+    });
     gcSessionLocalStorage(id);
   },
 
@@ -1257,7 +1339,27 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
   setSelected: (sessionId, nodeId) => {
     const updated = new Map(get().sessions);
     const cur = updated.get(sessionId) ?? blankSessionState();
-    updated.set(sessionId, { ...cur, selectedNodeId: nodeId });
+    // #6b: selecting/jumping to a node that's currently folded away
+    // unfolds the chain to reveal it, then re-windows with the target as
+    // focus (evicting the farthest segments if that pushes over budget —
+    // a far jump slides the recent window out). No-op when the target is
+    // already visible (the unfold chain is empty), so normal selection is
+    // unchanged.
+    let foldedCompactIds = cur.foldedCompactIds;
+    if (nodeId && cur.chatFlow) {
+      const chain = computeUnfoldChainTo(cur.chatFlow, foldedCompactIds, nodeId);
+      if (chain.length > 0) {
+        const intent = new Set(foldedCompactIds);
+        for (const host of chain) intent.delete(host);
+        foldedCompactIds = planWindow(
+          cur.chatFlow,
+          intent,
+          nodeId,
+          WINDOW_BUDGET,
+        );
+      }
+    }
+    updated.set(sessionId, { ...cur, selectedNodeId: nodeId, foldedCompactIds });
     set({ sessions: updated });
   },
 
@@ -1393,6 +1495,7 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
         return; // no-op — avoid an unnecessary store update
       }
       next.set(chatNodeId, viewport);
+      capMapFifo(next, WORKFLOW_VIEWPORT_CAP);
     }
     updated.set(sessionId, { ...cur, workflowViewports: next });
     set({ sessions: updated });
@@ -1729,8 +1832,18 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     if (!isCompactChatNodeInFlow(cur.chatFlow, compactChatNodeId)) return;
     const next = new Set(cur.foldedCompactIds);
     next.delete(compactChatNodeId);
+    // #6: enforce the window budget — re-fold the segments farthest from
+    // the just-unfolded compact if this expand pushed visible over budget.
+    // No-op for sessions under the budget. `next` (user intent) is what
+    // persists; `windowed` is the bounded in-memory view fed to dagre.
+    const windowed = planWindow(
+      cur.chatFlow,
+      next,
+      compactChatNodeId,
+      WINDOW_BUDGET,
+    );
     const updated = new Map(sessions);
-    updated.set(sessionId, { ...cur, foldedCompactIds: next });
+    updated.set(sessionId, { ...cur, foldedCompactIds: windowed });
     set({ sessions: updated });
     // EN (v0.9.1): hover-pan auto-unfold passes persist:false so
     // transient navigation doesn't leak into the user's
@@ -1753,8 +1866,15 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     const next = new Set(cur.foldedCompactIds);
     if (next.has(compactChatNodeId)) next.delete(compactChatNodeId);
     else next.add(compactChatNodeId);
+    // #6: enforce window budget (no-op under budget).
+    const windowed = planWindow(
+      cur.chatFlow,
+      next,
+      compactChatNodeId,
+      WINDOW_BUDGET,
+    );
     const updated = new Map(sessions);
-    updated.set(sessionId, { ...cur, foldedCompactIds: next });
+    updated.set(sessionId, { ...cur, foldedCompactIds: windowed });
     set({ sessions: updated });
     persistUnfoldFromFolded(sessionId, next, cur.chatFlow);
   },

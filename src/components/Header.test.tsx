@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { makeSessionState } from "@/test/factories";
 import { render, screen } from "@testing-library/react";
 
 import { Header } from "@/components/Header";
@@ -35,6 +36,7 @@ describe("Header", () => {
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
       sessions.set(cf.id, {
+        ...makeSessionState(),
         chatFlow: cf,
         foldedNodeIds: new Set(),
         foldedCompactIds: new Set(),

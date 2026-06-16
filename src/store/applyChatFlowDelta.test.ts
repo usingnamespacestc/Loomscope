@@ -6,6 +6,7 @@
 // 状态 + seq 走得对不对。
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeSessionState } from "@/test/factories";
 
 import { useStore } from "@/store/index";
 import type {
@@ -25,13 +26,14 @@ function summary(o: Partial<WorkflowSummary> = {}): WorkflowSummary {
     hasInFlightWork: false,
     chainCount: 1,
     toolCount: 0,
-    fileTouchCount: 0,
     inputTokens: 0,
     outputTokens: 0,
     durationMs: 0,
     lastModel: "claude-opus-4-7",
     contextTokens: 0,
     maxContextTokens: 200000,
+    totalThinkingChars: 0,
+    toolUseFilePaths: [],
     ...o,
   };
 }
@@ -54,6 +56,7 @@ function seed(chatFlow: ChatFlow, appliedVersion: number | null = null): void {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),
@@ -116,6 +119,42 @@ describe("applyChatFlowDelta", () => {
     expect(s?.chatFlow?.chatNodes.map((c) => c.id)).toEqual(["a", "b"]);
     expect(s?.appliedVersion).toBe(42);
     expect(useStore.getState().refreshSession).not.toHaveBeenCalled();
+  });
+
+  it("#5 replay delta (seq < appliedVersion) is a no-op — no refresh, no state change", () => {
+    seed(flow([cn("a")]), 5);
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 3, // already applied — an SSE reconnect catch-up replay
+      chatNode: cn("b", "a"),
+    } as ChatFlowDeltaEvent);
+    const s = useStore.getState().sessions.get(SID);
+    expect(s?.chatFlow?.chatNodes.map((c) => c.id)).toEqual(["a"]); // unchanged
+    expect(s?.appliedVersion).toBe(5); // unchanged
+    expect(useStore.getState().refreshSession).not.toHaveBeenCalled();
+  });
+
+  it("#5 delta at exactly appliedVersion is also a replay no-op", () => {
+    seed(flow([cn("a")]), 5);
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 5,
+      chatNode: cn("b", "a"),
+    } as ChatFlowDeltaEvent);
+    expect(
+      useStore.getState().sessions.get(SID)?.chatFlow?.chatNodes.map((c) => c.id),
+    ).toEqual(["a"]);
+    expect(useStore.getState().refreshSession).not.toHaveBeenCalled();
+  });
+
+  it("#5 forward gap (seq > appliedVersion+1) still forces a refresh", () => {
+    seed(flow([cn("a")]), 5);
+    useStore.getState().applyChatFlowDelta(SID, {
+      type: "chatnode-added",
+      seq: 8, // expected 6 — genuinely missed deltas
+      chatNode: cn("b", "a"),
+    } as ChatFlowDeltaEvent);
+    expect(useStore.getState().refreshSession).toHaveBeenCalledWith(SID);
   });
 
   it("chatnode-added: appends new ChatNode", () => {
@@ -238,6 +277,7 @@ describe("applyChatFlowDelta", () => {
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
       sessions.set(SID, {
+        ...makeSessionState(),
         ...sessions.get(SID)!,
         selectedNodeId: "a",
       });
@@ -294,6 +334,7 @@ describe("applyChatFlowDelta", () => {
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
       sessions.set(SID, {
+        ...makeSessionState(),
         chatFlow: null,
         foldedNodeIds: new Set(),
         foldedCompactIds: new Set(),

@@ -25,6 +25,7 @@ import { act, render } from "@testing-library/react";
 import App from "./App";
 import { useStore } from "@/store/index";
 import { SSE_STALE_MS, SSE_WATCHDOG_TICK_MS } from "@/sse/stalenessWatchdog";
+import { makeSessionState } from "@/test/factories";
 
 const INITIAL = useStore.getState();
 const SID = "ssewd0000-0000-4000-8000-000000000001";
@@ -49,6 +50,7 @@ beforeEach(() => {
         [
           SID,
           {
+            ...makeSessionState(),
             // minimally-shaped "stuck" session: a turn is running
             // (currentTurn) and a permission banner is up
             // (pendingPermission), with a delta baseline.

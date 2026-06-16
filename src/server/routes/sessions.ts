@@ -661,11 +661,12 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
   );
 
   // v0.11 Git tab — fetch a commit's file list (default) or one
-  // file's full diff. Repo / sha are passed as query params; the
-  // route is per-session-scoped so a future enhancement can
-  // cross-check that the (repo, sha) tuple was actually detected
-  // in this session's parse output. For v1 we just spawn `git -C`
-  // and let git itself reject bad inputs.
+  // file's full diff. Repo / sha are passed as query params.
+  // #15 hardening: the (repo, sha) is cross-checked against the tuples
+  // this session's parse output actually produced, so the endpoint
+  // cannot be used to read an ARBITRARY local repo (a `git -C <anywhere>`
+  // primitive). Only repos referenced by this session's own commits are
+  // reachable. (The route comment long anticipated this enhancement.)
   app.get(
     "/:id/git/diff",
     zValidator("param", z.object({ id: z.string().regex(SESSION_ID_RE) })),
@@ -678,7 +679,38 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
       }),
     ),
     async (c) => {
+      const { id } = c.req.valid("param");
       const { repo, sha, file } = c.req.valid("query");
+
+      // Build the set of (repo, sha) keys this session actually parsed,
+      // then reject anything outside it. Same load path as
+      // /git/commits-files (and the ChatFlow is cached, so this is a
+      // warm read on the common path).
+      const jsonlPath = await locateSessionJsonl(opts.rootDir, id);
+      if (!jsonlPath) return c.json({ error: "session not found" }, 404);
+      const projectDir = path.dirname(jsonlPath);
+      const closure = await findForkClosure({ projectDir, entrySessionId: id });
+      const { chatFlow } = await getOrLoadCachedChatFlow({
+        sessionId: id,
+        closure,
+        fallbackJsonlPath: jsonlPath,
+        loader: () =>
+          loadMergedChatFlow({
+            entryJsonlPath: jsonlPath,
+            entrySessionId: id,
+            closure,
+          }),
+      });
+      const allowed = new Set<string>();
+      for (const cn of chatFlow.chatNodes) {
+        for (const cm of cn.meta.commits ?? []) {
+          allowed.add(`${cm.repo}::${cm.sha}`);
+        }
+      }
+      if (!allowed.has(`${repo}::${sha}`)) {
+        return c.json({ ok: false, code: "repo-not-in-session" }, 403);
+      }
+
       if (file) {
         const r = await gitShow({ repo, sha, file });
         if (!r.ok) return c.json(r, r.code === "not-a-repo" ? 404 : 400);

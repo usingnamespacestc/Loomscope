@@ -8,6 +8,7 @@
 // jsdom + a stub fetch verifies which URL + body each path hits.
 
 import { fireEvent, render, screen } from "@testing-library/react";
+import { makeSessionState } from "@/test/factories";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { InteractivePermissionBanner } from "@/components/InteractivePermissionBanner";
@@ -31,6 +32,7 @@ function seed(prompt: {
   useStore.setState((s) => {
     const sessions = new Map(s.sessions);
     sessions.set(SID, {
+      ...makeSessionState(),
       chatFlow: null,
       foldedNodeIds: new Set(),
       foldedCompactIds: new Set(),
@@ -142,6 +144,7 @@ describe("InteractivePermissionBanner — source-aware decision routing", () => 
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
       sessions.set(SID, {
+        ...makeSessionState(),
         chatFlow: null,
         foldedNodeIds: new Set(),
         foldedCompactIds: new Set(),
@@ -200,6 +203,7 @@ describe("InteractivePermissionBanner — source-aware decision routing", () => 
     useStore.setState((s) => {
       const sessions = new Map(s.sessions);
       sessions.set(SID, {
+        ...makeSessionState(),
         chatFlow: null,
         foldedNodeIds: new Set(),
         foldedCompactIds: new Set(),

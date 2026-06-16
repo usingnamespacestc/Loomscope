@@ -762,7 +762,7 @@ export default function App() {
       useStore.getState().setLiveStatus("session", "error");
       // EventSource auto-retries; we just log so devtools shows the
       // error rather than silent reconnect attempts.
-      // eslint-disable-next-line no-console
+       
       console.warn("[loomscope] sse error (EventSource will auto-retry)");
     };
     // P5/P2/P3 (2026-05-17): watchdog poll. On a detected half-open
@@ -796,7 +796,7 @@ export default function App() {
     const watchdogTimer = window.setInterval(() => {
       if (recovering || !watchdog.check()) return;
       recovering = true;
-      // eslint-disable-next-line no-console
+       
       console.warn(
         `[loomscope] SSE silent > ${SSE_STALE_MS}ms — assuming half-open, refresh-then-reconnect`,
       );
@@ -911,7 +911,7 @@ export default function App() {
     es.addEventListener("ping", () => {});
     es.onerror = () => {
       useStore.getState().setLiveStatus("workspaces", "error");
-      // eslint-disable-next-line no-console
+       
       console.warn("[loomscope] workspaces sse error (auto-retry)");
     };
     return () => {

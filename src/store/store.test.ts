@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "@/store/index";
+import type {
+  SdkDeferralState,
+  SdkInflight,
+  SdkRateLimitInfo,
+} from "@/store/sdkChannelSlice";
+import type { GitFilesFetchStatus } from "@/store/gitFilesSlice";
 
 // Snapshot the initial state once; reset between tests so the singleton
 // store stays clean.
@@ -240,6 +246,51 @@ describe("Session slice", () => {
     expect(localStorage.getItem(`loomscope:fold:${SID}`)).toBe(null);
   });
 
+  it("removeSession evicts every parallel per-session map (no leak)", () => {
+    const SID = "leak-check-001";
+    useStore.getState().toggleFold(SID, "n1"); // creates a SessionState
+    // Seed every separate top-level per-session map with the SID.
+    useStore.setState((s) => ({
+      tasksBySession: new Map(s.tasksBySession).set(SID, []),
+      inflightBySession: new Map(s.inflightBySession).set(SID, {} as SdkInflight),
+      rateLimitBySession: new Map(s.rateLimitBySession).set(
+        SID,
+        {} as SdkRateLimitInfo,
+      ),
+      deferralBySession: new Map(s.deferralBySession).set(
+        SID,
+        {} as SdkDeferralState,
+      ),
+      committedFilesBySession: new Map(s.committedFilesBySession).set(
+        SID,
+        new Map(),
+      ),
+      gitFilesFetchStatus: new Map(s.gitFilesFetchStatus).set(
+        SID,
+        "loaded" as GitFilesFetchStatus,
+      ),
+      gitFilesFetchError: new Map(s.gitFilesFetchError).set(SID, "boom"),
+      committedFilesFetchedAt: new Map(s.committedFilesFetchedAt).set(SID, 123),
+    }));
+
+    useStore.getState().removeSession(SID);
+
+    const st = useStore.getState();
+    expect(st.sessions.has(SID)).toBe(false);
+    for (const m of [
+      st.tasksBySession,
+      st.inflightBySession,
+      st.rateLimitBySession,
+      st.deferralBySession,
+      st.committedFilesBySession,
+      st.gitFilesFetchStatus,
+      st.gitFilesFetchError,
+      st.committedFilesFetchedAt,
+    ]) {
+      expect(m.has(SID)).toBe(false);
+    }
+  });
+
   it("removeSession leaves activeSessionId alone when a different session is removed", () => {
     useStore.setState({ activeSessionId: "kept-active" });
     useStore.getState().toggleFold("victim", "n1");
@@ -404,13 +455,6 @@ describe("Session slice", () => {
       expect(s.currentTurn).toBeNull();
       expect(s.lastTurnHookAt).toBe(stopAt);
     });
-  });
-});
-
-describe("LiveEvent slice (stub)", () => {
-  it("subscribe/unsubscribe are no-ops without throwing", () => {
-    expect(() => useStore.getState().subscribeSession("sid")).not.toThrow();
-    expect(() => useStore.getState().unsubscribeSession("sid")).not.toThrow();
   });
 });
 

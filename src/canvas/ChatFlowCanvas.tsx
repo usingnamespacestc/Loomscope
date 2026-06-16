@@ -488,7 +488,7 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
           if ("error" in r) {
             // Fork errors land here; for now just console — a toast
             // system would slot in cleanly when one exists.
-            // eslint-disable-next-line no-console
+             
             console.error("[loomscope:fork] failed:", r.error);
             return;
           }
@@ -934,6 +934,11 @@ function CanvasInner({ chatFlow, sessionId, hoveredEdge, onEdgeHover }: CanvasIn
     <ReactFlow
       nodes={nodes}
       edges={edges}
+      // Cull off-viewport nodes from the DOM. RF v12 does NOT do this
+      // automatically — without it all 600–1500 ChatNode cards mount as
+      // real DOM on a large session. Layout is dagre-deterministic so
+      // geometry is stable; edges/markers still mount via edgeTypes.
+      onlyRenderVisibleElements={true}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onNodeClick={onNodeClick}

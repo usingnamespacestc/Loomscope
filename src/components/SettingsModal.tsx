@@ -532,7 +532,11 @@ interface Preferences {
 const DEFAULT_PREFS: Preferences = {
   idleTimeoutMin: 30,
   useApiKey: false,
-  permissionMode: "default",
+  // Mirrors the server-side default (see preferences.ts). Used only as
+  // the local placeholder during the brief render-before-prefs-load
+  // window; the server's value wins as soon as GET /api/preferences
+  // resolves.
+  permissionMode: "bypassPermissions",
   respawnPerSend: true,
   autoDeferOnRateLimit: false,
   driftDetectionSec: 30,

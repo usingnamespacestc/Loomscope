@@ -54,7 +54,7 @@ describe("ChatFoldNodeCard", () => {
         // are unused. Casting through `any` keeps the test focused on
         // behavioral surface without mocking React Flow's internal
         // NodeProps shape.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         <ChatFoldNodeCard {...(NOOP_NODE_PROPS as any)} data={defaultData()} />,
       ),
     );
@@ -68,9 +68,9 @@ describe("ChatFoldNodeCard", () => {
   it("hides the preTokens chip when 0 / undefined", () => {
     render(
       withRF(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         <ChatFoldNodeCard
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+           
           {...(NOOP_NODE_PROPS as any)}
           data={defaultData({ preTokens: undefined })}
         />,
@@ -89,7 +89,7 @@ describe("ChatFoldNodeCard", () => {
         // are unused. Casting through `any` keeps the test focused on
         // behavioral surface without mocking React Flow's internal
         // NodeProps shape.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         <ChatFoldNodeCard {...(NOOP_NODE_PROPS as any)} data={defaultData()} />,
       ),
     );
@@ -107,7 +107,7 @@ describe("ChatFoldNodeCard", () => {
         // are unused. Casting through `any` keeps the test focused on
         // behavioral surface without mocking React Flow's internal
         // NodeProps shape.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         <ChatFoldNodeCard {...(NOOP_NODE_PROPS as any)} data={defaultData()} />,
       ),
     );
@@ -119,7 +119,7 @@ describe("ChatFoldNodeCard", () => {
   it("renders the visible fold-input handle when hasIncomingEdge=true", () => {
     const { container } = render(
       withRF(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         <ChatFoldNodeCard {...(NOOP_NODE_PROPS as any)} data={defaultData({ hasIncomingEdge: true })} />,
       ),
     );
@@ -135,7 +135,7 @@ describe("ChatFoldNodeCard", () => {
   it("hides the fold-input handle (0×0 + transparent) when hasIncomingEdge=false", () => {
     const { container } = render(
       withRF(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         <ChatFoldNodeCard {...(NOOP_NODE_PROPS as any)} data={defaultData({ hasIncomingEdge: false })} />,
       ),
     );

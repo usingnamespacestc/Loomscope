@@ -6,6 +6,56 @@
 
 ---
 
+## 2026-06-15 — 四阶段质量批：工具链修复 + 规模 + 正确性 + 客户端窗口化
+
+`feat/canvas-windowing` 单 PR，**14 个 commit、4 个阶段堆叠**（每阶段都本地分支线性叠在上一个之上，全程隔离 Docker 验证、绝不留红树）。每阶段都是用 `/goal` 自驱跑出来的，turn 上界保底退出，切片绿了才 commit。
+
+基线 vitest：747 → **1263 passed**（中间 P3 修了 55 个测试夹具类型漂移让 `typecheck:test` 退 0）。
+
+### 阶段 1 — P0 工具链修复（分支 `improvements/p0-p1-p2-p3`，commit `a52b26c`）
+
+干净 checkout 上 `npm run build` / `npm run lint` / e2e 都跑不起来：
+- **build 坏了**：`tsconfig` 把 `*.test` 也纳入 `tsc`，测试夹具类型漂移导致 typecheck gate 失败。拆 `tsconfig.build.json` 让 build 只 typecheck 可发布源码；保留 `typecheck:test` 跑完整。
+- **lint 跑不了**：`lint` 脚本 + 一堆 `// eslint-disable` 注释，但仓库没 eslint 配置、也没装 eslint。加 `eslint.config.js`（flat config，typescript-eslint + react-hooks，针对项目调过：`any` off、`no-irregular-whitespace` 跳过注释）+ devDeps。
+- **e2e 不可移植**：`@playwright/test` 没进 devDeps，spec 硬编码作者私有 256MB session 和 `~/Agentloom` 软链路径。加 `e2e-smoke/`（用 `mcr.microsoft.com/playwright` 镜像 + symlink trick 跑，数据驱动 boot smoke，hermetic）。
+
+同 commit 顺手做了 P1（虚拟化 + memo + ribbon 守卫 + removeSession leak fix + bundle 拆分）、P3（55 个测试夹具类型修复、ECONNREFUSED 噪声清零、死代码删除）、P2（csrf bypass 白名单回归测试）。Working tree 73 文件。
+
+### 阶段 2 — 规模可扩展性（分支 `scale/windowed-canvas`，commits `f1714ea` / `aeda109` / `a3b069d`）
+
+合成 1k/5k/10k/50k turn 测，找到两堵墙：
+- **服务端解析 O(N²)** → **修了**。CPU profile 锁定两处：`buildChatNode` 每次重建 `chainParentByUuid`（全量 index 扫描），`hasInWorkflowLlmPredecessor` 把 chain walk 上界设成 `chainParentByUuid.size`（≈全 session 记录数）。前者 hoist 到 `buildChatFlow` 只建一次，后者改成 `byId.size + 64` transit margin。实测：1k 0.2s→32ms，10k 27s→230ms，**50k 从「不可加载」→ 1.06s**。
+- **客户端 dagre 栈溢出** → **窗口化设计稿**（阶段 4 实现）。`@dagrejs/dagre/lib/acyclic.js` 递归 DFS 在 ~5k 线性深度的链上 `RangeError: Maximum call stack size exceeded`。浏览器栈不可扩，算法不可调——只能限制 dagre 看到的图大小。
+
+产出 `docs/perf-scale-measurement.md`（节点数 → 各阶段耗时/内存）+ `docs/design-windowed-canvas.md`（窗口化设计：服务端 turn-offset index + 客户端背包窗口 + 复用现有 fold 机制）。
+
+### 阶段 3 — 正确性 + 安全（分支 `fix/correctness-security`，commits `1906ab2` / `2dd3a79` / `7c67541`）
+
+三个独立 fix，都带回归测试：
+- **#5：SSE 重连重放误判为 gap → 强制 ~4s `refreshSession`**。`applyChatFlowDelta` 加一行 `seq ≤ appliedVersion → no-op` 短路，保留真实 forward gap (`seq > appliedVersion+1`) 仍走 refresh 的分支。
+- **#15：`/api/sessions/:id/git/diff` 接受任意 `repo` 路径** = 任意本地仓库读取原语。改成校验 `(repo, sha)` 必须出现在该 session 解析出的 commit tuples 里（照搬同文件 `git/commits-files` 端点逻辑），不匹配 → 403，git 都不会 spawn。
+- **#4a：增量解析同尺寸原地改写漏检**。`jsonl.ts` 的 `canIncremental` 只看 `byteSize <= curSize`，但 `mtimeMs` 抓了没比——truncate+rewrite 到相同长度时复用陈旧 records。改成 `byteSize === curSize && mtimeMs 变化 → 全量 reparse`。
+- **#4b：UTF-8 边界乱码**——跳过未修。需要在增量 + 全量两路都改成 byte-level pending state + `StringDecoder`，off-by-one 风险大，不适合无人值守。瞬时性 bug（下次 reparse 自愈），不是持久状态损坏。
+
+### 阶段 4 — 客户端窗口化 + 测试加深 + 性能验证（分支 `feat/canvas-windowing`，commits `a6610be` / `24b00ab` / `6cfa426` / `b3c6b00` / `2463ede` / `9affcfb` / `7209267`）
+
+**6a 背包窗口策略**（`src/store/windowPlan.ts`）：纯客户端实现，复用现有 fold 机制。背包容量 1000 可见节点；扩窗（unfold）后超 budget → 按 ChatNode 序号距离把最远的已展开 compact 重新折叠（`persist:false`，不污染用户偏好），永不折叠焦点所在 range。`planWindow` 是 pure fn（用 `computeFoldProjection` 当 source of truth，nesting 安全），wired 进 load 路径 + 两个 unfold action。**关键：budget 内是 no-op，所以全部既有 fold 行为/测试不受影响。**
+
+**6b 跳转/下钻 recenter**（`setSelected` 增强）：选中一个被折叠隐藏的节点时，用 `computeUnfoldChainTo` 拿到要展开的 compact 链 → 展开 → 用新 target 当焦点跑 `planWindow`，远跳就把旧窗滑出。
+
+**6c >500 单 item 兜底切分** — 跳过未做。`computeFoldProjection` 和 `computeCompactRange` 紧耦合，要加合成子边界机制风险高、且只在「超长且从不压缩」的极端 session 触发，不适合无人值守。
+
+**测试加深**：
+- `#1 SSE 端到端集成`（`e2e-smoke/sse.spec.ts`）：真管线—— Playwright 容器 append jsonl → chokidar → delta engine → SSE → 客户端 EventSource → `applyChatFlowDelta` → 新 ChatNode 出现，**不整页刷新**。幂等（每次重置 2-turn baseline）。
+- `#2 更深 e2e`（`e2e-smoke/interaction-deep.spec.ts`）：select / conversation bubble / pan / zoom / hover-dwell / 边 ribbon best-effort，全程断言 alive。
+- `#5 P1 性能评测`（`docs/p1-perf-eval.md`）：每个 P1 优化都给数字佐证——1000 节点 session → **4 张 DOM 卡**（虚拟化），`refreshChatNodeContent` identity-stable test（memo 真的咬到），removeSession 全 map 清空 test，bundle highlight.js 166KB 懒块 + MarkdownView 498→330KB。
+
+**小 UI 调整 + bypass 默认**（commit `7209267`）：Composer 底栏 `+` 和 `⊞` 合成左簇（之前 `justify-between` 把 `⊞` 推到中间不顺眼）；`permissionMode` 默认改 `"bypassPermissions"`（单用户本机信任模型 = 127.0.0.1 + SSH 隧道访问；用户在 Settings 里仍可改回 `default`）。
+
+**Backlog 留下**：6c 切分兜底；#4b UTF-8 边界；P2 #16 CSRF bypass 范围收窄；4 个分支保留作为阶段时间线。所有合成数据放隔离 `/tmp` 目录跑完即清，真实 `~/.claude/projects` 全程只读挂载。
+
+---
+
 ## 2026-05-13 晚 — v2.2 raw-record 流式渲染 + buildChatFlow 真增量（E1+E2+E3）
 
 v2.1 Delta-SSE 收尾后，5s 的"卡顿感"仍然存在。playwright live SSE probe 测出来真正的大头是 server 侧 `buildChatFlow`（在 closure>1 fork session 上跑 ~5970ms）—— 即使 PR D4 stretch 的增量 jsonl tail-read 让 IO 跑到 ~5ms，整个 ChatFlow 还是会被全量重建。v2.2 三连击攻克这个瓶颈。

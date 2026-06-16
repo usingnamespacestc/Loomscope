@@ -58,7 +58,7 @@ function nodeProps<D extends Record<string, unknown>>(
     targetPosition: undefined,
     dragHandle: undefined,
     parentId: undefined,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any;
 }
 

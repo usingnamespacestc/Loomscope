@@ -192,8 +192,6 @@ function CanvasInner({ chatNode, sessionId }: WorkFlowCanvasProps) {
   // continuation). Custom SVG markers scale with the viewport
   // transform just fine — we get filled / hollow distinction without
   // sacrificing zoom rescaling.
-  const decoratedEdges = edges;
-
   // Auto fitView on drill-in. Sized so the largest WorkFlow renders
   // visibly; React Flow's fitView rescales to fit all measured nodes.
   // We re-fit only when the ChatNode id changes (= a different drill).
@@ -326,7 +324,11 @@ function CanvasInner({ chatNode, sessionId }: WorkFlowCanvasProps) {
     <ReactFlow
       data-testid="workflow-canvas"
       nodes={nodes}
-      edges={decoratedEdges}
+      edges={edges}
+      // Cull off-viewport nodes from the DOM (RF v12 opt-in). WorkFlows
+      // are smaller than ChatFlows but a busy turn still mounts many
+      // tool/llm cards; layout is deterministic so culling is safe.
+      onlyRenderVisibleElements={true}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onNodeClick={onNodeClick}

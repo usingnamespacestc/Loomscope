@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 function renderComposer() {
-  return render(<Composer sessionId={SID} cwd={CWD} chatFlow={null} />);
+  return render(<Composer sessionId={SID} cwd={CWD} />);
 }
 
 function typeInTextarea(value: string) {
@@ -157,8 +157,8 @@ describe("Composer — slash command picker", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(lastBody?.text).toBe("/version");
-    expect(lastBody?.priority).toBe("next");
+    expect((lastBody as Record<string, unknown> | null)?.text).toBe("/version");
+    expect((lastBody as Record<string, unknown> | null)?.priority).toBe("next");
   });
 
   it("clicking /compact (takesArgs) fills textarea with `/compact ` for args", () => {
@@ -182,7 +182,7 @@ describe("Composer — slash command picker", () => {
       "/heapdump",
     );
     expect(
-      fetchMock.mock.calls.some((c) => String(c[0]).includes("/turns")),
+      fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).includes("/turns")),
     ).toBe(false);
   });
 
@@ -197,7 +197,7 @@ describe("Composer — slash command picker", () => {
     const ta = screen.getByTestId("composer-input") as HTMLTextAreaElement;
     expect(ta.value).toBe("/foo");
     expect(
-      fetchMock.mock.calls.some((c) => String(c[0]).includes("/turns")),
+      fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).includes("/turns")),
     ).toBe(false);
   });
 
@@ -232,7 +232,7 @@ describe("Composer — slash command picker", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(lastBody?.text).toBe("/version");
+    expect((lastBody as Record<string, unknown> | null)?.text).toBe("/version");
   });
 
   it("hidden in viewer mode (composer is gated)", () => {

@@ -55,6 +55,23 @@ export function ModelRibbonLayer({
   chatFlow: ChatFlow;
   hoveredEdge: HoveredEdge | null;
 }) {
+  const families = useMemo<RibbonFamily[]>(() => {
+    if (!hoveredEdge) return [];
+    return ribbonFamilies(chatFlow, hoveredEdge.parent, hoveredEdge.child);
+  }, [chatFlow, hoveredEdge]);
+
+  // Gate BEFORE touching React Flow's store. The actual ribbon SVG lives
+  // in <RibbonContent>, which is the only thing that subscribes to
+  // `transform` (fires every pan/zoom frame) and `nodeLookup` (drives the
+  // per-node box loop over ~1500 entries). Mounting it only while a
+  // ribbon is shown means pan/zoom no longer re-renders this layer, and
+  // the box loop no longer runs, when nothing is hovered.
+  if (!hoveredEdge || families.length === 0) return null;
+
+  return <RibbonContent families={families} />;
+}
+
+function RibbonContent({ families }: { families: RibbonFamily[] }) {
   const rfNodeLookup = useStore(rfNodeLookupSelector);
   const transform = useStore(rfTransformSelector);
 
@@ -63,8 +80,7 @@ export function ModelRibbonLayer({
   // in place when measurements settle (so the reference stays the
   // same), which would let useMemo cache the pre-measurement state
   // forever and pin every center y to (CARD_FALLBACK_H / 2). Re-
-  // building per render is cheap (≤ a few thousand entries) and the
-  // component only renders on hover / pan / zoom anyway.
+  // building per render is cheap and only happens while hovering.
   const boxes = new Map<string, NodeBox>();
   for (const n of rfNodeLookup.values()) {
     boxes.set(n.id, {
@@ -74,13 +90,6 @@ export function ModelRibbonLayer({
       h: n.measured.height ?? CARD_FALLBACK_H,
     });
   }
-
-  const families = useMemo<RibbonFamily[]>(() => {
-    if (!hoveredEdge) return [];
-    return ribbonFamilies(chatFlow, hoveredEdge.parent, hoveredEdge.child);
-  }, [chatFlow, hoveredEdge]);
-
-  if (!hoveredEdge || families.length === 0) return null;
 
   const [tx, ty, tz] = transform;
 

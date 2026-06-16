@@ -266,7 +266,6 @@ export function Composer({
   // exist yet). On success commitDraftSession swaps the draft id for
   // the real sid so subsequent sends use the normal postTurn path.
   const isDraft = sessionId.startsWith("draft-");
-  const draftSession = useStore((s) => s.draftSession);
   const commitDraftSession = useStore((s) => s.commitDraftSession);
   const markTurnSubmittedOptimistic = useStore(
     (s) => s.markTurnSubmittedOptimistic,
@@ -859,11 +858,11 @@ export function Composer({
             onPaste={onPaste}
           />
           <div className="flex flex-shrink-0 items-center justify-between pt-1">
-            {/* Left: attachment "+" button. Opens hidden file picker.
-                Disabled state mirrors composer.disabled — but paste +
-                drag-drop still work even when composer is disabled,
-                which lets users prep attachments while v∞.1 is wiring
-                up. */}
+            {/* Left cluster: attachment "+" button + pinned /compact
+                button, grouped together so they sit at the bar's left
+                edge instead of /compact floating in the centre
+                (justify-between would push it there otherwise).
+                Disabled states unchanged. */}
             <input
               ref={filePickerRef}
               type="file"
@@ -872,34 +871,36 @@ export function Composer({
               className="hidden"
               onChange={onFilePickerChange}
             />
-            <button
-              type="button"
-              data-testid="composer-attach"
-              title={t("composer.attach_tooltip")}
-              disabled={!!composerBlock}
-              onClick={() => filePickerRef.current?.click()}
-              className="flex h-7 w-7 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent"
-            >
-              <PlusIcon />
-            </button>
-            {/* v1.5 R3 #181: pinned /compact button. Most-used slash
-                command gets a dedicated affordance so users don't
-                have to type. Hidden in viewer mode (composerBlock
-                "viewer") so the gate stays consistent with R8.
-                Future v1.5 #180 picker will list more commands when
-                user types `/`; this button stays pinned regardless. */}
-            {!composerBlock && (
+            <div className="flex items-center gap-1">
               <button
                 type="button"
-                data-testid="composer-slash-compact"
-                title={t("composer.slash_compact_tooltip")}
-                disabled={isRunning}
-                onClick={onCompactClick}
-                className="flex h-7 w-7 items-center justify-center rounded-full text-gray-500 hover:bg-teal-100 hover:text-teal-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent"
+                data-testid="composer-attach"
+                title={t("composer.attach_tooltip")}
+                disabled={!!composerBlock}
+                onClick={() => filePickerRef.current?.click()}
+                className="flex h-7 w-7 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent"
               >
-                <span className="text-[12px]">⊞</span>
+                <PlusIcon />
               </button>
-            )}
+              {/* v1.5 R3 #181: pinned /compact button. Most-used slash
+                  command gets a dedicated affordance so users don't
+                  have to type. Hidden in viewer mode (composerBlock
+                  "viewer") so the gate stays consistent with R8.
+                  Future v1.5 #180 picker will list more commands when
+                  user types `/`; this button stays pinned regardless. */}
+              {!composerBlock && (
+                <button
+                  type="button"
+                  data-testid="composer-slash-compact"
+                  title={t("composer.slash_compact_tooltip")}
+                  disabled={isRunning}
+                  onClick={onCompactClick}
+                  className="flex h-7 w-7 items-center justify-center rounded-full text-gray-500 hover:bg-teal-100 hover:text-teal-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent"
+                >
+                  <span className="text-[12px]">⊞</span>
+                </button>
+              )}
+            </div>
 
             {/* Right: settings chip + send arrow. The chip is a
                 popover trigger (model + effort + fast mode all in

@@ -328,7 +328,7 @@ describe("Sidebar — TrashSection", () => {
     expect(banner.textContent ?? "").toContain("Critical");
     // No DELETE fetch yet — only happens after explicit confirm click.
     expect(
-      fetchMock.mock.calls.some((c) =>
+      fetchMock.mock.calls.some((c: unknown[]) =>
         String(c[0]).includes(`/api/trash/${sid}`)
         && (c[1] as RequestInit | undefined)?.method === "DELETE",
       ),
@@ -359,7 +359,7 @@ describe("Sidebar — TrashSection", () => {
       const calls = fetchMock.mock.calls;
       expect(
         calls.some(
-          (c) =>
+          (c: unknown[]) =>
             String(c[0]).includes(`/api/trash/${sid}`)
             && (c[1] as RequestInit | undefined)?.method === "DELETE",
         ),
@@ -388,7 +388,7 @@ describe("Sidebar — TrashSection", () => {
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(
-          (c) =>
+          (c: unknown[]) =>
             String(c[0]).includes("/api/trash/empty")
             && (c[1] as RequestInit | undefined)?.method === "POST",
         ),
@@ -413,7 +413,7 @@ describe("Sidebar — TrashSection", () => {
     // No DELETE call.
     expect(
       fetchMock.mock.calls.some(
-        (c) => (c[1] as RequestInit | undefined)?.method === "DELETE",
+        (c: unknown[]) => (c[1] as RequestInit | undefined)?.method === "DELETE",
       ),
     ).toBe(false);
   });

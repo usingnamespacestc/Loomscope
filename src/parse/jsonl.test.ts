@@ -1617,6 +1617,35 @@ describe("parseJsonlFileIncremental (M0 — v0.10 收尾 / v0.11 prep)", () => {
     expect(second.chatFlow.chatNodes.length).toBe(fresh.chatFlow.chatNodes.length);
   });
 
+  it("#4a same-size in-place rewrite (mtime changed) → full reparse, not stale records", async () => {
+    const mk = (txt: string) =>
+      JSON.stringify({
+        type: "user",
+        uuid: "u1",
+        sessionId: "s",
+        promptId: "p1",
+        message: { role: "user", content: txt },
+      }) + "\n";
+    const a = mk("AAAA");
+    const b = mk("BBBB");
+    expect(a.length).toBe(b.length); // guard: identical byte length
+
+    await fsp.writeFile(jsonlPath, a, "utf8");
+    const first = await parseJsonlFileIncremental(jsonlPath, undefined);
+    expect(first.chatFlow.chatNodes[0]?.userMessage.content).toBe("AAAA");
+
+    // In-place rewrite to the SAME length, with a detectably newer mtime.
+    await fsp.writeFile(jsonlPath, b, "utf8");
+    const newer = new Date(first.state.mtimeMs + 5000);
+    await fsp.utimes(jsonlPath, newer, newer);
+
+    const second = await parseJsonlFileIncremental(jsonlPath, first.state);
+    // Pre-#4a this reused the stale cached records (byteSize unchanged →
+    // append path found no new bytes). Now it forces a full reparse.
+    expect(second.usedIncremental).toBe(false);
+    expect(second.chatFlow.chatNodes[0]?.userMessage.content).toBe("BBBB");
+  });
+
   it("partial-line tail (no trailing \\n) is buffered into pendingFragment and consumed on the next call", async () => {
     const recs = buildSyntheticRecords();
     const head = recordsToJsonl(recs.slice(0, 4));

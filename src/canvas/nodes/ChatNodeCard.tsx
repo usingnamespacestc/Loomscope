@@ -14,7 +14,7 @@
 
 import { Handle, Position } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useFoldAnchor } from "@/canvas/FoldAnchorContext";
@@ -29,7 +29,13 @@ import {
   useIsOffActiveChain,
 } from "@/store/selectionHooks";
 
-export function ChatNodeCard({ id, data }: NodeProps<ChatNodeRFNode>) {
+// Memoised so React Flow re-rendering the node array doesn't reconcile
+// every card. Pairs with `refreshChatNodeContent` preserving `data`
+// identity for unchanged nodes — together one streaming delta re-renders
+// only the card that actually changed.
+export const ChatNodeCard = memo(ChatNodeCardImpl);
+
+function ChatNodeCardImpl({ id, data }: NodeProps<ChatNodeRFNode>) {
   const { t } = useTranslation();
   const cn = data.chatNode;
   // Selection now subscribes per-card from the store rather than

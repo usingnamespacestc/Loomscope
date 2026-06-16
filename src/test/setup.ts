@@ -6,7 +6,7 @@
 // `t('foo.bar')` 能拿到实际字符串。默认 zh-CN，因为现有测试里大多
 // 写的是中文字面量匹配。
 
-import { beforeEach } from "vitest";
+import { beforeEach, vi } from "vitest";
 
 import i18n, { i18nReady } from "@/i18n";
 
@@ -35,6 +35,44 @@ await i18n.changeLanguage("zh-CN");
 (
   globalThis as { __LOOMSCOPE_EAGER_MARKDOWN__?: boolean }
 ).__LOOMSCOPE_EAGER_MARKDOWN__ = true;
+
+// EN: Default EventSource stub. App.tsx opens an EventSource to
+// `/api/sessions/:id/events` whenever a session is active; happy-dom's
+// real EventSource tries a network connect (resolving relative URLs
+// against http://localhost:3000) and floods test output with
+// ECONNREFUSED noise. Stub it globally so no individual test file has
+// to. Tests that exercise live-update paths override with their own
+// vi.stubGlobal('EventSource', ...), which takes precedence.
+// 中: 全局 stub EventSource，避免 happy-dom 真连 localhost:3000 刷
+// ECONNREFUSED 噪声；需要测 SSE 的用例自行 vi.stubGlobal 覆盖。
+class MockEventSource {
+  url: string;
+  onerror: ((this: EventSource, ev: Event) => unknown) | null = null;
+  onmessage: ((this: EventSource, ev: MessageEvent) => unknown) | null = null;
+  onopen: ((this: EventSource, ev: Event) => unknown) | null = null;
+  constructor(url: string | URL) {
+    this.url = String(url);
+  }
+  addEventListener() {}
+  removeEventListener() {}
+  close() {}
+}
+(globalThis as unknown as { EventSource: unknown }).EventSource =
+  MockEventSource;
+
+// EN: Default fetch stub. happy-dom resolves relative-URL fetches
+// against http://localhost:3000 where no server exists, so every
+// un-stubbed fetch a component fires on mount rejects with a
+// socket-level ECONNREFUSED that floods test output. The rejection is
+// near-instant (connection refused), so a rejecting mock is
+// behaviour-identical for components (they already handle the failure)
+// but emits no socket noise. Tests that need real responses override
+// with their own vi.stubGlobal('fetch', ...) / vi.spyOn, which wins.
+// 中: 默认 fetch 直接 reject，行为与真连 localhost:3000 失败一致，但
+// 不再刷 ECONNREFUSED；需要真实响应的用例自行 stub fetch 覆盖。
+globalThis.fetch = vi.fn(() =>
+  Promise.reject(new Error("fetch not stubbed in this test (setup.ts default)")),
+) as unknown as typeof fetch;
 
 beforeEach(async () => {
   if (i18n.language !== "zh-CN") {
