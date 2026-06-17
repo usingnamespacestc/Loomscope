@@ -22,12 +22,13 @@ import { execSync } from "node:child_process";
 
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  ModelInfo,
   Options,
   Query,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
-export type { Options, Query, SDKUserMessage };
+export type { ModelInfo, Options, Query, SDKUserMessage };
 
 // EN (2026-05-14, prep for 2026-06-15 Agent SDK quota separation):
 // Anthropic is splitting Agent SDK usage from interactive subscription

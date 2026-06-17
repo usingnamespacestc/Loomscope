@@ -47,10 +47,15 @@ import {
   summariseTodos,
   useSpinnerWord,
 } from "@/components/drill/statusBarBits";
+import {
+  useSupportedModels,
+  type ModelOption,
+} from "@/components/drill/useSupportedModels";
 import { postInterrupt, postTurn } from "@/api/turns";
 import { ConfirmBanner } from "@/components/ConfirmBanner";
 import { DeferralBanner } from "@/components/drill/DeferralBanner";
 import { findLatestLeafId } from "@/components/drill/pathUtils";
+import { FALLBACK_DEFAULT_MODEL } from "@/data/modelFallback";
 import { useStore } from "@/store/index";
 import { getInflight } from "@/store/sdkChannelSlice";
 import {
@@ -99,15 +104,11 @@ const SLASH_COMMANDS: SlashCommandSpec[] = [
   { name: "heapdump", takesArgs: false, sideEffect: true, needsConfirm: true },
 ];
 
-// Model list mirrors what Claude Code's `--model` flag accepts. Order
-// = canonical "newest first" so Opus 4.7 (latest) is the default
-// pick. v∞.1 may turn this into a server-fed list driven by the
-// installed CC binary's `--list-models` if/when SDK exposes it.
-const MODELS = [
-  { id: "claude-opus-4-7", label: "Opus 4.7" },
-  { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
-  { id: "claude-haiku-4-5", label: "Haiku 4.5" },
-] as const;
+// Model list is fetched at runtime from GET /api/models — which goes
+// through the SDK's query.supportedModels() so the dropdown matches
+// whichever CC binary is currently installed. See useSupportedModels.
+// The fallback constants below are only what the picker shows before
+// the fetch resolves (or if it fails entirely).
 
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 type Effort = (typeof EFFORT_LEVELS)[number];
@@ -119,7 +120,7 @@ interface ComposerSettings {
 }
 
 const DEFAULT_SETTINGS: ComposerSettings = {
-  model: "claude-opus-4-7",
+  model: FALLBACK_DEFAULT_MODEL,
   effort: "medium",
   fastMode: false,
 };
@@ -165,6 +166,7 @@ export function Composer({
   onResize,
 }: Props) {
   const { t } = useTranslation();
+  const { models } = useSupportedModels();
   const [height, setHeight] = useState<number>(() => loadHeight());
   const [text, setText] = useState("");
   const [settings, setSettings] = useState<ComposerSettings>(() =>
@@ -734,7 +736,7 @@ export function Composer({
   };
 
   const modelLabel =
-    MODELS.find((m) => m.id === settings.model)?.label ?? settings.model;
+    models.find((m) => m.id === settings.model)?.label ?? settings.model;
 
   return (
     <div
@@ -943,6 +945,7 @@ export function Composer({
               {menuOpen && (
                 <SettingsMenu
                   settings={settings}
+                  models={models}
                   onChange={setSettings}
                   onClose={() => setMenuOpen(false)}
                   t={t}
@@ -1098,11 +1101,13 @@ export function Composer({
 // flow back to the parent via `onChange`; persistence happens there.
 function SettingsMenu({
   settings,
+  models,
   onChange,
   onClose,
   t,
 }: {
   settings: ComposerSettings;
+  models: readonly ModelOption[];
   onChange: (next: ComposerSettings) => void;
   onClose: () => void;
   t: (k: string, opts?: Record<string, unknown>) => string;
@@ -1120,7 +1125,7 @@ function SettingsMenu({
           {t("composer.menu_model")}
         </div>
         <div className="flex flex-col gap-0.5">
-          {MODELS.map((m) => (
+          {models.map((m) => (
             <button
               key={m.id}
               type="button"
@@ -1327,9 +1332,14 @@ function loadSettings(): ComposerSettings {
     if (!v) return DEFAULT_SETTINGS;
     const parsed = JSON.parse(v) as Partial<ComposerSettings>;
     return {
+      // Accept any non-empty string for the model id — the runtime
+      // model list is now SDK-driven (useSupportedModels), so we
+      // can't validate at load time without waiting for the fetch.
+      // The picker falls back to rendering the raw id if it isn't in
+      // the resolved list, and the user can pick a fresh one.
+      // 中: 不再用静态 MODELS 校验,picker 拿到 SDK 列表后能正常切换。
       model:
-        typeof parsed.model === "string" &&
-        MODELS.some((m) => m.id === parsed.model)
+        typeof parsed.model === "string" && parsed.model.length > 0
           ? parsed.model
           : DEFAULT_SETTINGS.model,
       effort: (EFFORT_LEVELS as readonly string[]).includes(
