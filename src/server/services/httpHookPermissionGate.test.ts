@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  dismissPrompt,
   requestDecision,
   resolveDecision,
 } from "@/server/services/httpHookPermissionGate";
@@ -140,5 +141,90 @@ describe("httpHookPermissionGate — onSettled fires on every settle path", () =
     const result = await p;
     expect(result.decision).toBe("allow");
     expect(settled).toHaveBeenCalled();
+  });
+});
+
+// Phase 1 of the cc-hook fanout middleware: the middleware needs a way
+// to externally cancel a pending prompt on the OTHER upstream when one
+// upstream's user has resolved it via /decision. dismissPrompt() must
+// settle through the same code path as abort/timeout so the existing
+// onSettled → permission-prompt-resolved SSE broadcast fires and the
+// UI banner clears — no new event type needed.
+// 中: dismiss 必须复用 cleanup 路径 → onSettled → 现有 SSE → UI 自清。
+describe("httpHookPermissionGate — dismissPrompt (fanout cancel path)", () => {
+  it("dismissPrompt settles with decision=ask and fires onSettled once", async () => {
+    const settled = vi.fn();
+    let registeredId: string | null = null;
+    const p = requestDecision({
+      sessionId: "00000000-0000-4000-8000-0000000000a1",
+      toolName: "Bash",
+      toolInput: { command: "ls" },
+      onRegistered: (id) => {
+        registeredId = id;
+      },
+      onSettled: settled,
+    });
+    expect(registeredId).not.toBeNull();
+
+    expect(dismissPrompt(registeredId!)).toBe(true);
+
+    const result = await p;
+    expect(result.decision).toBe("ask");
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledWith(
+      registeredId!,
+      expect.objectContaining({ decision: "ask" }),
+    );
+  });
+
+  it("dismissPrompt returns false on unknown promptId (idempotent for middleware retry)", () => {
+    expect(dismissPrompt("httpperm-does-not-exist")).toBe(false);
+  });
+
+  it("dismissPrompt after resolveDecision is a no-op (returns false, doesn't re-fire onSettled)", async () => {
+    const settled = vi.fn();
+    let registeredId: string | null = null;
+    const p = requestDecision({
+      sessionId: "00000000-0000-4000-8000-0000000000a2",
+      toolName: "Bash",
+      toolInput: { command: "ls" },
+      onRegistered: (id) => {
+        registeredId = id;
+      },
+      onSettled: settled,
+    });
+
+    // Resolve via /decision first — this is the "winning upstream" case.
+    resolveDecision(registeredId!, { decision: "allow" });
+    await p;
+    expect(settled).toHaveBeenCalledTimes(1);
+
+    // Middleware later POSTs dismiss to this (already-resolved) instance:
+    // gate must report no-op, NOT double-fire onSettled.
+    expect(dismissPrompt(registeredId!)).toBe(false);
+    expect(settled).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismissPrompt races with /decision — first wins, second is no-op", async () => {
+    const settled = vi.fn();
+    let registeredId: string | null = null;
+    const p = requestDecision({
+      sessionId: "00000000-0000-4000-8000-0000000000a3",
+      toolName: "Bash",
+      toolInput: { command: "ls" },
+      onRegistered: (id) => {
+        registeredId = id;
+      },
+      onSettled: settled,
+    });
+
+    expect(dismissPrompt(registeredId!)).toBe(true);
+    expect(
+      resolveDecision(registeredId!, { decision: "allow" }),
+    ).toBe(false);
+
+    const result = await p;
+    expect(result.decision).toBe("ask");
+    expect(settled).toHaveBeenCalledTimes(1);
   });
 });

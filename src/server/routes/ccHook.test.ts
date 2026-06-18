@@ -512,6 +512,110 @@ describe("POST /api/cc-hook — PreToolUse interactive gate (v2.3 PR F1)", () =>
   });
 });
 
+// Phase 1 of the cc-hook fanout middleware. POST /dismiss-prompt/:id
+// is the server-to-server cancel path: when one upstream Loomscope
+// resolves a permission prompt, the middleware POSTs here on the
+// OTHER upstream so its dangling banner is dropped. Auth = same
+// X-Loomscope-Secret as the / route (NOT the browser CSRF token,
+// since the caller is another container, not a browser).
+// 中: fanout 中间件给另一端发 dismiss 的路径。复用 secret,不是 CSRF。
+describe("POST /api/cc-hook/dismiss-prompt/:promptId (fanout cancel)", () => {
+  it("403 without X-Loomscope-Secret", async () => {
+    const res = await app.request(
+      "/api/cc-hook/dismiss-prompt/httpperm-anything",
+      { method: "POST" },
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("403 when secret mismatches", async () => {
+    const res = await app.request(
+      "/api/cc-hook/dismiss-prompt/httpperm-anything",
+      {
+        method: "POST",
+        headers: { "X-Loomscope-Secret": WRONG_SECRET },
+      },
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("404 on unknown promptId (idempotent — middleware can retry safely)", async () => {
+    const res = await app.request(
+      "/api/cc-hook/dismiss-prompt/httpperm-does-not-exist",
+      {
+        method: "POST",
+        headers: { "X-Loomscope-Secret": SECRET },
+      },
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("204 + hook long-poll unblocks with decision=ask + UI clear via existing onSettled→SSE", async () => {
+    // Reproduce the long-poll setup, then dismiss instead of /decision.
+    // 中: 跟 /decision 测试同套 setup,但用 dismiss 取消而不是用户决策。
+    await app.request("/api/preferences", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Loomscope-Token": TOKEN,
+      },
+      body: JSON.stringify({ enableInteractivePermissions: true }),
+    });
+    const hookPromise = postHook({
+      event: "PreToolUse",
+      body: {
+        session_id: "sid-dismiss",
+        tool_name: "Bash",
+        tool_input: { command: "echo dismiss-me" },
+        permission_mode: "default",
+      },
+      secret: SECRET,
+    });
+
+    const { _peekPendingForTests } = await import(
+      "@/server/services/httpHookPermissionGate"
+    );
+    let promptId: string | undefined;
+    for (let i = 0; i < 50 && !promptId; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+      const pending = _peekPendingForTests();
+      promptId = pending.find((p) => p.sessionId === "sid-dismiss")?.promptId;
+    }
+    expect(promptId, "gate should register a pending prompt").toBeTruthy();
+
+    const dismissRes = await app.request(
+      `/api/cc-hook/dismiss-prompt/${promptId}`,
+      {
+        method: "POST",
+        headers: { "X-Loomscope-Secret": SECRET },
+      },
+    );
+    expect(dismissRes.status).toBe(204);
+
+    // Hook long-poll returns CC's allow/deny/ask envelope with
+    // decision=ask, so CC falls back to its default behavior (or the
+    // winning upstream's response if this is the loser in fanout).
+    // 中: hook 返 ask,让 CC 走 fallback;在 fanout 场景里中间件已经
+    // 把赢家的 allow/deny 回给 CC,这一端只负责 dismiss 不影响 CC。
+    const hookRes = await hookPromise;
+    expect(hookRes.status).toBe(200);
+    const hookJson = (await hookRes.json()) as {
+      hookSpecificOutput?: { permissionDecision?: string };
+    };
+    expect(hookJson.hookSpecificOutput?.permissionDecision).toBe("ask");
+
+    // Second dismiss is a no-op (already cleaned up).
+    const dismissAgain = await app.request(
+      `/api/cc-hook/dismiss-prompt/${promptId}`,
+      {
+        method: "POST",
+        headers: { "X-Loomscope-Secret": SECRET },
+      },
+    );
+    expect(dismissAgain.status).toBe(404);
+  });
+});
+
 describe("POST /api/cc-hook — listener errors don't propagate", () => {
   it("a throwing subscriber doesn't fail the request or block other subscribers", async () => {
     const goodSeen: HookEnvelope[] = [];
