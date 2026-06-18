@@ -167,7 +167,7 @@ npm run start -- --port 5180 --bind 127.0.0.1
 ### Dev mode (for hacking on Loomscope itself)
 
 ```sh
-npm run dev    # frontend http://localhost:5175 (Vite proxies /api → backend on 5174)
+npm run dev    # frontend http://localhost:5175 (Vite proxies /api → backend on 5181)
 ```
 
 Boots both the Hono backend (`tsx watch src/server/cli.ts`) and the Vite frontend dev server. The frontend's `/api/*` requests are proxied to the backend so everything works from one origin.
