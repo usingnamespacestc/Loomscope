@@ -7,10 +7,16 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 // Frontend dev server runs on 5175 and proxies `/api/*` to the Hono
-// backend on 5174 — so browser requests stay same-origin and the strict
+// backend on 5181 — so browser requests stay same-origin and the strict
 // CORS policy on the backend doesn't have to special-case dev. In
 // production both are served from the same Hono process and proxying
 // is unnecessary (v1.0+).
+//
+// Why dev sits on 5181 (not 5174): the cc-hook fanout container now
+// occupies 5174 (see ../docker-compose.yml) and forwards to prod (5180)
+// + dev (5181). Hardcoding the dev backend port here keeps Vite's
+// proxy single-source, matching the dev:server -p flag in package.json.
+// 中: 5174 给 fanout 容器,dev backend 挪到 5181;vite proxy 跟上。
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -36,7 +42,7 @@ export default defineConfig({
       // ERR_INCOMPLETE_CHUNKED_ENCODING。正则前缀 `^` 让这条规则比
       // /api 更具体；timeout: 0 = 永不超时。
       "^/api/sessions/[^/]+/events$": {
-        target: "http://localhost:5174",
+        target: "http://localhost:5181",
         changeOrigin: true,
         timeout: 0, // no read-timeout — SSE is long-poll by design
         proxyTimeout: 0,
@@ -54,7 +60,7 @@ export default defineConfig({
       // dedup，是 #184 真 Delta-SSE 做完前的 soak-week 续命方案。
       // 详细见 docs/devlog.md 2026-05-11 entry #4。
       "/api": {
-        target: "http://localhost:5174",
+        target: "http://localhost:5181",
         changeOrigin: true,
         timeout: 60_000,
         proxyTimeout: 60_000,
