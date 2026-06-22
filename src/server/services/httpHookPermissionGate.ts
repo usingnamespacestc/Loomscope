@@ -189,6 +189,33 @@ export function resolveDecision(
   return true;
 }
 
+/** EN: externally cancel a pending prompt without resolving it to a
+ *  user decision. Used by the hook-fanout middleware: when one
+ *  upstream Loomscope receives the user's decision (via /decision),
+ *  the middleware calls this on the OTHER upstream so that instance's
+ *  banner is dropped instead of dangling until 9-min timeout.
+ *
+ *  Internally fires the same `cleanup()` path used by AbortSignal +
+ *  the 9-min timer, which settles with `{decision: "ask"}` and
+ *  triggers the existing onSettled → `permission-prompt-resolved` SSE
+ *  broadcast. The UI's existing handler removes the banner from
+ *  `pendingCanUseToolPrompts` — no new event type needed.
+ *
+ *  Idempotent: returns false on unknown promptId so the middleware
+ *  can safely retry. The hook route's response to CC is whatever the
+ *  winning upstream returned, NOT this dismiss path — CC sees a
+ *  successful allow/deny, not "ask".
+ *
+ *  中: 给 fanout 中间件用。一端用户决策后,中间件叫另一端 dismiss,
+ *  内部走 cleanup() (== abort/timeout 同路径),复用现有
+ *  permission-prompt-resolved SSE → UI banner 自动消失。 */
+export function dismissPrompt(promptId: string): boolean {
+  const entry = pending.get(promptId);
+  if (!entry) return false;
+  entry.cleanup();
+  return true;
+}
+
 /** EN: snapshot of currently-pending prompts for one session. Used by
  *  the SSE /events route on subscribe so a late-joining tab sees the
  *  banner instead of waiting for the next prompt.

@@ -44,6 +44,7 @@ import {
   type HookEventName,
 } from "@/server/services/hookEventBus";
 import {
+  dismissPrompt,
   peekPrompt,
   requestDecision,
   resolveDecision,
@@ -381,6 +382,32 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
       return c.body(null, 204);
     },
   );
+
+  // Phase 1 of cc-hook fanout middleware: when one upstream Loomscope
+  // resolves a PreToolUse permission prompt, the middleware POSTs here
+  // on the OTHER upstream so its dangling banner gets cleared.
+  // Authenticated with the same X-Loomscope-Secret as the / route
+  // (server-to-server call from the fanout container). Returns 204 on
+  // success, 404 if the promptId is unknown (already resolved /
+  // timed out / never existed) — idempotent so the middleware can
+  // retry safely.
+  // 中: fanout 中间件给另一边发 dismiss。复用同 secret;promptId 已
+  // 解决/不存在 → 404 但中间件可放心重试,语义幂等。
+  app.post("/dismiss-prompt/:promptId", async (c) => {
+    const provided = c.req.header("x-loomscope-secret") ?? "";
+    if (!timingSafeEqualHex(provided, opts.getSecret())) {
+      return c.json({ error: "invalid secret" }, 403);
+    }
+    const promptId = c.req.param("promptId");
+    if (!promptId) {
+      return c.json({ error: "missing promptId" }, 400);
+    }
+    const dismissed = dismissPrompt(promptId);
+    if (!dismissed) {
+      return c.json({ error: "prompt not found or already resolved" }, 404);
+    }
+    return c.body(null, 204);
+  });
 
   return app;
 }

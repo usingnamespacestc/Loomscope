@@ -56,6 +56,13 @@ const CSRF_BYPASS_PREFIXES = [
   "/api/trash", // /empty, /:sid/restore, DELETE /:sid (v1.x soft-delete)
   "/api/fs/", // v1.6: validate-cwd + mkdir — same Mode A trust model
               // as turns (localhost binding + strict same-origin CORS).
+  "/api/cc-hook/", // Phase 1 of hook-fanout middleware: server-to-server
+                   // call from fanout container hits /dismiss-prompt/:id
+                   // with the same X-Loomscope-Secret auth as /
+                   // (the existing path-exact entries `/api/cc-hook` +
+                   // `/api/cc-hook/decision` stay covered by the Set;
+                   // this prefix adds the new path-param routes).
+                   // 中: fanout 中间件给上游发 dismiss 的路径,带 secret。
 ];
 
 export function csrfMiddleware(token: string): MiddlewareHandler {
