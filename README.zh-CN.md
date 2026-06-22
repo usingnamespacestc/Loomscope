@@ -167,7 +167,7 @@ npm run start -- --port 5180 --bind 127.0.0.1
 ### Dev 模式（改 Loomscope 自己代码用）
 
 ```sh
-npm run dev    # 前端 http://localhost:5175（Vite 把 /api 代理到后端 5174）
+npm run dev    # 前端 http://localhost:5175（Vite 把 /api 代理到后端 5181）
 ```
 
 同时拉起 Hono 后端（`tsx watch src/server/cli.ts`）跟 Vite 前端 dev server。前端 `/api/*` 请求被代理到后端，单源工作。

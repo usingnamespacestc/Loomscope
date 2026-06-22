@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "concurrently -n backend,frontend -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
     "dev:client": "vite",
-    "dev:server": "LOOMSCOPE_ALLOWED_ORIGIN=http://localhost:5174,http://localhost:5175 tsx watch src/server/cli.ts",
+    "dev:server": "LOOMSCOPE_ALLOWED_ORIGIN=http://localhost:5181,http://localhost:5175 tsx watch src/server/cli.ts -p 5181",
     "build": "tsc -p tsconfig.build.json --noEmit && vite build",
     "build:server": "tsc -p tsconfig.build.json --noEmit",
     "preview": "vite preview",
