@@ -1,0 +1,24 @@
+{
+  "name": "loomscope-hook-fanout",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reverse proxy / fanout for Claude Code's settings.json HTTP hook path. Lets prod + dev Loomscope instances coexist behind one CC hook URL.",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "hono": "^4.12.16",
+    "@hono/node-server": "^2.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.2",
+    "vitest": "^4.1.5"
+  }
+}
