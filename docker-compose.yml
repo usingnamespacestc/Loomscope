@@ -1,0 +1,51 @@
+# r7 prod stack — currently just the cc-hook fanout container.
+#
+# Why fanout but not prod-Loomscope in docker:
+#   • Fanout is a small stateless HTTP forwarder, perfect for a
+#     container (clean teardown, no host pollution, restart=always).
+#   • Loomscope's main server needs to spawn the `claude` binary +
+#     write to ~/.loomscope/ + read ~/.claude/projects/. Wrapping
+#     that in docker is doable but pushes a lot of host paths through
+#     bind-mounts and complicates the `claude` resolver. For r7's
+#     single-user setup, bare `npm start` on the host is simpler;
+#     `~/loomscope-up.sh` keeps managing that. We can revisit if a
+#     real multi-tenant deployment ever arrives.
+#   中: fanout 容器化值得;主 Loomscope 容器化会牵涉 ~/.claude / claude
+#   binary 解析,本期不动。
+#
+# Usage on r7:
+#   export LOOMSCOPE_SECRET="$(cat ~/.loomscope/secret)"
+#   docker compose up -d
+#   docker compose logs -f fanout
+#   docker compose down
+
+services:
+  fanout:
+    build:
+      context: ./services/fanout
+      dockerfile: Dockerfile
+    container_name: loom-fanout
+    # network_mode: host so the container shares the host's loopback —
+    # required on Linux setups where the docker0 bridge is firewalled
+    # from the host (default on many distros). With host networking:
+    #   • Container listens on host's 127.0.0.1:5174 directly (no -p
+    #     mapping needed; HOSTNAME=127.0.0.1 keeps it loopback-only).
+    #   • Container reaches upstream Loomscopes via plain `localhost`
+    #     (no host.docker.internal indirection).
+    # If you want strict isolation (bridge network), uncomment the
+    # `ports` + `extra_hosts` block below and remove network_mode —
+    # but make sure to `iptables -I INPUT -i docker0 -j ACCEPT` or the
+    # outbound fanout requests will be silently dropped.
+    # 中: host 网络模式;Linux 防火墙默认挡 docker0→host,host 模式最省事。
+    # 想严格隔离改 bridge,但要放通 docker0。
+    network_mode: host
+    environment:
+      LOOMSCOPE_FANOUT_UPSTREAMS: "http://localhost:5180,http://localhost:5181"
+      # Force loopback bind under host networking — otherwise we'd
+      # listen on 0.0.0.0 and the LAN could reach us.
+      # 中: host 模式下必须强制 127.0.0.1 否则 LAN 能访问。
+      HOSTNAME: "127.0.0.1"
+      # Provided by the shell (loomscope-up.sh reads ~/.loomscope/secret
+      # into this var before `docker compose up`).
+      LOOMSCOPE_SECRET: "${LOOMSCOPE_SECRET:?LOOMSCOPE_SECRET env var required — see scripts/r7/README.md}"
+    restart: unless-stopped
