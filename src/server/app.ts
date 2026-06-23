@@ -19,6 +19,7 @@ import { ccHookRouter } from "@/server/routes/ccHook";
 import { ccHookOnboardingRouter } from "@/server/routes/ccHookOnboarding";
 import { forkRouter } from "@/server/routes/fork";
 import { fsRouter } from "@/server/routes/fs";
+import { modelsRouter } from "@/server/routes/models";
 import { newSessionRouter } from "@/server/routes/newSession";
 import {
   permissionPromptsRouter,
@@ -51,6 +52,7 @@ import { findForkClosure } from "@/server/services/forkTree";
 import { locateSessionJsonl } from "@/server/services/locateJsonl";
 import { initHookLifecycleReducer } from "@/server/services/hookLifecycleReducer";
 import { initPendingPermissionTracker } from "@/server/services/pendingPermissionTracker";
+import { ModelsRegistry } from "@/server/services/modelsRegistry";
 import { loadPreferences } from "@/server/services/preferences";
 import { realSdkQuery, resolveClaudePath } from "@/server/services/sdkAdapter";
 import { SessionRegistry } from "@/server/services/sessionRegistry";
@@ -70,6 +72,12 @@ export interface AppOptions {
   // preferences. Tests inject a fake-SDK-backed registry to drive
   // turn endpoints deterministically.
   registry?: SessionRegistry;
+  // Optional ModelsRegistry override for testing — same shape as
+  // `registry` above. Production wiring auto-creates one bound to the
+  // real SDK; tests inject a fake-factory-backed registry so the
+  // /api/models route returns deterministic data without spawning CC.
+  // 中: 测试时塞 fake,production 自动构造。
+  modelsRegistry?: ModelsRegistry;
   allowedOrigin: string; // e.g. http://localhost:5174
   // v∞.0 PR 1: per-installation secret CC hook fires must carry in
   // `X-Loomscope-Secret`. Boot script generates / loads via
@@ -189,6 +197,26 @@ export function createApp(opts: AppOptions) {
       // shared lookup helper.
       locateJsonl: (sid) => locateSessionJsonl(opts.rootDir, sid),
     });
+
+  // Resolve CC binary path once and share with both registries — the
+  // session registry needs it for turn-running spawns, the models
+  // registry needs it for the transient supportedModels() spawn.
+  // 中: 共用 CC binary 路径解析,session/models registry 各取所需。
+  const claudePath = resolveClaudePath();
+  const modelsRegistry =
+    opts.modelsRegistry ??
+    new ModelsRegistry({
+      queryFactory: realSdkQuery,
+      pathToClaudeCodeExecutable: claudePath,
+    });
+  // Production-only: warm the cache at boot so the first browser
+  // GET /api/models lands on a cached value instead of paying the
+  // ~1s SDK subprocess spawn. Tests inject a fake registry where
+  // prewarm is a noop / mocked.
+  // 中: 启动时预热,首次 GET /api/models 直接命中缓存。
+  if (!opts.modelsRegistry) {
+    void modelsRegistry.prewarm();
+  }
   // Asynchronously sync persisted preferences into the new registry
   // — production path. Tests pass their own registry and skip this.
   if (!opts.registry) {
@@ -345,6 +373,7 @@ export function createApp(opts: AppOptions) {
   app.route("/api/sessions", permissionPromptsRouter({ registry }));
   app.route("/api/permission-rules", permissionRulesRouter({ registry }));
   app.route("/api/preferences", preferencesRouter({ registry }));
+  app.route("/api/models", modelsRouter({ modelsRegistry }));
   // v∞.0 PR 3: `port` resolved at registry construction (see above);
   // we reuse the same value here. settings.json hook URLs are
   // constructed against this port.
