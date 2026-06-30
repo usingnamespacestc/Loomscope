@@ -17,6 +17,19 @@ export interface Workspace {
   sessionCount: number; // number of *.jsonl in the project dir
   lastModified: string; // ISO; max mtime across jsonl files
   projectDir: string; // absolute path of the encoded dir (kept for later use)
+  /** v2.6 (2026-06-30): false when the project dir or its jsonls aren't
+   *  readable by the loomscope process (typically root-owned files
+   *  created by a docker container CC ran inside, or by `sudo claude`).
+   *  When false, `cwd` is best-effort reverse-decoded from the dir
+   *  name (which is ambiguous w.r.t. dashes vs slashes — see
+   *  reverseDecodeProjectDirName), `sessionCount` is 0, and
+   *  `lastModified` is the project dir's mtime if stat-able or epoch
+   *  start otherwise. UI renders these rows as locked + disabled so
+   *  the user can still SEE the workspace exists but knows why
+   *  Loomscope can't open it. Undefined === accessible (default true).
+   *  中: 不可读 workspace 仍然列出但标记 accessible:false——
+   *  UI 显示一个带锁图标的灰条目,用户知道"东西在但读不到"。 */
+  accessible: boolean;
 }
 
 export interface SessionSummary {
@@ -33,6 +46,27 @@ export interface SessionSummary {
 // handful of lines. 200 is a comfortable upper bound for v0.2.
 const CWD_SCAN_LINE_BUDGET = 200;
 
+/** v2.6 (2026-06-30): CC encodes a project dir name by replacing each
+ *  "/" in cwd with "-". The mapping isn't reversible without ambiguity
+ *  (`/foo/bar` and `/foo-bar` both → `-foo-bar`); we normally recover
+ *  cwd by reading the first user record's `cwd` field inside the jsonl.
+ *  When the jsonls are unreadable (EACCES — files owned by root because
+ *  CC ran inside a docker container), the jsonl recovery is impossible,
+ *  so we fall back to this best-effort decode of just the dir name.
+ *  The resulting cwd is good enough for sidebar display ("📁 ade-bench")
+ *  and `basename(cwd)` rendering, but should NEVER be used to read files
+ *  off disk — accessible:false rows have no expand-able content.
+ *  中: 反推 cwd——CC 的编码不可逆, EACCES 又读不到 jsonl,只好猜。
+ *  仅用于 UI 显示, 千万别拿这反推的 cwd 去拼 fs 路径。 */
+function reverseDecodeProjectDirName(dirName: string): string {
+  // Strip the leading "-" (always present for absolute paths) and
+  // re-substitute. We don't try to recover original "-" characters
+  // inside the cwd; that's the irrecoverable ambiguity.
+  // 中: 去掉前导 "-", 把剩下的 "-" 换回 "/"。
+  const stripped = dirName.startsWith("-") ? dirName.slice(1) : dirName;
+  return "/" + stripped.replace(/-/g, "/");
+}
+
 export async function scanWorkspaces(rootDir: string): Promise<Workspace[]> {
   let entries: string[];
   try {
@@ -47,7 +81,36 @@ export async function scanWorkspaces(rootDir: string): Promise<Workspace[]> {
     const stat = await fs.stat(projectDir).catch(() => null);
     if (!stat?.isDirectory()) continue;
 
-    const files = (await fs.readdir(projectDir)).filter((f) => f.endsWith(".jsonl"));
+    // v2.6 (2026-06-30): readdir may fail EACCES on a root-owned dir
+    // (CC inside a docker container or `sudo claude`). Previously this
+    // bubbled to Hono and 500'd the whole /api/workspaces endpoint;
+    // now we surface the workspace as `accessible: false` so the user
+    // sees it in the sidebar with a lock icon instead of nothing.
+    // ENOENT is treated the same way (transient race during dir removal).
+    // 中: readdir EACCES 不再炸,改成 accessible:false 占位列出。
+    let files: string[];
+    try {
+      files = (await fs.readdir(projectDir)).filter((f) =>
+        f.endsWith(".jsonl"),
+      );
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EACCES" || code === "EPERM") {
+        const fallbackMtime = stat.mtimeMs > 0
+          ? new Date(stat.mtimeMs).toISOString()
+          : new Date(0).toISOString();
+        out.push({
+          cwd: reverseDecodeProjectDirName(name),
+          sessionCount: 0,
+          lastModified: fallbackMtime,
+          projectDir,
+          accessible: false,
+        });
+        continue;
+      }
+      if (code === "ENOENT") continue;
+      throw err;
+    }
     if (files.length === 0) continue;
 
     const fullPaths = files.map((f) => path.join(projectDir, f));
@@ -61,9 +124,36 @@ export async function scanWorkspaces(rootDir: string): Promise<Workspace[]> {
     // freshest; old archives may have stale cwd).
     const sorted = await sortByMtimeDesc(fullPaths);
     let cwd: string | null = null;
+    let allReadsFailedEacces = sorted.length > 0;
     for (const jsonlPath of sorted) {
-      cwd = await firstCwdInJsonl(jsonlPath, CWD_SCAN_LINE_BUDGET);
-      if (cwd) break;
+      try {
+        cwd = await firstCwdInJsonl(jsonlPath, CWD_SCAN_LINE_BUDGET);
+        // Got past the read without EACCES (even if cwd is null because
+        // the file has no cwd-bearing records yet).
+        // 中: 这条读到了 (cwd 哪怕是 null 也算 "读到"),不全 EACCES。
+        allReadsFailedEacces = false;
+        if (cwd) break;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "EACCES" && code !== "EPERM") throw err;
+        // EACCES on this file — try the next.
+        // 中: 单文件 EACCES, 试下一个。
+      }
+    }
+    if (!cwd && allReadsFailedEacces) {
+      // Every jsonl in the dir was unreadable — same fate as
+      // readdir-EACCES above. Surface as locked.
+      // 中: 目录可 list, 但所有 jsonl 都读不到,等同 readdir-EACCES。
+      out.push({
+        cwd: reverseDecodeProjectDirName(name),
+        sessionCount: files.length,
+        lastModified: lastMtimeMs > 0
+          ? new Date(lastMtimeMs).toISOString()
+          : new Date(stat.mtimeMs || 0).toISOString(),
+        projectDir,
+        accessible: false,
+      });
+      continue;
     }
     if (!cwd) continue; // no usable cwd → skip; user may have a stray dir
 
@@ -72,6 +162,7 @@ export async function scanWorkspaces(rootDir: string): Promise<Workspace[]> {
       sessionCount: files.length,
       lastModified: new Date(lastMtimeMs).toISOString(),
       projectDir,
+      accessible: true,
     });
   }
   // Sort by lastModified desc — most recent workspace first.
@@ -90,14 +181,32 @@ export async function findWorkspaceByCwd(
 // ─── Session lister (per-workspace) ──────────────────────────────────────────
 
 export async function listSessions(projectDir: string): Promise<SessionSummary[]> {
-  const files = (await fs.readdir(projectDir)).filter((f) => f.endsWith(".jsonl"));
+  // v2.6 (2026-06-30): EACCES-tolerant — when the dir / its jsonls are
+  // owned by another user, return empty instead of throwing. Matches
+  // the locked-workspace UX surfaced by scanWorkspaces.
+  // 中: 不可读时返空, 跟 scanWorkspaces 的 locked 标记配套。
+  let files: string[];
+  try {
+    files = (await fs.readdir(projectDir)).filter((f) => f.endsWith(".jsonl"));
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EACCES" || code === "EPERM" || code === "ENOENT") return [];
+    throw err;
+  }
   const out: SessionSummary[] = [];
   for (const file of files) {
     const full = path.join(projectDir, file);
     const stat = await fs.stat(full).catch(() => null);
     if (!stat) continue;
     const sessionId = file.slice(0, -".jsonl".length);
-    const meta = await extractSessionMeta(full);
+    let meta: ExtractedSessionMeta;
+    try {
+      meta = await extractSessionMeta(full);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EACCES" || code === "EPERM") continue;
+      throw err;
+    }
     out.push({
       sessionId,
       title: meta.title ?? sessionId.slice(0, 8),

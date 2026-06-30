@@ -487,4 +487,89 @@ describe("Sidebar — TrashSection", () => {
       expect(btn.hasAttribute("disabled")).toBe(true);
     });
   });
+
+  // 2026-06-30: locked-workspace regression. When the backend marks a
+  // workspace as `accessible: false` (root-owned files we can't read),
+  // the sidebar should still show the row so the user knows the
+  // workspace exists, but with a 🔒 icon, "—" instead of a session
+  // count, a tooltip explaining the situation, and an expanded-state
+  // hint replacing the usual "loading…" / "(no sessions)" text.
+  // 中: accessible:false 的 workspace 显示锁图标 + 提示, 不能消失。
+  describe("locked workspaces (accessible:false)", () => {
+    it("renders 🔒 + '—' count + locked tooltip for inaccessible workspaces", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify([
+                {
+                  cwd: "/home/unstc/ade-bench",
+                  sessionCount: 0,
+                  lastModified: "2026-06-30T00:00:00Z",
+                  accessible: false,
+                },
+              ]),
+              { status: 200 },
+            ),
+        ),
+      );
+      render(<Sidebar />);
+      const row = await screen.findByTestId(
+        "workspace-row-/home/unstc/ade-bench",
+      );
+      expect(row.getAttribute("data-accessible")).toBe("false");
+      // Lock glyph in row text.
+      expect(row.textContent).toContain("🔒");
+      // Em-dash placeholder instead of a session count.
+      expect(row.textContent).toContain("—");
+      // Tooltip explains why (i18n hard-codes EN + zh, both contain
+      // "Permission denied" / "无权访问"). 中: tooltip 含原因文字。
+      const tip = row.getAttribute("title") ?? "";
+      expect(/Permission denied|无权访问/.test(tip)).toBe(true);
+    });
+
+    it("expands to a locked hint instead of 'loading…' / '(no sessions)'", async () => {
+      const fetchMock = vi.fn(
+        async (url: string) =>
+          new Response(
+            url.includes("/sessions")
+              ? "[]"
+              : JSON.stringify([
+                  {
+                    cwd: "/home/unstc/ade-bench",
+                    sessionCount: 0,
+                    lastModified: "2026-06-30T00:00:00Z",
+                    accessible: false,
+                  },
+                ]),
+            { status: 200 },
+          ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      render(<Sidebar />);
+      const row = await screen.findByTestId(
+        "workspace-row-/home/unstc/ade-bench",
+      );
+      fireEvent.click(row);
+      const hint = await screen.findByTestId(
+        "workspace-locked-hint-/home/unstc/ade-bench",
+      );
+      // Hint text contains the locked-reason phrase.
+      // 中: 展开后看到 locked hint。
+      expect(/Permission denied|无权访问/.test(hint.textContent ?? "")).toBe(
+        true,
+      );
+      // Neither "Loading…" nor "(no sessions)" should appear for this
+      // workspace — those copies are for accessible workspaces.
+      // 中: 锁住的不再显示 loading 或 no sessions。
+      const list = screen.getByTestId(
+        "session-list-/home/unstc/ade-bench",
+      );
+      expect(/Loading|加载中/.test(list.textContent ?? "")).toBe(false);
+      expect(/no sessions|无 session/.test(list.textContent ?? "")).toBe(
+        false,
+      );
+    });
+  });
 });

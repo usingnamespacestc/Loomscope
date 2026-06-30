@@ -27,12 +27,15 @@ export function workspacesRouter(opts: WorkspacesRouteOptions) {
 
   app.get("/", async (c) => {
     const items = await scanWorkspaces(opts.rootDir);
-    // Strip projectDir from response — internal-only.
+    // Strip projectDir from response — internal-only. v2.6 adds
+    // `accessible` so the sidebar can render locked workspaces.
+    // 中: 加 accessible 字段, 让 sidebar 显示锁图标。
     return c.json(
-      items.map(({ cwd, sessionCount, lastModified }) => ({
+      items.map(({ cwd, sessionCount, lastModified, accessible }) => ({
         cwd,
         sessionCount,
         lastModified,
+        accessible,
       })),
     );
   });

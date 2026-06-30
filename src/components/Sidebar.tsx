@@ -502,7 +502,12 @@ export function Sidebar() {
               return (
                 <li key={ws.cwd} className="border-b border-gray-100">
                   <button
-                    className="w-full flex items-center gap-1.5 px-2 py-1.5 hover:bg-gray-100 text-left transition-colors group/folder"
+                    className={[
+                      "w-full flex items-center gap-1.5 px-2 py-1.5 text-left transition-colors group/folder",
+                      ws.accessible === false
+                        ? "hover:bg-amber-50 opacity-70"
+                        : "hover:bg-gray-100",
+                    ].join(" ")}
                     onClick={() => toggleExpanded(ws.cwd)}
                     onContextMenu={(e) => {
                       // v1.6 #186/#187: right-click on workspace folder
@@ -519,29 +524,55 @@ export function Sidebar() {
                       });
                     }}
                     data-testid={`workspace-row-${ws.cwd}`}
+                    data-accessible={ws.accessible === false ? "false" : "true"}
+                    title={
+                      ws.accessible === false
+                        ? t("sidebar.workspace_locked_tooltip", {
+                            defaultValue:
+                              "Permission denied — files owned by another user (often a docker-run claude). Loomscope can't read these sessions.",
+                          })
+                        : ws.cwd
+                    }
                   >
                     <span className="inline-block w-3 text-center text-[9px] text-gray-400 transition-transform">
                       {isOpen ? "▾" : "▸"}
                     </span>
-                    <span className="text-[12px]">📁</span>
+                    <span className="text-[12px]">
+                      {ws.accessible === false ? "🔒" : "📁"}
+                    </span>
                     <span
-                      className="font-mono text-[11px] text-gray-800 truncate flex-1 font-medium"
-                      title={ws.cwd}
+                      className={[
+                        "font-mono text-[11px] truncate flex-1 font-medium",
+                        ws.accessible === false
+                          ? "text-gray-500"
+                          : "text-gray-800",
+                      ].join(" ")}
                     >
                       {basename(ws.cwd)}
                     </span>
                     <span className="text-[10px] text-gray-400 font-mono">
-                      {ws.sessionCount}
+                      {ws.accessible === false ? "—" : ws.sessionCount}
                     </span>
                   </button>
                   {isOpen && (
                     <ul className="bg-white" data-testid={`session-list-${ws.cwd}`}>
-                      {!sessions && (
+                      {ws.accessible === false && (
+                        <li
+                          className="px-6 py-1.5 text-[10px] text-amber-700 italic"
+                          data-testid={`workspace-locked-hint-${ws.cwd}`}
+                        >
+                          {t("sidebar.workspace_locked_hint", {
+                            defaultValue:
+                              "Permission denied — Loomscope process can't read these files.",
+                          })}
+                        </li>
+                      )}
+                      {ws.accessible !== false && !sessions && (
                         <li className="px-6 py-1.5 text-[10px] text-gray-400 italic">
                           {t("sidebar.loading_sessions")}
                         </li>
                       )}
-                      {sessions?.length === 0 && (
+                      {ws.accessible !== false && sessions?.length === 0 && (
                         <li className="px-6 py-1.5 text-[10px] text-gray-400 italic">
                           {t("sidebar.no_sessions_in_workspace")}
                         </li>
