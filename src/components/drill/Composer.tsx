@@ -50,7 +50,6 @@ import {
 import { postInterrupt, postTurn } from "@/api/turns";
 import { ConfirmBanner } from "@/components/ConfirmBanner";
 import { DeferralBanner } from "@/components/drill/DeferralBanner";
-import { findLatestLeafId } from "@/components/drill/pathUtils";
 import { useStore } from "@/store/index";
 import { getInflight } from "@/store/sdkChannelSlice";
 import {
@@ -103,10 +102,19 @@ const SLASH_COMMANDS: SlashCommandSpec[] = [
 // = canonical "newest first" so Opus 4.7 (latest) is the default
 // pick. v∞.1 may turn this into a server-fed list driven by the
 // installed CC binary's `--list-models` if/when SDK exposes it.
+// EN (2026-06-30): kept current with Anthropic's published lineup. The
+// label was previously rendered next to the settings trigger so an
+// outdated entry stuck out — see commit note + the change below that
+// drops the label render. Updates here still flow through settings
+// menu options, so picking a model in the popover works regardless of
+// whether we render the chip text.
+// 中: 与官方最新型号同步;label 不再渲染在右下角,但 settings 弹窗里
+// 仍按这个列表显示供切换。
 const MODELS = [
-  { id: "claude-opus-4-7", label: "Opus 4.7" },
+  { id: "claude-opus-4-8", label: "Opus 4.8" },
   { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
   { id: "claude-haiku-4-5", label: "Haiku 4.5" },
+  { id: "claude-fable-5", label: "Fable 5" },
 ] as const;
 
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -119,7 +127,7 @@ interface ComposerSettings {
 }
 
 const DEFAULT_SETTINGS: ComposerSettings = {
-  model: "claude-opus-4-7",
+  model: "claude-opus-4-8",
   effort: "medium",
   fastMode: false,
 };
@@ -322,10 +330,25 @@ export function Composer({
     // the entire session is read-only regardless of selection.
     if (isTrashed) return { reason: "trashed" };
     if (!chatFlow || !selectedNodeId) return null;
-    const leafId = findLatestLeafId(chatFlow);
-    if (selectedNodeId === leafId) return null;
     const sel = chatFlow.chatNodes.find((c) => c.id === selectedNodeId);
     if (!sel) return null;
+    // 2026-06-30: leaf = "no node in this chatFlow names me as parent".
+    // Previously we compared against `findLatestLeafId` (a single
+    // chosen leaf via earliest-root + latest-children walk), which
+    // mis-classified perfectly valid leaves on parallel chains — e.g.
+    // session 43781db5 has two roots with chain B ending at cb90329b;
+    // cb90329b had zero children but was rejected because chain A's
+    // tip f876e6ed won the "latest leaf" vote and we were comparing
+    // against THAT id. Any true leaf is a legitimate continuation
+    // point — CC will just append a new turn whose parent is this
+    // selection. (Forks pick another sid; this stays on the active
+    // session's writable chain.)
+    // 中: leaf 判定改成"无人以我为 parent",而不是"全局唯一最新 leaf"。
+    // 多根链场景下原算法会把另一条链的真 leaf 误判为 non-leaf。
+    const hasChildren = chatFlow.chatNodes.some(
+      (c) => c.parentChatNodeId === selectedNodeId,
+    );
+    if (!hasChildren) return null;
     const cs = sel.contributingSessions ?? [];
     // Empty/missing contributingSessions = unknown provenance; treat
     // as on-chain to stay permissive for legacy fixtures.
@@ -733,8 +756,6 @@ export function Composer({
     }
   };
 
-  const modelLabel =
-    MODELS.find((m) => m.id === settings.model)?.label ?? settings.model;
 
   return (
     <div
@@ -918,7 +939,14 @@ export function Composer({
                 title={t("composer.settings_tooltip")}
                 className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-100"
               >
-                <span className="font-mono">{modelLabel}</span>
+                {/* EN (2026-06-30): model label removed from the chip —
+                    no clean way to keep the hardcoded MODELS list in
+                    lockstep with Anthropic's published lineup (SDK
+                    exposes no "list-available-models" surface). The
+                    settings popover (opens on click) still lets the
+                    user pick a model from the updated MODELS list.
+                    中: 模型 chip 文字撤掉,避免硬编码列表过期显示错版本;
+                    点击展开的 settings 仍能切换。 */}
                 {settings.fastMode && (
                   <span
                     className="rounded bg-amber-100 px-1 text-[9px] font-semibold uppercase tracking-wide text-amber-700"
