@@ -20,6 +20,8 @@
     "loading_sessions": "Loading…",
     "no_workspaces": "No workspaces found",
     "no_sessions_in_workspace": "(no sessions)",
+    "workspace_locked_tooltip": "Permission denied — files owned by another user (often a docker-run claude). Loomscope can't read these sessions.",
+    "workspace_locked_hint": "Permission denied — Loomscope process can't read these files.",
     "no_sessions_root": "No CC sessions found in ~/.claude/projects/.",
     "error_label": "✗ Error",
     "session_records_unit": "records",

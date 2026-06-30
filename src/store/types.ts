@@ -108,6 +108,14 @@ export interface WorkspaceSummary {
   cwd: string;
   sessionCount: number;
   lastModified: string;
+  /** v2.6 (2026-06-30): false when the workspace dir / its jsonls
+   *  aren't readable by the loomscope process (root-owned because CC
+   *  ran in a docker container or via sudo). Sidebar shows these as
+   *  locked rows so the user can see "exists but I can't open it".
+   *  Optional for back-compat — older payloads & test fixtures don't
+   *  set it; renderer treats undefined as accessible.
+   *  中: 不可读 workspace, 侧边栏标锁状态。缺省 = accessible。 */
+  accessible?: boolean;
 }
 
 export interface SessionSummary {

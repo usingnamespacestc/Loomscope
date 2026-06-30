@@ -20,6 +20,8 @@
     "loading_sessions": "加载中…",
     "no_workspaces": "未找到 workspace",
     "no_sessions_in_workspace": "（无 session）",
+    "workspace_locked_tooltip": "无权访问 — 文件归其他用户所有（通常是 docker 容器里的 claude 写入）。Loomscope 进程读不到这些 session。",
+    "workspace_locked_hint": "无权访问 — Loomscope 进程读不到这些文件。",
     "no_sessions_root": "未在 ~/.claude/projects/ 找到 CC session。",
     "error_label": "✗ 错误",
     "session_records_unit": "条记录",
