@@ -514,6 +514,18 @@ interface PendingPermissionPrompt {
   id: string;
   sessionId: string;
   toolName: string;
+  /** v2.6 (2026-06-30): full broadcast payload retained so the SSE
+   *  catchup at /sessions/:id/events can rebuild a synthetic
+   *  permission-prompt frame for a late-joining tab (e.g. browser
+   *  refresh mid-prompt). Without these the snapshot was a useless
+   *  {id,toolName} pair, the UI banner stayed blank after refresh, and
+   *  the agent's canUseTool Promise wedged with no way to answer.
+   *  中: 后端持有重建 SSE 所需的全部字段——刷新后重连补帧用。 */
+  toolInput: Record<string, unknown>;
+  title?: string;
+  displayName?: string;
+  decisionReason?: string;
+  blockedPath?: string;
   resolve: (decision: {
     behavior: PermissionBehavior;
     message?: string;
@@ -632,14 +644,44 @@ export class SessionRegistry {
   }
 
   /** Snapshot pending prompts for a session — used by the SSE late-
-   *  join replay so a browser tab opening mid-prompt sees it. */
+   *  join replay so a browser tab opening mid-prompt sees it.
+   *  v2.6 (2026-06-30): returns the full broadcast shape (toolInput,
+   *  title, displayName, decisionReason, blockedPath) so the catchup
+   *  in sessions.ts:/events emits a permission-prompt frame the UI
+   *  can render unchanged. Previously this returned only {id,toolName}
+   *  and no catchup was wired at all — see the routes/sessions.ts
+   *  catchup loop alongside this method's caller. */
   pendingPermissionPromptsFor(
     sessionId: string,
-  ): Array<{ id: string; toolName: string }> {
-    const out: Array<{ id: string; toolName: string }> = [];
+  ): Array<{
+    id: string;
+    toolName: string;
+    toolInput: Record<string, unknown>;
+    title?: string;
+    displayName?: string;
+    decisionReason?: string;
+    blockedPath?: string;
+  }> {
+    const out: Array<{
+      id: string;
+      toolName: string;
+      toolInput: Record<string, unknown>;
+      title?: string;
+      displayName?: string;
+      decisionReason?: string;
+      blockedPath?: string;
+    }> = [];
     for (const p of this.pendingPermissionPrompts.values()) {
       if (p.sessionId === sessionId) {
-        out.push({ id: p.id, toolName: p.toolName });
+        out.push({
+          id: p.id,
+          toolName: p.toolName,
+          toolInput: p.toolInput,
+          title: p.title,
+          displayName: p.displayName,
+          decisionReason: p.decisionReason,
+          blockedPath: p.blockedPath,
+        });
       }
     }
     return out;
@@ -1204,6 +1246,11 @@ export class SessionRegistry {
           id: promptId,
           sessionId,
           toolName,
+          toolInput: input,
+          title: options.title,
+          displayName: options.displayName,
+          decisionReason: options.decisionReason,
+          blockedPath: options.blockedPath,
           resolve: (decision) => {
             if (decision.behavior === "allow") {
               // v2.3 PR F3/F4: prefer the browser-supplied
