@@ -89,7 +89,9 @@ export interface SessionsRouteOptions {
    *  callers/tests that don't pass it simply omit the snapshot
    *  (recorded-not-consumed; frontend doesn't read it yet → zero
    *  behaviour change either way). */
-  getRegistry?: () => Pick<SessionRegistry, "snapshot"> | undefined;
+  getRegistry?: () =>
+    | Pick<SessionRegistry, "snapshot" | "pendingPermissionPromptsFor">
+    | undefined;
 }
 
 const SESSION_ID_RE = /^[a-f0-9-]{8,}$/i;
@@ -395,6 +397,38 @@ export function sessionsRouter(opts: SessionsRouteOptions) {
               }),
             })
             .catch(() => {});
+        }
+        // v2.6 (2026-06-30): SDK-path permission-prompt catchup. The
+        // sessionRegistry's canUseTool gate holds a Promise per in-
+        // flight prompt; if the browser tab refreshes before the user
+        // answers, the new SSE connection used to get nothing back (no
+        // banner, no AskUserQuestion panel) and the agent's
+        // canUseTool Promise wedged until SDK abort / process exit.
+        // Mirror the HTTP-hook catchup above, but tagged source:"sdk"
+        // so the UI banner shows the SDK chip (not the terminal one)
+        // and POSTs the decision to the SDK-side endpoint.
+        // 中: SDK 路径的 canUseTool 提问刷新前回答不到就丢——补一份
+        // 给新订阅者，agent 不再卡死。
+        const sdkRegistry = opts.getRegistry?.();
+        if (sdkRegistry?.pendingPermissionPromptsFor) {
+          for (const p of sdkRegistry.pendingPermissionPromptsFor(id)) {
+            await stream
+              .writeSSE({
+                event: "permission-prompt",
+                data: JSON.stringify({
+                  sessionId: id,
+                  promptId: p.id,
+                  toolName: p.toolName,
+                  input: p.toolInput,
+                  title: p.title,
+                  displayName: p.displayName,
+                  decisionReason: p.decisionReason,
+                  blockedPath: p.blockedPath,
+                  source: "sdk",
+                }),
+              })
+              .catch(() => {});
+          }
         }
         // PR-2.5 slice 2: lifecycle catch-up. Emit one synthetic
         // `lifecycle-snapshot` frame to this (late-joining /
