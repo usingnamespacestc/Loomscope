@@ -345,10 +345,29 @@ export function Composer({
     // session's writable chain.)
     // 中: leaf 判定改成"无人以我为 parent",而不是"全局唯一最新 leaf"。
     // 多根链场景下原算法会把另一条链的真 leaf 误判为 non-leaf。
-    const hasChildren = chatFlow.chatNodes.some(
-      (c) => c.parentChatNodeId === selectedNodeId,
-    );
-    if (!hasChildren) return null;
+    //
+    // 2026-07-01: refine "has children" to only count children that
+    // participate in the ACTIVE session. Rationale: server-side
+    // findForkClosure merges the entry session's jsonl with every
+    // ancestor + descendant jsonl into one chatFlow, so after
+    // "fork from mid-chain" the fork's chatFlow still contains the
+    // fork-point's ORIGINAL children (from the ancestor session).
+    // Those children live on a sibling branch (their
+    // contributingSessions doesn't include the active sid); they
+    // shouldn't gate composing on THIS session's fresh branch. A
+    // child with unknown provenance (empty/missing
+    // contributingSessions — legacy fixtures, hand-built rawRecords)
+    // is treated as on-chain, matching `useIsOffActiveChain`'s
+    // conservative default.
+    // 中: 合并 closure 让 fork 前的兄弟链后代也进 chatFlow, 但它们不
+    // 属于当前 session, 不能拿它们判 non-leaf 挡当前会话在 fork 点写。
+    const hasChildrenOnActiveChain = chatFlow.chatNodes.some((c) => {
+      if (c.parentChatNodeId !== selectedNodeId) return false;
+      const cs = c.contributingSessions;
+      if (!cs || cs.length === 0) return true;
+      return cs.includes(sessionId);
+    });
+    if (!hasChildrenOnActiveChain) return null;
     const cs = sel.contributingSessions ?? [];
     // Empty/missing contributingSessions = unknown provenance; treat
     // as on-chain to stay permissive for legacy fixtures.
