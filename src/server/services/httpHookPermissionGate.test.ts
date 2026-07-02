@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  dismissByToolUseId,
   dismissPrompt,
   requestDecision,
   resolveDecision,
@@ -179,6 +180,75 @@ describe("httpHookPermissionGate — dismissPrompt (fanout cancel path)", () => 
 
   it("dismissPrompt returns false on unknown promptId (idempotent for middleware retry)", () => {
     expect(dismissPrompt("httpperm-does-not-exist")).toBe(false);
+  });
+
+  // v2.7: PostToolUse fallback — clear a ghost pending by tool_use_id.
+  // AskUserQuestion answered in the terminal can leave the gate pending
+  // dangling next to the already-rendered transcript (question shows
+  // twice); PostToolUse carries the tool_use_id, so we settle here.
+  // 中: PostToolUse 按 toolUseId 清残留 pending(AUQ 终端回答导致的重复)。
+  it("dismissByToolUseId settles the matching pending and fires onSettled once", async () => {
+    const settled = vi.fn();
+    let registeredId: string | null = null;
+    const p = requestDecision({
+      sessionId: "00000000-0000-4000-8000-0000000000b1",
+      toolName: "AskUserQuestion",
+      toolUseId: "toolu_abc123",
+      toolInput: { questions: [] },
+      onRegistered: (id) => {
+        registeredId = id;
+      },
+      onSettled: settled,
+    });
+    expect(registeredId).not.toBeNull();
+
+    expect(dismissByToolUseId("toolu_abc123")).toBe(1);
+
+    const result = await p;
+    expect(result.decision).toBe("ask");
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledWith(
+      registeredId!,
+      expect.objectContaining({ decision: "ask" }),
+    );
+  });
+
+  it("dismissByToolUseId returns 0 for an unknown / empty tool_use_id (no-op)", () => {
+    expect(dismissByToolUseId("toolu_never_registered")).toBe(0);
+    expect(dismissByToolUseId("")).toBe(0);
+  });
+
+  it("dismissByToolUseId only clears pendings with the matching tool_use_id", async () => {
+    const settledA = vi.fn();
+    const settledB = vi.fn();
+    let idA: string | null = null;
+    let idB: string | null = null;
+    const pa = requestDecision({
+      sessionId: "00000000-0000-4000-8000-0000000000b2",
+      toolName: "AskUserQuestion",
+      toolUseId: "toolu_A",
+      toolInput: {},
+      onRegistered: (id) => (idA = id),
+      onSettled: settledA,
+    });
+    const pb = requestDecision({
+      sessionId: "00000000-0000-4000-8000-0000000000b3",
+      toolName: "AskUserQuestion",
+      toolUseId: "toolu_B",
+      toolInput: {},
+      onRegistered: (id) => (idB = id),
+      onSettled: settledB,
+    });
+    expect(idA).not.toBeNull();
+    expect(idB).not.toBeNull();
+
+    expect(dismissByToolUseId("toolu_A")).toBe(1);
+    expect(settledA).toHaveBeenCalledTimes(1);
+    expect(settledB).not.toHaveBeenCalled();
+
+    // Clean up B so it doesn't leak into other tests.
+    dismissByToolUseId("toolu_B");
+    await Promise.all([pa, pb]);
   });
 
   it("dismissPrompt after resolveDecision is a no-op (returns false, doesn't re-fire onSettled)", async () => {
