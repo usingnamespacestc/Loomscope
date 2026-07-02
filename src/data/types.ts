@@ -431,6 +431,15 @@ export interface SystemEventInfo {
   status?: "completed" | "failed";
 }
 
+// ⚠ SHAPE-CHANGE CONTRACT: adding / removing / re-meaning ANY field on
+// ChatNode (or WorkNode / WorkFlow / WorkflowSummary / ChatFlow) MUST
+// bump `SCHEMA_VERSION` in server/services/chatFlowDiskCache.ts.
+// Otherwise sessions cached under the old version keep being served
+// stale — the parser never re-runs and the new field is invisible for
+// existing sessions until their jsonl next changes. This bit v2.7
+// (systemEvent was added without a bump; old sessions kept showing raw
+// XML). 中: 改 ChatNode 等形状必须同步 bump diskcache SCHEMA_VERSION,
+// 否则旧 session 命中 stale 缓存不重新解析(v2.7 就踩了)。
 export interface ChatNode extends NodeBase {
   // ``kind: "chat"`` discriminates ChatNode from WorkNode in code that
   // works against ``NodeBase``. Cards / chrome that need to switch
