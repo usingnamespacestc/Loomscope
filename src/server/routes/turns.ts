@@ -26,6 +26,7 @@ import { forkSession } from "@anthropic-ai/claude-agent-sdk";
 import { findForkClosure } from "@/server/services/forkTree";
 import { buildLifecycleSnapshot } from "@/server/services/lifecycleSnapshot";
 import { locateSessionJsonl } from "@/server/services/locateJsonl";
+import { checkSpawnCwd } from "@/server/services/pathPolicy";
 import type { SessionRegistry } from "@/server/services/sessionRegistry";
 
 const SESSION_ID_RE =
@@ -97,6 +98,14 @@ export function turnsRouter(opts: TurnsRouterOptions) {
       // server-side too in case a stale tab fires bad.
       if (body.text.length === 0 && (body.images?.length ?? 0) === 0) {
         return c.json({ error: "empty prompt" }, 400);
+      }
+      // v2.6 security: same cwd confinement as /api/sessions/new —
+      // this route spawns/drives an agent at the given cwd. See
+      // pathPolicy.ts for the threat model.
+      // 中: 与新建 session 同一套 cwd 白名单($HOME + /tmp)。
+      const policy = checkSpawnCwd(body.cwd);
+      if (!policy.allowed) {
+        return c.json({ error: `cwd rejected: ${policy.reason}` }, 400);
       }
       // Auto-fork before enqueue: forkFrom set ⇒ user is composing
       // from a non-leaf ChatNode. Slice the transcript via SDK's
