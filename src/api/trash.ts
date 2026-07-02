@@ -5,6 +5,8 @@
 // 中: trash 路由 5 个端点的前端封装；返回 discriminated union 让上层
 // 渲染错误时不用嵌 try/catch。
 
+import { apiFetch } from "@/api/http";
+
 export interface TrashedSession {
   sessionId: string;
   originalPath: string;
@@ -31,7 +33,7 @@ async function call<T>(
   init: RequestInit = {},
 ): Promise<T | ApiError> {
   try {
-    const res = await fetch(path, {
+    const res = await apiFetch(path, {
       credentials: "same-origin",
       ...init,
     });

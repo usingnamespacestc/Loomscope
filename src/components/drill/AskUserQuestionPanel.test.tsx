@@ -7,6 +7,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { makeSessionState } from "@/test/factories";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { _resetCsrfTokenForTests } from "@/api/http";
 
 import { AskUserQuestionPanel } from "@/components/drill/AskUserQuestionPanel";
 import { useStore } from "@/store/index";
@@ -67,9 +68,20 @@ function seedSession(prompts: Array<{
 
 beforeEach(() => {
   captured = [];
+  _resetCsrfTokenForTests();
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
+      // v2.6: apiFetch probes /api/csrf-token before the first
+      // mutation — answer it out-of-band so URL/body assertions below
+      // keep indexing the REAL decision calls only.
+      // 中: 先喂掉 apiFetch 的 token 探测,断言只看真正的决策请求。
+      if (url === "/api/csrf-token") {
+        return new Response(JSON.stringify({ token: "test-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
       captured.push({ url, init });
       return new Response(null, { status: 204 });
     }),
@@ -80,6 +92,14 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+// v2.6: apiFetch adds a token round-trip before the first mutation,
+// so a fixed pair of microtask flushes no longer reaches the decision
+// POST. Drain a generous number of microtasks instead.
+// 中: apiFetch 多了 token 往返,固定两次微任务不够,统一深冲。
+async function flushAsync(): Promise<void> {
+  for (let i = 0; i < 25; i += 1) await Promise.resolve();
+}
 
 describe("AskUserQuestionPanel", () => {
   it("renders nothing when no pending prompts", () => {
@@ -163,8 +183,7 @@ describe("AskUserQuestionPanel", () => {
     render(<AskUserQuestionPanel sessionId={SID} />);
     fireEvent.click(screen.getAllByRole("radio")[0]); // blue
     fireEvent.click(screen.getByTestId("ask-user-question-submit"));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsync();
     expect(captured).toHaveLength(1);
     expect(captured[0].url).toBe(`/api/cc-hook/decision`);
     const body = JSON.parse(String(captured[0].init?.body));
@@ -197,8 +216,7 @@ describe("AskUserQuestionPanel", () => {
     render(<AskUserQuestionPanel sessionId={SID} />);
     fireEvent.click(screen.getAllByRole("radio")[1]); // red
     fireEvent.click(screen.getByTestId("ask-user-question-submit"));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsync();
     expect(captured).toHaveLength(1);
     expect(captured[0].url).toBe(
       `/api/sessions/${SID}/permission-prompts/pp-sdk-auq/decision`,
@@ -230,8 +248,7 @@ describe("AskUserQuestionPanel", () => {
     ]);
     render(<AskUserQuestionPanel sessionId={SID} />);
     fireEvent.click(screen.getByTestId("ask-user-question-cancel"));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsync();
     expect(captured).toHaveLength(1);
     const body = JSON.parse(String(captured[0].init?.body));
     expect(body.behavior).toBe("deny");
@@ -260,9 +277,7 @@ describe("AskUserQuestionPanel", () => {
     render(<AskUserQuestionPanel sessionId={SID} />);
     fireEvent.click(screen.getAllByRole("radio")[1]); // B
     fireEvent.click(screen.getByTestId("ask-user-question-submit"));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsync();
 
     // Pending card gone.
     expect(screen.queryByTestId("ask-user-question-card-pp-removed")).toBeNull();
@@ -293,9 +308,7 @@ describe("AskUserQuestionPanel", () => {
     ]);
     render(<AskUserQuestionPanel sessionId={SID} />);
     fireEvent.click(screen.getByTestId("ask-user-question-cancel"));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsync();
     const state = useStore.getState().sessions.get(SID)!;
     expect(state.pendingCanUseToolPrompts ?? []).toHaveLength(0);
   });

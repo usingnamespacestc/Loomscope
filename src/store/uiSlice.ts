@@ -1,4 +1,5 @@
 import type { StateCreator } from "zustand";
+import { apiFetch } from "@/api/http";
 
 import type { LoomscopeStore, UISlice } from "@/store/types";
 
@@ -113,7 +114,7 @@ export const createUISlice: StateCreator<LoomscopeStore, [], [], UISlice> = (set
     // value lands here.
     set({ interactiveMode: next });
     try {
-      const res = await fetch("/api/preferences", {
+      const res = await apiFetch("/api/preferences", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ interactiveMode: next }),

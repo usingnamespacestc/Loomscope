@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { apiFetch } from "@/api/http";
 
 import { postTurn } from "@/api/turns";
 import { useStore } from "@/store/index";
@@ -185,7 +186,7 @@ function HooksPanel() {
     try {
       const body: { mode: "add" | "remove"; events?: string[] } = { mode };
       if (events && events.length > 0) body.events = events;
-      const res = await fetch(PATCH_URL, {
+      const res = await apiFetch(PATCH_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -229,7 +230,7 @@ function HooksPanel() {
     setWorking("rotate");
     setError(null);
     try {
-      const res = await fetch(ROTATE_URL, { method: "POST" });
+      const res = await apiFetch(ROTATE_URL, { method: "POST" });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as {
           error?: string;
@@ -597,7 +598,7 @@ function usePreferences() {
       setSaving(true);
       setError(null);
       try {
-        const res = await fetch("/api/preferences", {
+        const res = await apiFetch("/api/preferences", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -1147,7 +1148,7 @@ function PermissionRulesSection() {
 
   const removeRule = async (id: string) => {
     try {
-      const res = await fetch(`/api/permission-rules/${id}`, {
+      const res = await apiFetch(`/api/permission-rules/${id}`, {
         method: "DELETE",
         credentials: "same-origin",
       });
@@ -1275,7 +1276,7 @@ function HookPathsSection() {
     setSaving(true);
     setErr(null);
     try {
-      const res = await fetch("/api/preferences", {
+      const res = await apiFetch("/api/preferences", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",

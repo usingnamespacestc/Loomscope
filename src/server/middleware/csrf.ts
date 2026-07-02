@@ -9,60 +9,48 @@
 
 import type { MiddlewareHandler } from "hono";
 
-// EN (v∞.0 PR 1 + PR 3): paths exempt from CSRF token check.
-// - `/api/cc-hook`: server-to-server (CC's axios), uses
-//   `X-Loomscope-Secret` for auth instead.
-// - `/api/cc-hook-onboarding/patch`: same-origin browser POST from
-//   our own frontend. The token plumbing isn't currently exposed to
-//   the client (no existing browser-driven POSTs), and Mode A's
-//   localhost binding + CORS strict same-origin policy already
-//   block the practical threat surface (cross-origin browser
-//   attacks). Bypass is consistent with the project's stated
-//   "Mode A trusted same-host" model. If we ever need to defend
-//   against in-browser local attackers (extensions / third-party
-//   tabs without Origin headers), revisit by exposing the token via
-//   `/api/csrf-token` + threading through fetches.
-// 中: CC hook 跟 onboarding patch 都跳过 CSRF。前者用 secret，后者
-// 同源 + CORS 已经够用；本项目 Mode A 模型默认本机可信。
+// EN (v2.6 security batch — closes backlog #16 "narrow CSRF bypass
+// scope"): the bypass list used to cover EVERY mutating route in the
+// app (/api/sessions/, /api/preferences, /api/permission-rules,
+// /api/trash, /api/fs/, onboarding), which made the token dead code —
+// the real (and only) browser-CSRF defense was CORS. The frontend now
+// fetches the token from GET /api/csrf-token at boot (cross-origin
+// pages can't read that response, so exposure via GET is safe) and
+// threads it through every mutation via src/api/http.ts's apiFetch.
+//
+// What legitimately stays bypassed is ONLY the server-to-server hook
+// surface: terminal CC's settings.json hooks and the fanout container
+// POST here without any browser context; they authenticate with
+// `X-Loomscope-Secret` instead (checked in the route).
+//
+// NOTE the prefix is "/api/cc-hook/" WITH the trailing slash — a bare
+// "/api/cc-hook" prefix would also wave through
+// "/api/cc-hook-onboarding/*", which are browser POSTs (SettingsModal)
+// and MUST carry the token (rotate-secret rotates the hook secret!).
+//
+// 中(v2.6 安全批,即 backlog #16): 原 bypass 覆盖全部变更路由,
+// token 形同虚设,浏览器 CSRF 实际全靠 CORS。现在前端启动时从
+// GET /api/csrf-token 拿 token(跨源读不到响应,GET 暴露安全),
+// apiFetch 统一带头;bypass 只留 server-to-server 的 cc-hook 面
+// (终端 CC / fanout 容器,无浏览器上下文,走 secret 鉴权)。
+// 注意前缀必须带尾斜杠,否则会误放行 cc-hook-onboarding(浏览器
+// POST,且 rotate-secret 能换 hook secret,必须受 token 保护)。
 const CSRF_BYPASS_PATHS = new Set([
   "/api/cc-hook",
-  // v2.3 PR F1: browser POST resolves the long-poll permission gate.
-  // Same trust model as the SDK canUseTool decision endpoint
-  // (/api/sessions/<sid>/permission-prompts/<pid>/decision, also
-  // bypassed via the /api/sessions/ prefix): localhost-only origin
-  // + strict CORS already shut out cross-origin posts, CSRF would
-  // be redundant + the browser banner doesn't have access to the
-  // CSRF token.
-  // 中: 浏览器 banner POST 决定。SDK 那条路 /api/sessions/.../decision
-  // 也走 CSRF bypass，本路同模型——本地 origin + CORS 已挡住跨源。
+  // v2.3 PR F1: terminal-CC long-poll permission gate decision. The
+  // BROWSER posts this too — but through apiFetch, which now carries
+  // the token anyway; the bypass remains for symmetry with the other
+  // cc-hook server-to-server paths (fanout race-abort can hit it).
+  // 中: 浏览器走 apiFetch 本来就带 token;保留 bypass 是因为 fanout
+  // 的 server-to-server 调用也会打这条路。
   "/api/cc-hook/decision",
-  "/api/cc-hook-onboarding/patch",
-  "/api/cc-hook-onboarding/rotate-secret",
 ]);
 
-// v∞.2: prefix-based bypass. Per-session write endpoints carry UUIDs
-// in the path (`/api/sessions/<sid>/turns`, `/api/sessions/<sid>/
-// interrupt`, etc.) so exact-match Set can't cover them. Bypass
-// rationale matches the onboarding case: Mode A's localhost binding
-// + strict same-origin CORS already block cross-origin browser
-// attacks; in-browser local attackers (extensions / third-party
-// tabs without Origin headers) are explicitly out of scope.
+// Server-to-server hook paths with path params (fanout's
+// /dismiss-prompt/:id etc.) — secret-authenticated in the route.
+// 中: 带路径参数的 cc-hook 路由(fanout dismiss 等),路由内查 secret。
 const CSRF_BYPASS_PREFIXES = [
-  "/api/sessions/", // /:id/turns, /:id/queue/:itemId, /:id/interrupt,
-                    // /:id/permission-prompts/:promptId/decision (v∞.3),
-                    // /:id/trash (v1.x soft-delete), /new (v1.6)
-  "/api/preferences", // GET + PATCH
-  "/api/permission-rules", // v∞.3: GET / POST / DELETE
-  "/api/trash", // /empty, /:sid/restore, DELETE /:sid (v1.x soft-delete)
-  "/api/fs/", // v1.6: validate-cwd + mkdir — same Mode A trust model
-              // as turns (localhost binding + strict same-origin CORS).
-  "/api/cc-hook/", // Phase 1 of hook-fanout middleware: server-to-server
-                   // call from fanout container hits /dismiss-prompt/:id
-                   // with the same X-Loomscope-Secret auth as /
-                   // (the existing path-exact entries `/api/cc-hook` +
-                   // `/api/cc-hook/decision` stay covered by the Set;
-                   // this prefix adds the new path-param routes).
-                   // 中: fanout 中间件给上游发 dismiss 的路径,带 secret。
+  "/api/cc-hook/",
 ];
 
 export function csrfMiddleware(token: string): MiddlewareHandler {

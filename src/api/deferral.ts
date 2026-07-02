@@ -7,6 +7,8 @@
 // 中: deferral 相关接口客户端封装。clearDeferral 走"立即重试"路径，
 // 真没恢复时 CC 会再 fire 让 gate 自动重新 arm。
 
+import { apiFetch } from "@/api/http";
+
 export interface DeferralStateSnapshot {
   deferralUntilEpoch: number | null;
   reason: {
@@ -21,7 +23,7 @@ export async function clearDeferral(
   sessionId: string,
 ): Promise<{ cleared: boolean } | { error: string }> {
   try {
-    const res = await fetch(`/api/sessions/${sessionId}/deferral/clear`, {
+    const res = await apiFetch(`/api/sessions/${sessionId}/deferral/clear`, {
       method: "POST",
       credentials: "same-origin",
     });
@@ -39,7 +41,7 @@ export async function fetchDeferralState(
   sessionId: string,
 ): Promise<DeferralStateSnapshot | { error: string }> {
   try {
-    const res = await fetch(`/api/sessions/${sessionId}/deferral`, {
+    const res = await apiFetch(`/api/sessions/${sessionId}/deferral`, {
       credentials: "same-origin",
     });
     if (!res.ok) {
