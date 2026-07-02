@@ -301,6 +301,42 @@ describe("ConversationView — v0.8.1 #3 scroll-to-bottom", () => {
   });
 });
 
+describe("ConversationView — system event strip (v2.7)", () => {
+  function sysNode(): ChatNode {
+    const n = cn("s1", null, "<task-notification>…raw…</task-notification>", "ack");
+    n.systemEvent = {
+      variant: "task-notification",
+      summary: "Docker 4-gate completed",
+      status: "completed",
+    };
+    return n;
+  }
+
+  it("renders a centered slate strip (not a human blue bubble) with the summary", () => {
+    const cf = flow([sysNode()]);
+    seed(cf, "s1");
+    render(<ConversationView sessionId={SID} chatFlow={cf} />);
+    const strip = screen.getByTestId("system-event-strip-s1");
+    expect(strip).toBeTruthy();
+    expect(strip.textContent).toContain("Docker 4-gate completed");
+    // No human user bubble for this turn.
+    // 中: 该 turn 不渲染人类蓝气泡。
+    expect(strip.className).not.toMatch(/bg-blue-500/);
+  });
+
+  it("hides the raw XML by default and reveals it on expand", () => {
+    const cf = flow([sysNode()]);
+    seed(cf, "s1");
+    render(<ConversationView sessionId={SID} chatFlow={cf} />);
+    expect(screen.queryByTestId("system-event-raw-s1")).toBeNull();
+    act(() => {
+      fireEvent.click(screen.getByTestId("system-event-raw-toggle-s1"));
+    });
+    const raw = screen.getByTestId("system-event-raw-s1");
+    expect(raw.textContent).toContain("<task-notification>");
+  });
+});
+
 describe("packStartIdx — v0.8.1 #4 token-budget lazy pack", () => {
   function mkChatNode(id: string, charCount: number) {
     const text = "x".repeat(charCount);

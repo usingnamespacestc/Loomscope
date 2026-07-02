@@ -60,9 +60,18 @@ function ChatNodeCardImpl({ id, data }: NodeProps<ChatNodeRFNode>) {
   const compact = data.isCompactSummary;
   const triggerSchedule = cn.trigger === "scheduled";
   const slash = data.slashCommand;
+  // v2.7: system-event turn (task-notification / system-reminder /
+  // caveat that is purely harness injection). Renders slate chrome.
+  // 中: 系统事件 turn,石板灰样式。
+  const sysEvent = data.systemEvent;
   const isRoot = cn.parentChatNodeId === null && !data.hasIncomingEdge;
   const isLeaf =
-    !data.hasOutgoingEdge && !isRoot && !compact && !triggerSchedule && !slash;
+    !data.hasOutgoingEdge &&
+    !isRoot &&
+    !compact &&
+    !triggerSchedule &&
+    !slash &&
+    !sysEvent;
   // True when this ChatNode lives only on a sibling fork's jsonl —
   // not on the active session's writable chain. Renders dim so the
   // user can tell at a glance "this turn isn't continuable from
@@ -77,11 +86,13 @@ function ChatNodeCardImpl({ id, data }: NodeProps<ChatNodeRFNode>) {
   // TokenBar, chips, NodeIdLine, handles). Adding a future event
   // node (scheduled-task / hook) is just a new kind branch +
   // palette entry, no whole-card duplication.
-  const kind: "slash" | "compact" | "normal" = slash
+  const kind: "slash" | "compact" | "system" | "normal" = slash
     ? "slash"
     : compact
       ? "compact"
-      : "normal";
+      : sysEvent
+        ? "system"
+        : "normal";
   // EN (v2.0.1): per-card expand state for slash stdout. Was a
   // fixed line-clamp-4; CC's /compact stdout includes PreCompact +
   // PostCompact hook lines that exceed 4 lines and got cut off. Now
@@ -110,6 +121,14 @@ function ChatNodeCardImpl({ id, data }: NodeProps<ChatNodeRFNode>) {
     borderClass = selected
       ? "border-violet-500 ring-2 ring-violet-200"
       : "border-violet-300 hover:border-violet-400";
+  } else if (kind === "system") {
+    // v2.7: slate — deliberately muted, distinct from human blue/green.
+    // 中: 石板灰,刻意低调,区别于人类蓝/绿。
+    bgClass = "bg-slate-50";
+    accentClass = "border-l-[3px] border-l-slate-400";
+    borderClass = selected
+      ? "border-slate-500 ring-2 ring-slate-200"
+      : "border-slate-300 hover:border-slate-400";
   } else if (kind === "compact" && compactPal) {
     bgClass = compactPal.bg;
     accentClass = compactPal.accent;
@@ -266,6 +285,22 @@ function ChatNodeCardImpl({ id, data }: NodeProps<ChatNodeRFNode>) {
           </span>
         </div>
       )}
+      {kind === "system" && sysEvent && (
+        <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+          <span
+            className="inline-flex items-center gap-0.5 rounded bg-slate-200/80 px-1 py-0.5 text-[10px] font-semibold text-slate-700"
+            data-testid="system-event-badge"
+            data-variant={sysEvent.variant}
+          >
+            ⚙ {t(`system_event.variant_${sysEvent.variant}`)}
+            {sysEvent.status === "completed"
+              ? " ✅"
+              : sysEvent.status === "failed"
+                ? " ❌"
+                : ""}
+          </span>
+        </div>
+      )}
 
       {/* v0.11: hybrid ChatNode (real prompt + inline compact mid-turn,
           ~96% of all compacts in real CC sessions) gets an explicit
@@ -343,6 +378,16 @@ function ChatNodeCardImpl({ id, data }: NodeProps<ChatNodeRFNode>) {
               {stdoutExpanded ? "▾ 收起" : "▸ 展开"}
             </button>
           )}
+        </div>
+      )}
+      {kind === "system" && sysEvent && (
+        <div className="mb-1.5">
+          <div
+            className="text-[11px] text-slate-700 break-words line-clamp-3"
+            data-testid="system-event-summary"
+          >
+            {sysEvent.summary}
+          </div>
         </div>
       )}
       {kind === "compact" && (

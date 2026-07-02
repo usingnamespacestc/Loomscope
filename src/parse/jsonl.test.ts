@@ -1189,6 +1189,84 @@ describe("isMeta / isVisibleInTranscriptOnly handling", () => {
     expect(anyHasSlash).toBe(false);
   });
 
+  // v2.7: system-event turn detection (task-notification /
+  // system-reminder / caveat that are PURELY harness injection).
+  // 中: 纯 harness 注入的系统事件 turn 识别。
+  describe("systemEvent detection", () => {
+    const userRec = (uuid: string, content: string) => ({
+      type: "user",
+      uuid,
+      parentUuid: null,
+      promptId: `p-${uuid}`,
+      sessionId: "s",
+      cwd: "/",
+      timestamp: "2026-07-02T00:00:00Z",
+      message: { role: "user", content },
+    });
+
+    it("marks a task-notification turn with summary + status", () => {
+      const content = [
+        "<task-notification>",
+        "<task-id>b8149feo4</task-id>",
+        "<status>completed</status>",
+        '<summary>Background command "Docker 4-gate for security batch" completed (exit code 0)</summary>',
+        "</task-notification>",
+      ].join("\n");
+      const cf = buildChatFlow([userRec("tn", content)] as RawRecord[], "/x.jsonl");
+      const cn = cf.chatNodes.find((c) => c.id === "p-tn");
+      expect(cn?.systemEvent).toBeDefined();
+      expect(cn!.systemEvent!.variant).toBe("task-notification");
+      expect(cn!.systemEvent!.status).toBe("completed");
+      expect(cn!.systemEvent!.summary).toContain("Docker 4-gate");
+    });
+
+    it("maps a non-'completed' status to failed", () => {
+      const content =
+        "<task-notification><status>failed</status><summary>boom</summary></task-notification>";
+      const cf = buildChatFlow([userRec("tf", content)] as RawRecord[], "/x.jsonl");
+      const cn = cf.chatNodes.find((c) => c.id === "p-tf");
+      expect(cn!.systemEvent!.status).toBe("failed");
+    });
+
+    it("marks a standalone system-reminder turn (variant=system-reminder)", () => {
+      const content =
+        "<system-reminder>\nThe task tools haven't been used recently. Consider TaskCreate.\n</system-reminder>";
+      const cf = buildChatFlow([userRec("sr", content)] as RawRecord[], "/x.jsonl");
+      const cn = cf.chatNodes.find((c) => c.id === "p-sr");
+      expect(cn!.systemEvent!.variant).toBe("system-reminder");
+      expect(cn!.systemEvent!.summary).toContain("task tools");
+      expect(cn!.systemEvent!.status).toBeUndefined();
+    });
+
+    it("does NOT mark a real human turn that merely carries a system-reminder prefix", () => {
+      // The critical false-positive guard: injected prefix + human text.
+      // 中: 关键防误报——注入前缀 + 人类文本 = 正常 turn,不标记。
+      const content =
+        "<system-reminder>Background context here.</system-reminder>\n\n帮我修复这个 bug,谢谢。";
+      const cf = buildChatFlow([userRec("mix", content)] as RawRecord[], "/x.jsonl");
+      const cn = cf.chatNodes.find((c) => c.id === "p-mix");
+      expect(cn?.systemEvent).toBeUndefined();
+    });
+
+    it("does NOT mark a plain human turn", () => {
+      const cf = buildChatFlow([userRec("h", "just a normal message")] as RawRecord[], "/x.jsonl");
+      expect(cf.chatNodes.find((c) => c.id === "p-h")?.systemEvent).toBeUndefined();
+    });
+
+    it("does NOT mark a slash command as a system event (slash wins)", () => {
+      // caveat + command-name in one bucket → slashCommand, not systemEvent.
+      // 中: caveat + command-name = slash,不当系统事件。
+      const records = [
+        { ...userRec("c", "<local-command-caveat>note</local-command-caveat>"), isMeta: true, promptId: "p-slash" },
+        { ...userRec("cmd", "<command-name>/model</command-name>"), parentUuid: "c", promptId: "p-slash" },
+      ];
+      const cf = buildChatFlow(records as RawRecord[], "/x.jsonl");
+      const cn = cf.chatNodes.find((c) => c.id === "p-slash");
+      expect(cn?.slashCommand).toBeDefined();
+      expect(cn?.systemEvent).toBeUndefined();
+    });
+  });
+
   it("falls back to meta user when bucket only has meta (ScheduleWakeup sentinel still works)", () => {
     // ScheduleWakeup fire produces a single isMeta user record with the
     // <<autonomous-loop-dynamic>> sentinel. No non-meta records — meta

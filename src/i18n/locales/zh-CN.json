@@ -475,5 +475,14 @@
       "retry_now": "立即重试",
       "retry_now_tooltip": "强制恢复发送。如果 Anthropic 仍拒绝，会再次进入暂停。"
     }
+  },
+  "system_event": {
+    "label": "系统事件",
+    "variant_task-notification": "后台任务",
+    "variant_system-reminder": "系统提醒",
+    "variant_caveat": "系统提示",
+    "variant_generic": "系统事件",
+    "expand_raw": "展开原文",
+    "collapse_raw": "收起原文"
   }
 }

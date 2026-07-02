@@ -160,6 +160,10 @@ export interface ChatNodeRFData extends Record<string, unknown> {
   // need to drill back into chatNode object — keeps the prop interface
   // self-contained for tests).
   slashCommand: ChatNode["slashCommand"];
+  // v2.7: system-event info, mirrored like slashCommand so the card can
+  // render the "system event" chrome without reaching into chatNode.
+  // 中: 系统事件信息,同 slashCommand 一样镜像到卡片 data。
+  systemEvent: ChatNode["systemEvent"];
   // Edge presence — drives whether handle dots show.
   hasIncomingEdge: boolean;
   hasOutgoingEdge: boolean;
@@ -1021,6 +1025,7 @@ export function deriveCardData(
     contextTokens,
     maxContextTokens,
     slashCommand: cn.slashCommand,
+    systemEvent: cn.systemEvent,
     hasIncomingEdge: edges.hasIncomingEdge,
     hasOutgoingEdge: edges.hasOutgoingEdge,
   };

@@ -388,6 +388,49 @@ export interface SlashCommandInfo {
   stdout?: string; // contents of <local-command-stdout>; ANSI escapes stripped
 }
 
+// v2.7: a ChatNode whose user "message" is PURELY a harness-injected
+// system event, not a human prompt — e.g. a <task-notification>
+// (background task finished) or a standalone <system-reminder> /
+// <local-command-caveat>. These records carry the user role in the
+// jsonl and DO drive a fresh assistant turn (so the node is real),
+// but rendering their raw XML as a human bubble is noise. Parser
+// recognises them, extracts a one-line summary, and the card /
+// conversation bubble render a distinct "system event" chrome (slate,
+// not the human blue/green) with the raw text available on expand.
+//
+// Same design as SlashCommandInfo: a structured field the renderer
+// switches on, so the raw content stays queryable (transcript-viewer
+// fidelity) while the DEFAULT presentation is semantic.
+//
+// IMPORTANT: only set when the message is ENTIRELY injection. A real
+// human turn that merely CARRIES an injected <system-reminder> prefix
+// (very common) is NOT a system event — those blocks are stripped at
+// render time instead, leaving the human text intact.
+//
+// 中(v2.7): 整条 user "消息" 纯粹是 harness 注入的系统事件(而非人类
+// 输入)的 ChatNode——如后台任务完成的 <task-notification>、单独的
+// <system-reminder> / <local-command-caveat>。它们在 jsonl 里是 user
+// 角色且确实触发了新一轮 assistant(节点是真的),但把原始 XML 当人类
+// 气泡显示是噪音。parser 识别它们、提一行摘要,卡片/对话气泡用独立的
+// "系统事件" 样式(石板灰,区别于人类蓝/绿),原文展开可查。
+// 关键:仅当整条都是注入才标记;带 <system-reminder> 前缀的正常人类
+// turn 不算(那些块在渲染时剥离,保留人类文本)。
+export interface SystemEventInfo {
+  /** Which injection dominates the message — drives icon + label. */
+  variant:
+    | "task-notification"
+    | "system-reminder"
+    | "caveat"
+    | "generic";
+  /** One-line summary for the card / bubble headline. Derived from
+   *  the injection's structured fields (task-notification's
+   *  <summary>) or the first meaningful line, trimmed. */
+  summary: string;
+  /** task-notification only: the background task's terminal status,
+   *  mapped to a ✅/❌ affordance by the renderer. */
+  status?: "completed" | "failed";
+}
+
 export interface ChatNode extends NodeBase {
   // ``kind: "chat"`` discriminates ChatNode from WorkNode in code that
   // works against ``NodeBase``. Cards / chrome that need to switch
@@ -424,6 +467,12 @@ export interface ChatNode extends NodeBase {
   /** When set: this ChatNode is a slash-command invocation, not a real
    * conversation turn. Render specially. */
   slashCommand?: SlashCommandInfo;
+  /** v2.7: when set, this ChatNode's user message is purely a harness-
+   * injected system event (task-notification / system-reminder /
+   * caveat), not a human prompt. Render with the "system event"
+   * chrome. See SystemEventInfo. Mutually exclusive with slashCommand
+   * (slash has its own kind). 中: 系统事件 turn,见 SystemEventInfo。 */
+  systemEvent?: SystemEventInfo;
   /** v0.8: cross-session fork pointer. CC `/branch` writes this on
    * every record copied into the new fork session; parser hoists it to
    * the ChatNode (multiple records inside one ChatNode share the same
