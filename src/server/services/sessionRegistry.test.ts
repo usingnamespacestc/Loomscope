@@ -1067,6 +1067,75 @@ describe("SessionRegistry", () => {
       expect(reg.getDeferralState(SID)).toBeNull();
     });
   });
+
+  describe("v2.6 shared buildQueryOptions — spawnNewSession parity", () => {
+    // spawn / spawnNewSession used to hand-write near-identical
+    // options objects that had drifted: spawnNewSession wired neither
+    // canUseTool nor hooks, so a brand-new session's FIRST turn fell
+    // back to SDK-default permission handling (no browser banner).
+    // 中: 两处 options 已漂移(新建 session 首轮缺 canUseTool/hooks),
+    // 回归测试锁住共享 builder 的行为。
+    it("spawnNewSession passes canUseTool + settingSources like spawn does", async () => {
+      let newParams: Parameters<QueryFactory>[0] | null = null;
+      const { factory } = makeFactory((fake, params) => {
+        newParams = params;
+        fake.emitInit(SID); // discovery loop needs the init frame
+      });
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "default",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+      });
+      const r = await reg.spawnNewSession(CWD, { text: "hi", images: [] });
+      expect(r.sessionId).toBe(SID);
+      const opts = newParams!.options!;
+      expect(typeof opts.canUseTool).toBe("function");
+      expect(opts.settingSources).toEqual(["user", "project", "local"]);
+      expect(opts.permissionMode).toBe("default");
+      // No resume for a brand-new session.
+      expect(opts.resume).toBeUndefined();
+      await reg.close(SID);
+    });
+
+    it("spawnNewSession's canUseTool broadcasts under the DISCOVERED sid", async () => {
+      let newParams: Parameters<QueryFactory>[0] | null = null;
+      const { factory } = makeFactory((fake, params) => {
+        newParams = params;
+        fake.emitInit(SID);
+      });
+      const reg = new SessionRegistry({
+        useApiKey: false,
+        permissionMode: "default",
+        queryFactory: factory,
+        idleTimeoutMin: 0,
+      });
+      await reg.spawnNewSession(CWD, { text: "hi", images: [] });
+      const captured = captureSse(SID);
+
+      // Fire the canUseTool the SDK would call before a tool runs.
+      // The sid getter must resolve to the init-frame sid (it was
+      // null when the options object was built).
+      const canUseTool = newParams!.options!.canUseTool!;
+      const decision = canUseTool(
+        "Bash",
+        { command: "ls" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tu-test-1",
+        },
+      );
+      await flush();
+      const evt = captured.find((m) => m.event === "permission-prompt");
+      expect(evt).toBeDefined();
+      const data = evt!.data as { sessionId: string; promptId: string };
+      expect(data.sessionId).toBe(SID);
+      // Answer it so the pending Promise doesn't leak into other tests.
+      reg.resolvePermissionPrompt(data.promptId, { behavior: "deny" });
+      await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+      await reg.close(SID);
+    });
+  });
 });
 
 // Yields once to let pending microtasks (in the async pump driver

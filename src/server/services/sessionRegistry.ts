@@ -50,7 +50,12 @@ import {
   type PermissionRule,
 } from "@/server/services/permissionRules";
 import { broadcast } from "@/server/services/sseHub";
-import type { QueryFactory, Query, SDKUserMessage } from "@/server/services/sdkAdapter";
+import type {
+  Options,
+  QueryFactory,
+  Query,
+  SDKUserMessage,
+} from "@/server/services/sdkAdapter";
 
 export type Priority = "now" | "next" | "later";
 
@@ -1209,7 +1214,16 @@ export class SessionRegistry {
    *  sessionId in the closure so the broadcast goes to the right SSE
    *  channel + the pending entry stamps which session originated.
    *  Returns the callback function (not invoked here). */
-  private makeCanUseToolCallback(sessionId: string) {
+  /** v2.6: takes a GETTER rather than a bound sid so `spawnNewSession`
+   *  can wire canUseTool before CC has told us the new session's id —
+   *  the closure captures the local `sid` variable that the init frame
+   *  fills in. SDK 0.2.x emits system/init before any tool call, so
+   *  the getter is non-null by the time this ever fires; the null
+   *  branch is a defensive deny (visible, not a hang) in case a future
+   *  SDK reorders frames.
+   *  中: 参数改成 getter,让新建 session 在拿到 sid 之前就能接上
+   *  canUseTool;init 帧先于任何工具调用,真正触发时 sid 必已就位。 */
+  private makeCanUseToolCallback(getSessionId: () => string | null) {
     type PermissionResultLike =
       | { behavior: "allow"; updatedInput?: Record<string, unknown> }
       | { behavior: "deny"; message: string; interrupt?: boolean };
@@ -1225,6 +1239,14 @@ export class SessionRegistry {
         blockedPath?: string;
       },
     ): Promise<PermissionResultLike> => {
+      const sessionId = getSessionId();
+      if (!sessionId) {
+        return {
+          behavior: "deny",
+          message:
+            "Loomscope: 会话 id 尚未就绪,无法弹出权限确认(SDK 在 init 帧之前触发了工具调用)",
+        };
+      }
       // Hot path: saved rule matches → synchronous allow/deny, no
       // browser round-trip. The SDK only cares about behavior; we
       // return a minimal allow object for matched rules.
@@ -1319,6 +1341,107 @@ export class SessionRegistry {
     };
   }
 
+  /**
+   * v2.6: single source of truth for SDK `query()` options — `spawn`
+   * and `spawnNewSession` used to hand-write near-identical ~90-line
+   * objects, and they had already drifted: `spawnNewSession` wired
+   * neither `canUseTool` nor `hooks`, so a brand-new session's FIRST
+   * turn silently fell back to SDK-default permission handling (no
+   * browser banner) and emitted no SDK-path hook events.
+   * 中: spawn / spawnNewSession 各写一份 options 已经漂移(新建
+   * session 首轮既没 canUseTool 也没 hooks)——收敛到这一个 builder。
+   *
+   * ── auth: prefer subscription (OAuth) over API key billing ──
+   * The spawned `claude` binary picks `ANTHROPIC_API_KEY` env over
+   * `~/.claude/.credentials.json` when both are present, which
+   * silently shifts billing from the user's claude.ai subscription to
+   * per-token API credits. Loomscope server may inherit
+   * `ANTHROPIC_API_KEY` (e.g. launched via `npm run dev` nested in an
+   * existing Claude Code session, or exported for unrelated tooling).
+   * Strip it unless the user explicitly toggled `useApiKey` on in
+   * Settings.
+   *
+   * ── settingSources ──
+   * CRITICAL for hooks: SDK's `query()` defaults `settingSources` to
+   * `[]`, which means NO settings.json sources load into the spawned
+   * CC — user/project/local hooks (PreToolUse / PostToolUse / ...)
+   * would never fire. The `sdk.d.ts` comment claims "when omitted,
+   * all sources are loaded" but the actual runtime is
+   * `settingSources ?? []` — the doc is wrong. Loomscope's
+   * observability (cc-hook events reaching the browser SSE bus)
+   * depends on hooks firing, so pass the full set explicitly.
+   *
+   * ── allowDangerouslySkipPermissions ──
+   * bypassPermissions requires this opt-in flag per the SDK contract;
+   * without it the SDK silently downgrades to default permissionMode
+   * (in non-TTY context = silent deny on every gated tool). The user
+   * explicitly chose bypassPermissions via Settings; respect it.
+   *
+   * ── hooks (SDK programmatic path) ──
+   * Registers every hook event as a JS callback publishing onto the
+   * in-process `hookEventBus` — same bus `/api/cc-hook` publishes
+   * onto for terminal CC; `hookSseForwarder` bridges to SSE. Gated on
+   * `enableHookSdkPath`. Both this AND settingSources are needed:
+   * settings.json hooks drive terminal CC the user runs
+   * independently; programmatic hooks only flow when the SDK runs CC.
+   *
+   * ── canUseTool ──
+   * Loomscope's interactive tool-permission mediation: saved-rule
+   * pre-check, else broadcast `permission-prompt` SSE + Promise
+   * resolved by the HTTP decision endpoint; SDK abort signal rejects.
+   * bypassPermissions mode skips canUseTool entirely (SDK side).
+   */
+  private buildQueryOptions(args: {
+    cwd: string;
+    /** Resume an existing session; omit for a brand-new one (CC then
+     * generates a fresh sid). */
+    resumeSessionId?: string;
+    /** Sid resolver for canUseTool — a getter because a brand-new
+     * session only learns its sid from the first SDK frame. */
+    getSessionId: () => string | null;
+  }): Options {
+    const childEnv = { ...process.env };
+    if (!this.opts.useApiKey) {
+      delete childEnv.ANTHROPIC_API_KEY;
+    }
+    return {
+      cwd: args.cwd,
+      ...(args.resumeSessionId !== undefined && {
+        resume: args.resumeSessionId,
+      }),
+      env: childEnv,
+      permissionMode: this.opts.permissionMode,
+      // v1.3 R2: forward Composer settings popover knobs. Each is
+      // opt-in (only included when set) so unset ones fall back to
+      // SDK default. setModel/setEffort/setFastMode mutate this.opts
+      // in real time; respawnPerSend=true picks them up on the very
+      // next spawn.
+      ...(this.opts.model !== undefined && { model: this.opts.model }),
+      ...(this.opts.effort !== undefined && { effort: this.opts.effort }),
+      ...(this.opts.fastMode !== undefined && {
+        fastMode: this.opts.fastMode,
+      }),
+      settingSources: ["user", "project", "local"],
+      allowDangerouslySkipPermissions:
+        this.opts.permissionMode === "bypassPermissions",
+      // v1.6: when resolveClaudePath() locates a working CC binary
+      // (e.g. user's ~/.local/bin/claude on WSL where SDK's bundled
+      // musl variant fails), pass it through so SDK skips its own
+      // platform-variant auto-detection.
+      ...(this.opts.pathToClaudeCodeExecutable !== undefined && {
+        pathToClaudeCodeExecutable: this.opts.pathToClaudeCodeExecutable,
+      }),
+      hooks:
+        this.opts.enableHookSdkPath !== false
+          ? buildSdkHooksMap({
+              loomscopePort: this.opts.loomscopePort,
+              enableHookHttpPath: this.opts.enableHookHttpPath,
+            })
+          : undefined,
+      canUseTool: this.makeCanUseToolCallback(args.getSessionId),
+    };
+  }
+
   private async spawn(sessionId: string, cwd: string): Promise<SessionEntry> {
     const pumpController = new AsyncQueueController<SDKUserMessage>();
     const entry: SessionEntry = {
@@ -1338,127 +1461,16 @@ export class SessionRegistry {
     };
 
     // Start the Query with the AsyncIterable input form so we can
-    // streamInput multiple turns through the same Query.
-    //
-    // ── auth: prefer subscription (OAuth) over API key billing ──
-    // The spawned `claude` binary picks `ANTHROPIC_API_KEY` env over
-    // `~/.claude/.credentials.json` when both are present, which
-    // silently shifts billing from the user's claude.ai subscription
-    // to per-token API credits. Loomscope server may inherit
-    // `ANTHROPIC_API_KEY` (e.g. when launched via `npm run dev`
-    // nested inside an existing Claude Code session, or simply
-    // because the user exported it for unrelated tooling). Strip it
-    // here unless the user has explicitly toggled `useApiKey` on
-    // in Settings (preferences.useApiKey). Mutable via
-    // setUseApiKey() so PATCH /preferences is live.
-    const childEnv = { ...process.env };
-    if (!this.opts.useApiKey) {
-      delete childEnv.ANTHROPIC_API_KEY;
-    }
+    // streamInput multiple turns through the same Query. Options come
+    // from the shared builder — see buildQueryOptions for the
+    // auth / settingSources / hooks / canUseTool rationale.
     const query = this.opts.queryFactory({
       prompt: pumpController.iterable(),
-      options: {
+      options: this.buildQueryOptions({
         cwd,
-        resume: sessionId,
-        env: childEnv,
-        permissionMode: this.opts.permissionMode,
-        // v1.3 R2: forward Composer settings popover knobs. Each
-        // is opt-in (only included when set) so unset ones fall
-        // back to SDK default — matches "what would the CLI do
-        // with no flag?" baseline. SetModel/setEffort/setFastMode
-        // mutate this.opts in real time; respawnPerSend=true picks
-        // them up on the very next spawn (= the dispatch the
-        // turns-route is currently driving).
-        ...(this.opts.model !== undefined && { model: this.opts.model }),
-        ...(this.opts.effort !== undefined && { effort: this.opts.effort }),
-        ...(this.opts.fastMode !== undefined && {
-          fastMode: this.opts.fastMode,
-        }),
-        // ──────────────────────────────────────────────────────────
-        // CRITICAL for hooks: SDK's `query()` defaults
-        // `settingSources` to `[]` (empty), which means NO
-        // settings.json sources are loaded into the spawned CC —
-        // so user/project/local hooks (PreToolUse / PostToolUse /
-        // SessionStart / TaskCreated / etc.) DO NOT fire. The
-        // `sdk.d.ts` comment claims "When omitted, all sources are
-        // loaded" but the actual minified runtime is
-        // `settingSources ?? []` — the doc is wrong.
-        //
-        // Loomscope's whole observability story (cc-hook events
-        // reaching the browser SSE bus) depends on hooks firing,
-        // so we explicitly pass the full source set. This matches
-        // CLI behavior — terminal-launched `claude` reads all three
-        // — and is why terminal CC fires hooks but SDK-spawn CC
-        // never did before this fix.
-        // ──────────────────────────────────────────────────────────
-        settingSources: ["user", "project", "local"],
-        // bypassPermissions requires this opt-in flag per the SDK
-        // contract: "Must be set to `true` when using
-        // `permissionMode: 'bypassPermissions'`". Without it, the
-        // SDK silently downgrades to default permissionMode (which
-        // in non-TTY context = silent deny on every tool that needs
-        // approval). User has explicitly chosen bypassPermissions
-        // via Settings → v∞ tab; respecting that intent.
-        allowDangerouslySkipPermissions:
-          this.opts.permissionMode === "bypassPermissions",
-        // v1.6: when resolveClaudePath() locates a working CC binary
-        // (e.g. user's ~/.local/bin/claude on WSL where SDK's bundled
-        // musl variant fails), pass it through so SDK skips its own
-        // platform-variant auto-detection.
-        ...(this.opts.pathToClaudeCodeExecutable !== undefined && {
-          pathToClaudeCodeExecutable: this.opts.pathToClaudeCodeExecutable,
-        }),
-        // ──────────────────────────────────────────────────────────
-        // Programmatic hooks. SDK provides `options.hooks` so we
-        // register ALL hook events as JS callbacks that publish onto
-        // the existing in-process `hookEventBus`. The bus is the
-        // same one `/api/cc-hook` route publishes onto for terminal
-        // CC; the existing `hookSseForwarder` then bridges to the
-        // SSE bus untouched. Net effect: SDK-spawn CC's hook events
-        // reach the browser the same way terminal CC's do, but
-        // without going out over HTTP / needing LOOMSCOPE_SECRET /
-        // depending on settings.json being readable.
-        //
-        // Why both this AND `settingSources` above: settings.json
-        // hooks still drive terminal CC instances the user runs
-        // independently. Programmatic hooks here only flow when the
-        // SDK is the one running CC (Loomscope-spawned). Both paths
-        // converge on the same SSE bus.
-        // ──────────────────────────────────────────────────────────
-        // Gated on `enableHookSdkPath` — when false, no programmatic
-        // callbacks register and SDK CC's hook events flow only via
-        // the settings.json HTTP path (assuming that's still on).
-        // Default: true. Live-flippable via setEnableHookSdkPath but
-        // the next-spawn caveat applies; in-flight Query keeps its
-        // original wiring.
-        hooks:
-          this.opts.enableHookSdkPath !== false
-            ? buildSdkHooksMap({
-                loomscopePort: this.opts.loomscopePort,
-                enableHookHttpPath: this.opts.enableHookHttpPath,
-              })
-            : undefined,
-        // ──────────────────────────────────────────────────────────
-        // v∞.3 PR1: canUseTool — Loomscope's chance to mediate
-        // tool-permission requests interactively. SDK fires this
-        // before each tool call (in modes that ask: 'default',
-        // 'acceptEdits' for non-Edit tools, 'plan' for non-readonly).
-        // Flow:
-        //   1. Pre-check the in-memory rules cache. If a saved
-        //      "always allow X" rule matches → return allow
-        //      synchronously, no browser round-trip.
-        //   2. Otherwise generate a promptId, broadcast
-        //      `permission-prompt` SSE event with tool details, and
-        //      return a Promise that the HTTP decision endpoint
-        //      resolves when the user clicks a banner button.
-        //   3. SDK abort signal → reject pending Promise + remove
-        //      from map (e.g. user clicked Stop while waiting).
-        //
-        // bypassPermissions mode skips canUseTool entirely (SDK side)
-        // — those users have explicitly opted out of permission
-        // gating, so no prompts fire.
-        canUseTool: this.makeCanUseToolCallback(sessionId),
-      },
+        resumeSessionId: sessionId,
+        getSessionId: () => sessionId,
+      }),
     });
     entry.query = query;
     this.entries.set(sessionId, entry);
@@ -1525,43 +1537,23 @@ export class SessionRegistry {
     },
   ): Promise<{ sessionId: string; itemId: string }> {
     const pumpController = new AsyncQueueController<SDKUserMessage>();
-    const childEnv = { ...process.env };
-    if (!this.opts.useApiKey) {
-      delete childEnv.ANTHROPIC_API_KEY;
-    }
+    // v2.6: sid holder, filled in once the init frame lands. Lets the
+    // shared builder wire canUseTool (and hooks) for a brand-new
+    // session BEFORE its sid exists — previously this path passed
+    // neither, so the first turn silently fell back to SDK-default
+    // permission handling (no browser banner) and emitted no SDK-path
+    // hook events. SDK 0.2.x emits system/init before any tool call,
+    // so the getter is non-null by the time canUseTool can fire.
+    // 中: 先占个 sid 坑,init 帧一到就填上——新建 session 首轮从此也有
+    // canUseTool + hooks(以前两者都缺)。
+    let discoveredSid: string | null = null;
     const query = this.opts.queryFactory({
       prompt: pumpController.iterable(),
-      options: {
+      options: this.buildQueryOptions({
         cwd,
-        // NO resume — CC creates a fresh sid.
-        env: childEnv,
-        permissionMode: this.opts.permissionMode,
-        ...(this.opts.model !== undefined && { model: this.opts.model }),
-        ...(this.opts.effort !== undefined && { effort: this.opts.effort }),
-        ...(this.opts.fastMode !== undefined && {
-          fastMode: this.opts.fastMode,
-        }),
-        settingSources: ["user", "project", "local"],
-        allowDangerouslySkipPermissions:
-          this.opts.permissionMode === "bypassPermissions",
-        // v1.6: when resolveClaudePath() locates a working CC binary
-        // (e.g. user's ~/.local/bin/claude on WSL where SDK's bundled
-        // musl variant fails), pass it through so SDK skips its own
-        // platform-variant auto-detection.
-        ...(this.opts.pathToClaudeCodeExecutable !== undefined && {
-          pathToClaudeCodeExecutable: this.opts.pathToClaudeCodeExecutable,
-        }),
-        // Reuse the same hook callback builder so SDK CC events flow
-        // onto the existing in-process bus. canUseTool can't bind to
-        // a sid yet (we don't have one); pass a placeholder closure
-        // that we'll rebind once the sid lands. Acceptable because
-        // canUseTool typically doesn't fire before init.
-        // For simplicity, defer canUseTool wiring until the entry
-        // exists — register it after sid is known via
-        // makeCanUseToolCallback. Passing undefined here means CC's
-        // default permission flow handles tools until that moment;
-        // first-turn permission prompts on a fresh session are rare.
-      },
+        // NO resumeSessionId — CC creates a fresh sid.
+        getSessionId: () => discoveredSid,
+      }),
     });
 
     // Push the prompt immediately. The SDK will start its run as
@@ -1619,6 +1611,8 @@ export class SessionRegistry {
       if (candidate) {
         firstMsg = msg;
         sid = candidate;
+        // v2.6: arm the canUseTool getter (see holder above).
+        discoveredSid = candidate;
         break;
       }
       // No sid on this frame — drop it (we don't have an entry to
