@@ -475,5 +475,14 @@
       "retry_now": "retry now",
       "retry_now_tooltip": "Force-resume sending. If Anthropic still rejects, deferral re-arms."
     }
+  },
+  "system_event": {
+    "label": "System event",
+    "variant_task-notification": "Background task",
+    "variant_system-reminder": "System reminder",
+    "variant_caveat": "System notice",
+    "variant_generic": "System event",
+    "expand_raw": "Show raw",
+    "collapse_raw": "Hide raw"
   }
 }

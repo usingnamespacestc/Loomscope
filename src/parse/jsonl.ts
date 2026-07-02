@@ -27,6 +27,8 @@ import type {
   FileHistorySnapshot,
   FlowEvent,
   OrphanRecord,
+  SlashCommandInfo,
+  SystemEventInfo,
 } from "@/data/types";
 import {
   blocksOf,
@@ -1212,6 +1214,12 @@ function buildChatNode(
 
   const compactWorkNode = workflow.nodes.find((n) => n.kind === "compact");
   const slashCommand = detectSlashCommand(bucket.records);
+  // v2.7: mark turns whose user message is purely a harness-injected
+  // system event (task-notification / system-reminder / caveat) so the
+  // card + bubble render semantic chrome instead of raw XML. Mutually
+  // exclusive with slashCommand (passed so it can bail early).
+  // 中: 标记纯系统事件 turn,卡片/气泡走语义样式而非原始 XML。
+  const systemEvent = detectSystemEvent(rootUser, slashCommand);
   // v0.8: hoist forkedFrom onto the ChatNode. CC `/branch` writes
   // forkedFrom on every record copied into the new fork session, but
   // `messageUuid` is the COPIED RECORD'S OWN uuid (different per
@@ -1247,6 +1255,7 @@ function buildChatNode(
     compactMetadata:
       compactWorkNode && compactWorkNode.kind === "compact" ? compactWorkNode : undefined,
     slashCommand,
+    systemEvent,
     forkedFrom,
     contributingSessions,
     meta,
@@ -1325,6 +1334,129 @@ function detectSlashCommand(records: RawRecord[]) {
 function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
   return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+}
+
+// ─── v2.7: system-event turn detection ───────────────────────────────
+//
+// A ChatNode whose user record is ENTIRELY a harness-injected system
+// event (not a human prompt). See SystemEventInfo in data/types.ts for
+// the design + why "entirely" matters (a real turn that merely carries
+// a <system-reminder> prefix is NOT one of these).
+//
+// 中: 整条 user 记录纯是 harness 注入的系统事件(非人类输入)。见
+// data/types.ts 的 SystemEventInfo。"整条" 是关键——带 <system-reminder>
+// 前缀的正常人类 turn 不算。
+const SYSTEM_EVENT_TAGS = [
+  "task-notification",
+  "system-reminder",
+  "local-command-caveat",
+] as const;
+
+function contentToPlainText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => {
+        if (b && typeof b === "object") {
+          const blk = b as { type?: unknown; text?: unknown };
+          if (blk.type === "text" && typeof blk.text === "string") {
+            return blk.text;
+          }
+        }
+        return "";
+      })
+      .join("\n");
+  }
+  return "";
+}
+
+function tagRegex(tag: string): RegExp {
+  // <tag ...>...</tag>, non-greedy, across newlines.
+  return new RegExp(`<${tag}(?:\\s[^>]*)?>[\\s\\S]*?</${tag}>`, "g");
+}
+
+function collapseWhitespace(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** First non-empty line of `s`, collapsed + capped, for a headline.
+ *  中: 取首个非空行,压空白 + 截断,当摘要标题。 */
+function firstMeaningfulLine(s: string, cap = 140): string {
+  for (const raw of s.split("\n")) {
+    const line = collapseWhitespace(raw);
+    if (line) return line.length > cap ? line.slice(0, cap - 1) + "…" : line;
+  }
+  return "";
+}
+
+// Detect a pure system-event turn. Returns undefined when the message
+// is a slash command (own kind), carries real human text alongside the
+// injection, or contains no recognised injection.
+// 中: 识别纯系统事件 turn;slash / 混入人类文本 / 无已知注入 → undefined。
+function detectSystemEvent(
+  rootUser: RawRecord,
+  slashCommand: SlashCommandInfo | undefined,
+): SystemEventInfo | undefined {
+  if (slashCommand) return undefined;
+  const text = contentToPlainText(rootUser.message?.content ?? rootUser.content);
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+
+  // Strip every known injection block. Anything non-whitespace left
+  // over means real human text is present → NOT a pure system event.
+  // 中: 剥掉所有已知注入块;还剩非空白 = 有人类文本,不算纯系统事件。
+  let residue = trimmed;
+  let sawInjection = false;
+  for (const tag of SYSTEM_EVENT_TAGS) {
+    if (tagRegex(tag).test(residue)) sawInjection = true;
+    residue = residue.replace(tagRegex(tag), "");
+  }
+  if (!sawInjection) return undefined;
+  if (collapseWhitespace(residue) !== "") return undefined;
+
+  // Dominant variant = the injection block that appears FIRST.
+  // 中: 主 variant = 最先出现的注入块。
+  let firstTag: (typeof SYSTEM_EVENT_TAGS)[number] | null = null;
+  let firstIdx = Infinity;
+  for (const tag of SYSTEM_EVENT_TAGS) {
+    const idx = trimmed.search(new RegExp(`<${tag}(?:\\s[^>]*)?>`));
+    if (idx >= 0 && idx < firstIdx) {
+      firstIdx = idx;
+      firstTag = tag;
+    }
+  }
+  if (!firstTag) return undefined;
+
+  if (firstTag === "task-notification") {
+    const sum = trimmed.match(/<summary>([\s\S]*?)<\/summary>/);
+    const st = trimmed.match(/<status>([\s\S]*?)<\/status>/);
+    const statusRaw = st ? collapseWhitespace(st[1]).toLowerCase() : "";
+    const status: SystemEventInfo["status"] =
+      statusRaw === "completed"
+        ? "completed"
+        : statusRaw
+          ? "failed"
+          : undefined;
+    const summary = sum
+      ? firstMeaningfulLine(sum[1])
+      : status
+        ? `Background task ${status}`
+        : "Background task update";
+    return { variant: "task-notification", summary, status };
+  }
+
+  // system-reminder / caveat: no structured summary — use the block's
+  // inner first line. 中: 无结构化摘要,取块内首行。
+  const inner = trimmed.match(tagRegex(firstTag));
+  const innerText = inner
+    ? inner[0].replace(new RegExp(`</?${firstTag}(?:\\s[^>]*)?>`, "g"), "")
+    : trimmed;
+  const variant: SystemEventInfo["variant"] =
+    firstTag === "system-reminder" ? "system-reminder" : "caveat";
+  return {
+    variant,
+    summary: firstMeaningfulLine(innerText) || "System notice",
+  };
 }
 
 function linkChatNodeParents(

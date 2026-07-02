@@ -1118,7 +1118,13 @@ function MessageBubbleImpl({
     () => extractBlocks(chatNode.userMessage.content),
     [chatNode],
   );
-  const hasUserContent = userBlocks.length > 0;
+  // v2.7: system-event turn (task-notification / system-reminder /
+  // caveat that is purely harness injection) — render a centered slate
+  // strip instead of the human blue bubble, with the raw text on
+  // expand. See SystemEventInfo. 中: 系统事件 turn 用居中灰条替代蓝
+  // 气泡,原文可展开。
+  const systemEvent = chatNode.systemEvent;
+  const hasUserContent = !systemEvent && userBlocks.length > 0;
   // EN: bubble-local lightbox state. Single instance per bubble is
   // fine — only one image (or future file preview) is open at a time
   // per user click. Lightbox portal-renders so layering isn't an
@@ -1129,6 +1135,9 @@ function MessageBubbleImpl({
   // useState 够用；Lightbox 用 portal，不会跟 bubble 层级打架。
   // 未来如果别处也要用同一套，再抽到 context。
   const [lightbox, setLightbox] = useState<LightboxContent | null>(null);
+  // v2.7: system-event raw-text expand (see systemEvent above).
+  const { t: tBubble } = useTranslation();
+  const [sysRawExpanded, setSysRawExpanded] = useState(false);
   // v0.10 lazy ChatFlow B5: full assistant markdown lives on
   // workflow.nodes which the lite endpoint strips. ConversationView
   // owns the staggered fetch sequencing for the visible slice (passes
@@ -1311,6 +1320,55 @@ function MessageBubbleImpl({
         isRunning ? "loomscope-running-pulse" : "",
       ].join(" ")}
     >
+      {/* v2.7: system-event strip — centered slate, not a human bubble.
+          The raw injected text is available on expand (transcript-
+          viewer fidelity). 中: 系统事件居中灰条,非人类气泡,原文可展开。 */}
+      {systemEvent && (
+        <div
+          className="mb-2 flex justify-center"
+          data-testid={`system-event-strip-${chatNode.id}`}
+        >
+          <div className="w-full max-w-[92%] rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5">
+            <div className="flex items-center gap-1.5 text-[11px] text-slate-600">
+              <span
+                className="font-semibold shrink-0"
+                data-variant={systemEvent.variant}
+              >
+                ⚙ {tBubble(`system_event.variant_${systemEvent.variant}`)}
+              </span>
+              {systemEvent.status === "completed"
+                ? <span className="shrink-0">✅</span>
+                : systemEvent.status === "failed"
+                  ? <span className="shrink-0">❌</span>
+                  : null}
+              <span className="text-slate-500 truncate">
+                · {systemEvent.summary}
+              </span>
+              <button
+                type="button"
+                data-testid={`system-event-raw-toggle-${chatNode.id}`}
+                className="ml-auto shrink-0 text-[10px] text-slate-400 hover:text-slate-600 hover:underline cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSysRawExpanded((v) => !v);
+                }}
+              >
+                {sysRawExpanded
+                  ? tBubble("system_event.collapse_raw")
+                  : tBubble("system_event.expand_raw")}
+              </button>
+            </div>
+            {sysRawExpanded && (
+              <pre
+                className="mt-1.5 m-0 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-100 p-2 text-[10px] font-mono text-slate-600"
+                data-testid={`system-event-raw-${chatNode.id}`}
+              >
+                {userText}
+              </pre>
+            )}
+          </div>
+        </div>
+      )}
       {hasUserContent && (
         <div className="mb-2 flex items-end justify-end gap-2">
           {/* "复制" sits to the LEFT of the bubble, bottom-aligned.

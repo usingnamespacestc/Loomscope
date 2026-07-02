@@ -7,7 +7,7 @@
 // choice 1C' / 2A.
 
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
 import type { ReactNode } from "react";
 
@@ -70,6 +70,7 @@ function nodeProps(cn: ChatNode) {
       contextTokens: 0,
       maxContextTokens: 200_000,
       slashCommand: cn.slashCommand,
+      systemEvent: cn.systemEvent,
       hasIncomingEdge: false,
       hasOutgoingEdge: false,
     },
@@ -217,6 +218,51 @@ describe("ChatNodeCard — compact branch", () => {
     // Chips row was completely absent on the old CompactCard. Now
     // unified — llm-count chip should be discoverable for compact too.
     expect(screen.getByTestId(`chat-node-${cn.id}-llm-count`)).toBeTruthy();
+  });
+});
+
+describe("ChatNodeCard — system event branch (v2.7)", () => {
+  it("renders slate chrome + ⚙ badge + summary for a task-notification", () => {
+    const cn = makeChatNode({
+      id: "p-sys",
+      isCompactSummary: false,
+      systemEvent: {
+        variant: "task-notification",
+        summary: "Docker 4-gate completed",
+        status: "completed",
+      },
+    });
+    render(withRF(<ChatNodeCard {...nodeProps(cn)} />));
+    const card = screen.getByTestId("chat-node-p-sys");
+    expect(card.dataset.kind).toBe("system");
+    expect(card.className).toMatch(/slate/);
+    const badge = screen.getByTestId("system-event-badge");
+    expect(badge.dataset.variant).toBe("task-notification");
+    expect(badge.textContent).toMatch(/✅/);
+    expect(screen.getByTestId("system-event-summary").textContent).toContain(
+      "Docker 4-gate completed",
+    );
+  });
+
+  it("shows ❌ for a failed status and no status glyph when absent", () => {
+    const failed = makeChatNode({
+      id: "p-fail",
+      isCompactSummary: false,
+      systemEvent: { variant: "task-notification", summary: "boom", status: "failed" },
+    });
+    render(withRF(<ChatNodeCard {...nodeProps(failed)} />));
+    expect(screen.getByTestId("system-event-badge").textContent).toMatch(/❌/);
+    cleanup();
+
+    const reminder = makeChatNode({
+      id: "p-rem",
+      isCompactSummary: false,
+      systemEvent: { variant: "system-reminder", summary: "a reminder" },
+    });
+    render(withRF(<ChatNodeCard {...nodeProps(reminder)} />));
+    const badge = screen.getByTestId("system-event-badge");
+    expect(badge.dataset.variant).toBe("system-reminder");
+    expect(badge.textContent).not.toMatch(/[✅❌]/);
   });
 });
 
