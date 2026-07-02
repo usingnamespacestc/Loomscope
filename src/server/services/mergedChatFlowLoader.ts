@@ -312,7 +312,7 @@ export async function peekNewRecordsForDelta(args: {
       parseFailures: prevState.parseFailures,
       byteSize: prevState.byteSize,
       mtimeMs: prevState.mtimeMs,
-      pendingFragment: prevState.pendingFragment,
+      pendingBytes: prevState.pendingBytes,
     });
     return r.usedIncremental ? r.records.slice(prevCount) : [];
   }
@@ -336,7 +336,7 @@ export async function peekNewRecordsForDelta(args: {
       parseFailures: prevState.parseFailures,
       byteSize: prevState.byteSize,
       mtimeMs: prevState.mtimeMs,
-      pendingFragment: prevState.pendingFragment,
+      pendingBytes: prevState.pendingBytes,
     });
     // INTENTIONALLY do NOT write r.state back. See docblock.
     if (!r.usedIncremental) continue;

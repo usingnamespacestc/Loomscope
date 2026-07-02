@@ -1560,7 +1560,7 @@ describe("parseJsonlFileIncremental (M0 — v0.10 收尾 / v0.11 prep)", () => {
     expect(r.usedIncremental).toBe(false);
     expect(r.state.records.length).toBeGreaterThan(0);
     expect(r.state.byteSize).toBe(initial.length);
-    expect(r.state.pendingFragment).toBe("");
+    expect(r.state.pendingBytes.length).toBe(0);
     // ChatFlow shape matches a full parse on the same input.
     const fullRef = await parseJsonlFile(jsonlPath);
     expect(r.chatFlow.chatNodes.length).toBe(fullRef.chatFlow.chatNodes.length);
@@ -1646,20 +1646,20 @@ describe("parseJsonlFileIncremental (M0 — v0.10 收尾 / v0.11 prep)", () => {
     expect(second.chatFlow.chatNodes[0]?.userMessage.content).toBe("BBBB");
   });
 
-  it("partial-line tail (no trailing \\n) is buffered into pendingFragment and consumed on the next call", async () => {
+  it("partial-line tail (no trailing \\n) is buffered into pendingBytes and consumed on the next call", async () => {
     const recs = buildSyntheticRecords();
     const head = recordsToJsonl(recs.slice(0, 4));
     await fsp.writeFile(jsonlPath, head, "utf8");
     const first = await parseJsonlFileIncremental(jsonlPath, undefined);
 
     // Append a half-written line — no trailing \n. Incremental should
-    // hold it in pendingFragment and emit no new records yet.
+    // hold it in pendingBytes and emit no new records yet.
     const halfRecord = JSON.stringify(recs[4]);
     const halfChunk = halfRecord.slice(0, Math.floor(halfRecord.length / 2));
     await fsp.appendFile(jsonlPath, halfChunk, "utf8");
     const second = await parseJsonlFileIncremental(jsonlPath, first.state);
     expect(second.usedIncremental).toBe(true);
-    expect(second.state.pendingFragment.length).toBeGreaterThan(0);
+    expect(second.state.pendingBytes.length).toBeGreaterThan(0);
     expect(second.state.records.length).toBe(first.state.records.length);
 
     // Complete the line + add the rest.
@@ -1667,10 +1667,56 @@ describe("parseJsonlFileIncremental (M0 — v0.10 收尾 / v0.11 prep)", () => {
     await fsp.appendFile(jsonlPath, completion, "utf8");
     const third = await parseJsonlFileIncremental(jsonlPath, second.state);
     expect(third.usedIncremental).toBe(true);
-    expect(third.state.pendingFragment).toBe("");
+    expect(third.state.pendingBytes.length).toBe(0);
     // All records present + equivalent to a fresh parse.
     const fresh = await parseJsonlFile(jsonlPath);
     expect(third.chatFlow.chatNodes.length).toBe(fresh.chatFlow.chatNodes.length);
+  });
+
+  it("#4b: tear inside a multibyte UTF-8 character between incremental reads — record survives intact", async () => {
+    // Pre-#4b the tail resume used `createReadStream({ encoding:
+    // "utf8", start })`: the StringDecoder swallowed the incomplete
+    // leading bytes of the torn character (they were counted in
+    // byteSize but never emitted), so the completed line re-read from
+    // `start` was permanently corrupt → silent parseFailures++ and a
+    // lost record. Fixtures were all-ASCII, which is why tests never
+    // caught it — real transcripts are full of CJK.
+    // 中: 断点落在多字节字符中间时,utf8 流会吞掉半个字符;改成字节
+    // 切行后整条记录完整存活。
+    const mk = (uuid: string, content: string) =>
+      JSON.stringify({
+        type: "user",
+        uuid,
+        sessionId: "s",
+        promptId: uuid,
+        message: { role: "user", content },
+      }) + "\n";
+    const line1 = mk("u1", "hello ascii");
+    const line2 = mk("u2", "中文边界测试🎉");
+    await fsp.writeFile(jsonlPath, line1, "utf8");
+    const first = await parseJsonlFileIncremental(jsonlPath, undefined);
+    expect(first.chatFlow.chatNodes.length).toBe(1);
+
+    // Append line2 torn INSIDE the 3-byte sequence of "中".
+    const l2buf = Buffer.from(line2, "utf8");
+    const cut = l2buf.indexOf(Buffer.from("中", "utf8")) + 1;
+    await fsp.appendFile(jsonlPath, l2buf.subarray(0, cut));
+    const second = await parseJsonlFileIncremental(jsonlPath, first.state);
+    expect(second.usedIncremental).toBe(true);
+    expect(second.state.pendingBytes.length).toBeGreaterThan(0);
+    expect(second.parseFailures).toBe(first.parseFailures);
+    expect(second.chatFlow.chatNodes.length).toBe(1);
+
+    // Complete the write — the record must parse with content intact.
+    await fsp.appendFile(jsonlPath, l2buf.subarray(cut));
+    const third = await parseJsonlFileIncremental(jsonlPath, second.state);
+    expect(third.usedIncremental).toBe(true);
+    expect(third.parseFailures).toBe(first.parseFailures);
+    expect(third.state.pendingBytes.length).toBe(0);
+    const contents = third.chatFlow.chatNodes.map(
+      (c) => c.userMessage.content,
+    );
+    expect(contents).toContain("中文边界测试🎉");
   });
 
   it("does not mutate the prevState's records array (caller may keep stale snapshots)", async () => {
@@ -1958,5 +2004,40 @@ describe("readRecordsIncremental (v2.1 PR D4 stretch)", () => {
     await fsp.writeFile(jsonlPath, recordsToJsonl(buildSyntheticRecords().slice(0, 2)), "utf8");
     const second = await readRecordsIncremental(jsonlPath, first.state);
     expect(second.usedIncremental).toBe(false);
+  });
+
+  it("#4b: torn tail at FULL-read snapshot time is buffered as bytes, not consumed as a corrupt line", async () => {
+    // Pre-#4b the full path (readline) emitted the no-`\n` fragment as
+    // a "complete" line: parse failed, byteSize moved past its bytes,
+    // and the record could never be recovered by later appends.
+    // 中: 全量读时的撕裂尾行以前会被 readline 当完整行吞掉,记录永久
+    // 丢失;现在留在 pendingBytes,补全后照常解析。
+    const mk = (uuid: string, content: string) =>
+      JSON.stringify({
+        type: "user",
+        uuid,
+        sessionId: "s",
+        promptId: uuid,
+        message: { role: "user", content },
+      }) + "\n";
+    const full = Buffer.from(mk("u1", "first") + mk("u2", "中文🎉尾行"), "utf8");
+    // Tear inside the 4-byte emoji of line 2.
+    const cut = full.indexOf(Buffer.from("🎉", "utf8")) + 2;
+    await fsp.writeFile(jsonlPath, full.subarray(0, cut));
+
+    const first = await readRecordsIncremental(jsonlPath, undefined);
+    expect(first.records.length).toBe(1);
+    expect(first.state.parseFailures).toBe(0);
+    expect(first.state.pendingBytes.length).toBeGreaterThan(0);
+
+    await fsp.appendFile(jsonlPath, full.subarray(cut));
+    const second = await readRecordsIncremental(jsonlPath, first.state);
+    expect(second.usedIncremental).toBe(true);
+    expect(second.state.parseFailures).toBe(0);
+    expect(second.records.length).toBe(2);
+    const u2 = second.records.find((r) => r.uuid === "u2");
+    expect(
+      (u2?.message as { content?: string } | undefined)?.content,
+    ).toBe("中文🎉尾行");
   });
 });
