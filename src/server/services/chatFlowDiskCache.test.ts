@@ -120,6 +120,34 @@ describe("chatFlowDiskCache", () => {
     expect(r).toBeNull();
   });
 
+  it("read returns null for an OLDER schema version (the v2.7 systemEvent regression)", async () => {
+    // The concrete bug this guards: v2.7 added ChatNode.systemEvent but
+    // forgot to bump SCHEMA_VERSION, so caches written under the prior
+    // version kept satisfying the guard and old sessions rendered raw
+    // XML forever. A cache one version behind current MUST be rejected
+    // so the parser re-runs and emits the new field.
+    // 中: 复现并守护 v2.7 漏 bump 的 bug——比当前低一版的缓存必须失效,
+    // 强制重新解析,否则旧 session 永远显示原始 XML。
+    const sourcePath = await writeSource("old", "{}");
+    const stat = await fs.stat(sourcePath);
+    await fs.mkdir(cacheDir, { recursive: true });
+    const prior = {
+      schemaVersion: _schemaVersionForTests() - 1, // one behind current
+      sessionId: "old",
+      sourcePath,
+      sourceMtimeMs: stat.mtimeMs,
+      sourceSize: stat.size,
+      cachedAt: Date.now(),
+      chatFlow: makeChatFlow("old"),
+    };
+    await fs.writeFile(
+      path.join(cacheDir, "old.json"),
+      JSON.stringify(prior),
+      "utf8",
+    );
+    expect(await readDiskCache({ sessionId: "old", sourcePath })).toBeNull();
+  });
+
   it("read silently drops corrupt JSON and returns null", async () => {
     const sourcePath = await writeSource("f", "{}");
     await fs.mkdir(cacheDir, { recursive: true });

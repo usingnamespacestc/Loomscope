@@ -75,7 +75,16 @@ import type { ChatFlow } from "@/data/types";
 // v7 = WorkflowSummary.innerCompactLlmCallBoundaryIdx added — index
 // in `assistantText` where post-compact rounds begin for hybrid
 // ChatNodes (drives the Effective Context tab's pre/post split).
-const SCHEMA_VERSION = 7;
+// v8 = ChatNode.systemEvent added (v2.7 harness system-event
+// rendering — task-notification / system-reminder / caveat turns).
+// MUST bump here: without it, sessions cached under v7 kept rendering
+// the raw injected XML because the stale cache satisfied the schema
+// guard and the parser (which now emits systemEvent) never re-ran.
+// This was a real regression in the v2.7 PR that forgot to bump.
+// 中: v8 = ChatNode.systemEvent(v2.7 系统事件渲染)。不 bump 的话 v7
+// 旧缓存满足 schema 校验、跳过重新解析,旧 session 继续显示原始 XML
+// ——正是 v2.7 PR 漏 bump 造成的回归。改 ChatNode 形状必须同步 bump。
+const SCHEMA_VERSION = 8;
 
 interface DiskCacheEnvelope {
   schemaVersion: number;
