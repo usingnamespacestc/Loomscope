@@ -7,7 +7,9 @@
     "connecting": "连接中",
     "reconnecting": "重连中",
     "offline": "offline",
-    "live_tooltip": "live: session={{session}}, workspaces={{workspaces}}"
+    "live_tooltip": "live: session={{session}}, workspaces={{workspaces}}",
+    "bypass_badge": "免确认",
+    "bypass_badge_tooltip": "当前权限模式为 bypassPermissions:Loomscope 启动的 agent 执行任何工具都不会弹确认。点击打开设置。"
   },
   "sidebar": {
     "search_placeholder": "搜索 session…",

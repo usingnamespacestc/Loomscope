@@ -606,6 +606,12 @@ function usePreferences() {
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const next = await res.json();
+        // v2.6: keep the Header bypass badge live — mirror the echoed
+        // permissionMode into the store the moment the PATCH lands.
+        // 中: PATCH 回显时同步 store,Header 徽标即时切换。
+        if (typeof next.permissionMode === "string") {
+          useStore.getState().setServerPermissionMode(next.permissionMode);
+        }
         setPrefs((cur) => ({
           idleTimeoutMin:
             typeof next.idleTimeoutMin === "number"

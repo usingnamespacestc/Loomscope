@@ -18,6 +18,7 @@ export const createUISlice: StateCreator<LoomscopeStore, [], [], UISlice> = (set
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   sidebarCollapsed: false,
   interactiveMode: true,
+  serverPermissionMode: null,
   drillPanelWidth: DEFAULT_DRILL_PANEL_WIDTH,
   drillPanelCollapsed: false,
   // v0.8.1 #7: full-canvas mode. When true, the panel covers the
@@ -106,6 +107,8 @@ export const createUISlice: StateCreator<LoomscopeStore, [], [], UISlice> = (set
   setFocusedWorkspace: (cwd) => set({ focusedWorkspace: cwd }),
 
   setInteractiveMode: (next) => set({ interactiveMode: next }),
+
+  setServerPermissionMode: (mode) => set({ serverPermissionMode: mode }),
 
   saveInteractiveMode: async (next) => {
     // Optimistic flip — if the PATCH fails we roll back. Keeps the
