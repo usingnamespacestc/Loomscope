@@ -25,6 +25,7 @@ import {
   setStashedState,
 } from "@/server/services/chatFlowCache";
 import type { ClosureMember } from "@/server/services/forkTree";
+import { createIdleMap } from "@/server/services/idleMap";
 import type { ChatFlow } from "@/data/types";
 
 /**
@@ -35,15 +36,21 @@ import type { ChatFlow } from "@/data/types";
  * want one entry's stash to clobber another's stash for the same
  * member jsonl.
  *
- * Lifetime: cleared on closure shape change (member added / removed)
- * and at session unsubscribe (via clearClosureMemberStash + resetSession
- * in the delta engine hooks).
+ * Lifetime: cleared on closure shape change (member added / removed).
+ * v2.6: unsubscribe-time cleanup was removed in PR D5 and nothing
+ * called clearClosureMemberStash from the read path — entries (a full
+ * records[] each) accumulated forever. Now bounded by idle eviction;
+ * an evicted member just pays one full re-read on its next change.
  *
  * 中: closure 多成员的 per-member 增量读 state。key 用
  * `entry:member` 复合避免同 member 在不同 entry 下相互污染。closure
  * 形状变 → 清掉这条 stash 让 fallback 走全量。
+ * v2.6: PR-D5 后无人清理,改 idleMap 堵泄漏。
  */
-const closureMemberStash = new Map<string, RecordsOnlyIncrementalState>();
+const closureMemberStash = createIdleMap<RecordsOnlyIncrementalState>({
+  ttlMs: 30 * 60_000,
+  maxEntries: 64,
+});
 
 /**
  * EN (v2.2 PR E3): per-entry-session snapshot of the LAST merged
@@ -70,7 +77,13 @@ interface MergedChatFlowSnapshot {
   chatFlow: ChatFlow;
   closureMemberIds: string[];
 }
-const mergedChatFlowSnapshot = new Map<string, MergedChatFlowSnapshot>();
+// v2.6: idle-evicted for the same leak reason as closureMemberStash —
+// each snapshot holds a whole merged ChatFlow and had no cleanup path.
+// 中: 同样换 idleMap;每条是一份完整合并 ChatFlow,原先永不回收。
+const mergedChatFlowSnapshot = createIdleMap<MergedChatFlowSnapshot>({
+  ttlMs: 30 * 60_000,
+  maxEntries: 16,
+});
 
 function memberStashKey(entrySid: string, memberSid: string): string {
   return `${entrySid}::${memberSid}`;
@@ -82,7 +95,7 @@ function memberStashKey(entrySid: string, memberSid: string): string {
  *  中: SSE 最后一个订阅者断开时清掉 closure member stash。 */
 export function clearClosureMemberStash(entrySid: string): void {
   const prefix = `${entrySid}::`;
-  for (const k of Array.from(closureMemberStash.keys())) {
+  for (const k of closureMemberStash.keys()) {
     if (k.startsWith(prefix)) closureMemberStash.delete(k);
   }
   // v2.2 PR E3: also drop the merged-chatflow snapshot; without

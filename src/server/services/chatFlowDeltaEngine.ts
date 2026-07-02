@@ -40,6 +40,7 @@
 // client 不变；PR D2 才 cutover。
 
 import type { ChatFlow, ChatNode, WorkflowSummary } from "@/data/types";
+import { createIdleMap } from "@/server/services/idleMap";
 import { broadcast } from "@/server/services/sseHub";
 import {
   chatNodeSig,
@@ -76,7 +77,24 @@ interface SessionSnapshot {
   seq: number;
 }
 
-const snapshots = new Map<string, SessionSnapshot>();
+// v2.6 leak fix: snapshots (one signature-map per session ever
+// processed) had no eviction — PR D5 removed the unsubscribe-time
+// resetSession call and nothing replaced it. Idle-evicted now. The
+// eviction is SAFE because `seq` lives in `seqBySession` below, NOT in
+// the evicted value: an evicted session's next computeDeltas sees "no
+// snapshot" (cold-start re-emit of every node as chatnode-added, which
+// the client's add-or-replace reducer dedups) but the seq keeps
+// counting monotonically — if seq were evicted too, it would restart
+// at 0 and a still-subscribed client would drop every new delta as a
+// replay (`seq ≤ appliedVersion`).
+// 中: snapshot 改 idleMap 堵泄漏。seq 拆到 seqBySession(每 session
+// 一个数字,不淘汰)——若跟着归零,在订阅的客户端会把新 delta 全当
+// 重放丢弃。淘汰后重建 = 冷启动全量 re-emit,客户端去重兜住。
+const snapshots = createIdleMap<SessionSnapshot>({
+  ttlMs: 30 * 60_000,
+  maxEntries: 64,
+});
+const seqBySession = new Map<string, number>();
 /** Per-session promise chain. processFresh's body runs serialised
  *  against the previous call for the same session, so two near-
  *  simultaneous chokidar fires can't race their diffs. */
@@ -201,7 +219,9 @@ function computeDeltas(
 ): ChatFlowDeltaEvent[] {
   const old = snapshots.get(sessionId);
   const deltas: ChatFlowDeltaEvent[] = [];
-  let seq = old?.seq ?? 0;
+  // v2.6: seq is sourced from the non-evicted side table so it stays
+  // monotonic across snapshot eviction (see the snapshots docblock).
+  let seq = seqBySession.get(sessionId) ?? old?.seq ?? 0;
   const nextById = new Map<string, ChatNodeSignature>();
   for (const cn of fresh.chatNodes) {
     const sig = signatureOf(cn);
@@ -253,7 +273,7 @@ function computeDeltas(
     chatNodeCount: fresh.chatNodes.length,
   });
   snapshots.set(sessionId, { byId: nextById, seq });
-  void sessionId; // explicit no-op — sessionId used via outer closure
+  seqBySession.set(sessionId, seq);
   return deltas;
 }
 
@@ -267,13 +287,14 @@ function computeDeltas(
  */
 export function resetSession(sessionId: string): void {
   snapshots.delete(sessionId);
+  seqBySession.delete(sessionId);
   chains.delete(sessionId);
 }
 
 /** Server-side accessor — current seq for a session. Used by drift
  *  detection (PR D3) to broadcast periodic hashes. */
 export function getCurrentSeq(sessionId: string): number {
-  return snapshots.get(sessionId)?.seq ?? 0;
+  return seqBySession.get(sessionId) ?? 0;
 }
 
 /**
@@ -320,5 +341,6 @@ export function _getSnapshotForTests(
 /** Test-only — clear all module state between cases. */
 export function _resetAllForTests(): void {
   snapshots.clear();
+  seqBySession.clear();
   chains.clear();
 }

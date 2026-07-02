@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatFlow } from "@/data/types";
 import {
   _schemaVersionForTests,
+  _setBudgetForTests,
   _setCacheRootForTests,
   dropDiskCache,
   readDiskCache,
@@ -217,5 +218,48 @@ describe("chatFlowDiskCache", () => {
     await writeDiskCache({ sessionId: "i", sourcePath, chatFlow: big });
     const r = await readDiskCache({ sessionId: "i", sourcePath });
     expect(r?.chatNodes.length).toBe(200);
+  });
+
+  // v2.6: total-size sweep. Entries used to be removed only via
+  // dropDiskCache on jsonl unlink — never-deleting users grew the
+  // cache dir without bound.
+  describe("size-budget sweep", () => {
+    it("evicts oldest-mtime entries over budget, never the entry just written", async () => {
+      _setBudgetForTests(1); // any pre-existing entry is over budget
+      try {
+        const srcA = await writeSource("old-a", "{}\n");
+        const srcB = await writeSource("old-b", "{}\n");
+        const srcC = await writeSource("new-c", "{}\n");
+        // Budget=1 means each write sweeps everything except itself,
+        // so write a and b under a huge budget first.
+        _setBudgetForTests(10 * 1024 * 1024);
+        await writeDiskCache({ sessionId: "old-a", sourcePath: srcA, chatFlow: makeChatFlow("old-a") });
+        await writeDiskCache({ sessionId: "old-b", sourcePath: srcB, chatFlow: makeChatFlow("old-b") });
+        // Age them so mtime ordering is unambiguous.
+        const past = new Date(Date.now() - 60_000);
+        await fs.utimes(path.join(cacheDir, "old-a.json"), past, past);
+        await fs.utimes(path.join(cacheDir, "old-b.json"), past, past);
+
+        _setBudgetForTests(1);
+        await writeDiskCache({ sessionId: "new-c", sourcePath: srcC, chatFlow: makeChatFlow("new-c") });
+
+        // Old entries swept; the just-written entry survives.
+        expect(await readDiskCache({ sessionId: "old-a", sourcePath: srcA })).toBeNull();
+        expect(await readDiskCache({ sessionId: "old-b", sourcePath: srcB })).toBeNull();
+        const kept = await readDiskCache({ sessionId: "new-c", sourcePath: srcC });
+        expect(kept?.id).toBe("new-c");
+      } finally {
+        _setBudgetForTests(null);
+      }
+    });
+
+    it("under budget → sweep is a no-op", async () => {
+      const srcA = await writeSource("keep-a", "{}\n");
+      const srcB = await writeSource("keep-b", "{}\n");
+      await writeDiskCache({ sessionId: "keep-a", sourcePath: srcA, chatFlow: makeChatFlow("keep-a") });
+      await writeDiskCache({ sessionId: "keep-b", sourcePath: srcB, chatFlow: makeChatFlow("keep-b") });
+      expect((await readDiskCache({ sessionId: "keep-a", sourcePath: srcA }))?.id).toBe("keep-a");
+      expect((await readDiskCache({ sessionId: "keep-b", sourcePath: srcB }))?.id).toBe("keep-b");
+    });
   });
 });

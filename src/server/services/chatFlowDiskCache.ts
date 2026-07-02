@@ -215,6 +215,14 @@ export async function writeDiskCache(args: {
       mode: 0o600,
     });
     await fsp.rename(tmpPath, finalPath);
+    // v2.6: opportunistic size sweep. Entries were previously only
+    // removed via dropDiskCache on jsonl unlink — a user who never
+    // deletes sessions grew ~/.loomscope/cache/ without bound (each
+    // entry is up to ~100% of its jsonl's size). Best-effort, after
+    // the write so the fresh entry is never the one swept.
+    // 中: 写后顺手清扫总量,老 mtime 先走;不删 session 的用户以前
+    // 缓存只增不减。
+    await sweepDiskCache(root, finalPath);
   } catch (err) {
     // Disk full / permission / etc. Cleanup the tmp if it exists.
     void fsp.unlink(tmpPath).catch(() => {});
@@ -223,6 +231,64 @@ export async function writeDiskCache(args: {
         err instanceof Error ? err.message : String(err)
       }`,
     );
+  }
+}
+
+/** v2.6: total-size budget for the disk cache directory. Generous —
+ * the point is "bounded", not "small": at the documented ~100%-of-
+ * jsonl entry size this is roughly 40 large sessions' worth. */
+const DISK_CACHE_BUDGET_BYTES = 1 * 1024 * 1024 * 1024; // 1 GiB
+
+let budgetOverride: number | null = null;
+/** Test-only: shrink the sweep budget so tests don't need GiB files. */
+export function _setBudgetForTests(bytes: number | null): void {
+  budgetOverride = bytes;
+}
+function budgetBytes(): number {
+  return budgetOverride ?? DISK_CACHE_BUDGET_BYTES;
+}
+
+/** Delete oldest-mtime cache entries until the directory fits the
+ * budget. Never touches `justWrote` (the entry that triggered the
+ * sweep) or in-flight `.tmp.*` files. Best-effort: any fs error just
+ * ends the sweep — next write retries. */
+async function sweepDiskCache(
+  root: string,
+  justWrote: string,
+): Promise<void> {
+  try {
+    const names = await fsp.readdir(root);
+    const files: { path: string; size: number; mtimeMs: number }[] = [];
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue; // skip tmp + strays
+      const p = `${root}/${name}`;
+      if (p === justWrote) continue;
+      try {
+        const st = await fsp.stat(p);
+        files.push({ path: p, size: st.size, mtimeMs: st.mtimeMs });
+      } catch {
+        // Raced with a concurrent drop — ignore.
+      }
+    }
+    let total = files.reduce((acc, f) => acc + f.size, 0);
+    try {
+      total += (await fsp.stat(justWrote)).size;
+    } catch {
+      // justWrote already replaced/dropped — its size no longer counts.
+    }
+    if (total <= budgetBytes()) return;
+    files.sort((a, b) => a.mtimeMs - b.mtimeMs); // oldest first
+    for (const f of files) {
+      if (total <= budgetBytes()) break;
+      try {
+        await fsp.unlink(f.path);
+        total -= f.size;
+      } catch {
+        // Concurrent removal — fine, it's gone either way.
+      }
+    }
+  } catch {
+    // readdir failed (dir vanished etc.) — best-effort, skip.
   }
 }
 

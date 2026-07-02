@@ -32,6 +32,7 @@ import {
   writeDiskCache,
 } from "@/server/services/chatFlowDiskCache";
 import type { ClosureMember } from "@/server/services/forkTree";
+import { createIdleMap } from "@/server/services/idleMap";
 
 const MAX_ENTRIES = 8;
 
@@ -56,10 +57,21 @@ const cache = new Map<string, ChatFlow>();
 // point. The stash represents what we knew at byteSize N; the next
 // reader picks it up and reads [N, current size).
 //
+// v2.6 leak fix: each entry holds a full records[] + ChatFlow (up to
+// ~25 MB for big sessions) and nothing ever cleared it — unsubscribe
+// cleanup was removed in PR D5 and no eviction replaced it, so a
+// long-lived server kept one footprint per session ever browsed.
+// Idle-evicting map bounds it; an evicted session just pays one full
+// reparse on its next visit (identical to a server restart).
+//
 // 中: 增量 parse state 旁路 stash，跟 LRU 解耦。LRU 因为 mtime 进 key
 // append 必 miss；stash 不参与 key，下一次 loader 直接拿来当 prevState
 // 喂给 parseJsonlFileIncremental，省掉重读老内容。
-const stateStash = new Map<string, IncrementalParseState>();
+// v2.6: 换 idleMap 堵泄漏,被淘汰的 session 下次访问多付一次全量重读。
+const stateStash = createIdleMap<IncrementalParseState>({
+  ttlMs: 30 * 60_000,
+  maxEntries: 16,
+});
 
 // Public for tests; production callers should go through getOrLoad.
 export function _resetForTests(): void {
@@ -72,7 +84,7 @@ export function _peekKeysForTests(): string[] {
 }
 
 export function _peekStashKeysForTests(): string[] {
-  return [...stateStash.keys()];
+  return stateStash.keys();
 }
 
 /** v0.10 收尾: read the stashed incremental-parse state for `sessionId`,
