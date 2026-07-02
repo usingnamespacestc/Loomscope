@@ -1352,6 +1352,8 @@ export class SessionRegistry {
    * session 首轮既没 canUseTool 也没 hooks)——收敛到这一个 builder。
    *
    * ── auth: prefer subscription (OAuth) over API key billing ──
+   * 中: 双凭证并存时 claude 优先吃 ANTHROPIC_API_KEY(计费悄悄从订阅
+   * 转 API 积分)——除非用户显式开 useApiKey,否则剥掉。
    * The spawned `claude` binary picks `ANTHROPIC_API_KEY` env over
    * `~/.claude/.credentials.json` when both are present, which
    * silently shifts billing from the user's claude.ai subscription to
@@ -1362,6 +1364,8 @@ export class SessionRegistry {
    * Settings.
    *
    * ── settingSources ──
+   * 中: SDK 默认 settingSources 为空数组(文档说全加载是错的),
+   * settings.json 的 hooks 全不触发——必须显式传全三源。
    * CRITICAL for hooks: SDK's `query()` defaults `settingSources` to
    * `[]`, which means NO settings.json sources load into the spawned
    * CC — user/project/local hooks (PreToolUse / PostToolUse / ...)
@@ -1372,12 +1376,16 @@ export class SessionRegistry {
    * depends on hooks firing, so pass the full set explicitly.
    *
    * ── allowDangerouslySkipPermissions ──
+   * 中: bypassPermissions 必须配这个 opt-in 旗,否则 SDK 静默降回
+   * default(非 TTY 下 = 全部静默拒绝)。
    * bypassPermissions requires this opt-in flag per the SDK contract;
    * without it the SDK silently downgrades to default permissionMode
    * (in non-TTY context = silent deny on every gated tool). The user
    * explicitly chose bypassPermissions via Settings; respect it.
    *
    * ── hooks (SDK programmatic path) ──
+   * 中: 程序化 hooks 发到进程内 hookEventBus(与 /api/cc-hook 同一
+   * 总线),受 enableHookSdkPath 开关控制;与 settingSources 双轨并存。
    * Registers every hook event as a JS callback publishing onto the
    * in-process `hookEventBus` — same bus `/api/cc-hook` publishes
    * onto for terminal CC; `hookSseForwarder` bridges to SSE. Gated on
@@ -1386,6 +1394,8 @@ export class SessionRegistry {
    * independently; programmatic hooks only flow when the SDK runs CC.
    *
    * ── canUseTool ──
+   * 中: 交互式工具权限仲裁:先查已存规则,否则广播 permission-prompt
+   * 等浏览器决定;bypass 模式下 SDK 侧直接跳过。
    * Loomscope's interactive tool-permission mediation: saved-rule
    * pre-check, else broadcast `permission-prompt` SSE + Promise
    * resolved by the HTTP decision endpoint; SDK abort signal rejects.
@@ -1612,6 +1622,7 @@ export class SessionRegistry {
         firstMsg = msg;
         sid = candidate;
         // v2.6: arm the canUseTool getter (see holder above).
+        // 中: 给 canUseTool 的 sid getter 上膛(见上方占坑注释)。
         discoveredSid = candidate;
         break;
       }

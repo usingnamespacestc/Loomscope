@@ -46,9 +46,11 @@ export function createPerKeySerializer(): PerKeySerializer {
     } else {
       // Route through a resolved promise so a synchronously-throwing
       // task becomes a rejection instead of escaping run().
+      // 中: 经 resolved promise 中转,同步抛错也变成 rejection,不逃出 run()。
       started = Promise.resolve().then(() => task());
     }
     // Swallow rejections so one failed run can't wedge the key's chain.
+    // 中: 吞掉 rejection,单次失败不卡死该 key 的链。
     const settled = started.then(
       () => {},
       () => {},

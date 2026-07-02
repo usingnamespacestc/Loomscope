@@ -221,6 +221,7 @@ function computeDeltas(
   const deltas: ChatFlowDeltaEvent[] = [];
   // v2.6: seq is sourced from the non-evicted side table so it stays
   // monotonic across snapshot eviction (see the snapshots docblock).
+  // 中: seq 从不淘汰的侧表取,snapshot 被淘汰也保持单调。
   let seq = seqBySession.get(sessionId) ?? old?.seq ?? 0;
   const nextById = new Map<string, ChatNodeSignature>();
   for (const cn of fresh.chatNodes) {
