@@ -1112,15 +1112,47 @@ export const createSessionSlice: StateCreator<LoomscopeStore, [], [], SessionSli
     const cur = sessions.get(sessionId);
     if (!cur) return;
     const list = cur.pendingCanUseToolPrompts ?? [];
-    // Dedup by promptId — late-join SSE replay can re-deliver an
-    // already-shown prompt; we don't want the banner to appear
-    // twice.
-    if (list.some((p) => p.promptId === prompt.promptId)) return;
+    // v2.7: dedup by tool_use_id when present (HTTP-hook path), else
+    // promptId. CC can re-fire the PreToolUse hook for the SAME
+    // AskUserQuestion — its 5s hook-client timeout retry, or a
+    // duplicate fanout delivery — and each fire mints a NEW promptId
+    // server-side. promptId-only dedup therefore let one question
+    // render as TWO forms. tool_use_id is stable across those retries.
+    //
+    // On a repeat we UPDATE the existing entry's promptId to the
+    // latest (the older gate may be stale / timed out, so submit must
+    // target the live prompt) and keep the entry in place — the form,
+    // keyed by tool_use_id, then doesn't remount and the user's
+    // in-progress selections survive.
+    //
+    // Late-join SSE replay of the same promptId is still covered: the
+    // dedup key collapses to promptId when tool_use_id is absent, and
+    // an identical (toolUseId, promptId) is a no-op update.
+    // 中: 用稳定的 tool_use_id 去重(缺失时回退 promptId)。CC 重发
+    // PreToolUse 会生成新 promptId,原来只按 promptId 去重 → 一个问题
+    // 两个表单。重复到达时更新为最新 promptId 并保留条目位置,表单按
+    // tool_use_id 做 key 不重挂,用户已填选项不丢。
+    const dedupKey = prompt.toolUseId || prompt.promptId;
+    const existingIdx = list.findIndex(
+      (p) => (p.toolUseId || p.promptId) === dedupKey,
+    );
     const updated = new Map(sessions);
-    updated.set(sessionId, {
-      ...cur,
-      pendingCanUseToolPrompts: [...list, prompt],
-    });
+    if (existingIdx >= 0) {
+      const nextList = list.slice();
+      nextList[existingIdx] = {
+        ...nextList[existingIdx],
+        promptId: prompt.promptId,
+      };
+      updated.set(sessionId, {
+        ...cur,
+        pendingCanUseToolPrompts: nextList,
+      });
+    } else {
+      updated.set(sessionId, {
+        ...cur,
+        pendingCanUseToolPrompts: [...list, prompt],
+      });
+    }
     set({ sessions: updated });
   },
   removeCanUseToolPrompt: (sessionId, promptId) => {

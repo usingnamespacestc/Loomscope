@@ -119,7 +119,13 @@ export function AskUserQuestionPanel({
         const error = errorByPromptId[prompt.promptId] ?? null;
         return (
           <div
-            key={prompt.promptId}
+            // v2.7: key on the STABLE tool_use_id (falls back to
+            // promptId for the SDK path). When a re-fired PreToolUse
+            // updates the entry's promptId, a promptId-based key would
+            // remount the form and wipe the user's in-progress
+            // selections; tool_use_id is stable so the form persists.
+            // 中: 用稳定的 tool_use_id 做 key,promptId 更新时表单不重挂。
+            key={prompt.toolUseId || prompt.promptId}
             data-testid={`ask-user-question-card-${prompt.promptId}`}
             data-prompt-id={prompt.promptId}
             data-source={source}

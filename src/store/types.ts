@@ -315,6 +315,14 @@ export interface SessionState {
      *  `source: "http"`.
      *  中: prompt 来源；决定 banner 上 chip 文案 + 决策走的 endpoint。 */
     source?: "sdk" | "http";
+    /** v2.7: the CC tool_use_id (HTTP-hook path only; SDK path leaves
+     *  it undefined). STABLE across CC's PreToolUse retries, unlike
+     *  promptId which is minted fresh per gate request — used as the
+     *  dedup key so one AskUserQuestion renders one form even when the
+     *  hook fires multiple times (5s client-timeout retry / duplicate
+     *  fanout delivery).
+     *  中: 稳定的 tool_use_id,做去重键;一个 AUQ 只显示一个表单。 */
+    toolUseId?: string;
   }>;
   // v0.11: hook-driven turn window. UserPromptSubmit sets this to
   // { startedAt: now }; Stop clears it. When non-null, the session is
@@ -546,6 +554,7 @@ export interface SessionSlice {
       blockedPath?: string;
       receivedAt: number;
       source?: "sdk" | "http";
+      toolUseId?: string;
     },
   ) => void;
   removeCanUseToolPrompt: (sessionId: string, promptId: string) => void;
