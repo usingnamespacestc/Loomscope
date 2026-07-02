@@ -3,6 +3,8 @@
 // "directory doesn't exist, create?", then spawn a fresh SDK
 // session and return its CC-generated sid.
 
+import { apiFetch } from "@/api/http";
+
 interface ApiError {
   ok: false;
   error: string;
@@ -75,7 +77,7 @@ export async function postNewSession(
 
 async function jsonFetch<T>(path: string, body: unknown): Promise<T | ApiError> {
   try {
-    const res = await fetch(path, {
+    const res = await apiFetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

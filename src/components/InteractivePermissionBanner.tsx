@@ -27,6 +27,7 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { apiFetch } from "@/api/http";
 
 import { useStore } from "@/store/index";
 
@@ -100,7 +101,7 @@ export function InteractivePermissionBanner({
             },
           ] as const);
     try {
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",

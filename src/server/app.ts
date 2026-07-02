@@ -124,6 +124,16 @@ export function createApp(opts: AppOptions) {
     c.json({ ok: true, version: pkg.version, rootDir: opts.rootDir }),
   );
 
+  // v2.6 security batch: hand the CSRF token to the (same-origin)
+  // frontend. Safe to expose over GET — a cross-origin page can fire
+  // the request but can never READ the response (CORS), and reading
+  // is exactly what CSRF-token theft requires. apiFetch (src/api/
+  // http.ts) caches this and stamps x-loomscope-token on every
+  // mutation; the bypass list in csrf.ts is narrowed accordingly.
+  // 中: 把 CSRF token 交给同源前端。GET 暴露安全——跨源页面发得出
+  // 请求但读不到响应,而偷 token 恰恰需要"读"。
+  app.get("/api/csrf-token", (c) => c.json({ token: opts.csrfToken }));
+
   app.route("/api/workspaces", workspacesRouter({ rootDir: opts.rootDir }));
   app.route(
     "/api/sessions",

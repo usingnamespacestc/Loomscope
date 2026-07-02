@@ -223,6 +223,8 @@ describe("chatFlowDiskCache", () => {
   // v2.6: total-size sweep. Entries used to be removed only via
   // dropDiskCache on jsonl unlink — never-deleting users grew the
   // cache dir without bound.
+  // 中: 总量清扫单测——超预算删最老 mtime、永不删刚写入的条目;
+  // 预算内是 no-op。
   describe("size-budget sweep", () => {
     it("evicts oldest-mtime entries over budget, never the entry just written", async () => {
       _setBudgetForTests(1); // any pre-existing entry is over budget

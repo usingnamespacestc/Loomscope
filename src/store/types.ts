@@ -81,6 +81,16 @@ export interface UISlice {
   // Default `true` matches the "loaded fresh, no preferences yet"
   // case so first-time users still see all the UI.
   interactiveMode: boolean;
+  // v2.6 security batch: server-side `permissionMode` mirrored into
+  // the store so the Header can show a persistent badge while
+  // "bypassPermissions" is active — in that mode every Loomscope-
+  // spawned agent runs ALL tools without a single prompt, which the
+  // user opted into deliberately (single-user trusted host) but
+  // should never be invisible. Seeded by App's preferences load,
+  // updated by SettingsModal's PATCH echo. null = not yet known.
+  // 中: 服务端 permissionMode 镜像进 store,bypass 生效时 Header 常驻
+  // 提示——用户有意选的,但不该无感。null = 尚未加载。
+  serverPermissionMode: string | null;
 
   setSidebarWidth: (w: number) => void;
   toggleSidebar: () => void;
@@ -100,6 +110,8 @@ export interface UISlice {
   /** Set + persist via PATCH /api/preferences. Resolves to true on
    *  success, false on network error (caller can show inline error). */
   saveInteractiveMode: (next: boolean) => Promise<boolean>;
+  /** In-memory only — server is authoritative (see field doc). */
+  setServerPermissionMode: (mode: string | null) => void;
 }
 
 // ─── Workspace slice ────────────────────────────────────────────────────────

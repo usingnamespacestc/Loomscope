@@ -93,9 +93,18 @@ export default function App() {
           credentials: "same-origin",
         });
         if (!res.ok) return;
-        const p = (await res.json()) as { interactiveMode?: boolean };
+        const p = (await res.json()) as {
+          interactiveMode?: boolean;
+          permissionMode?: string;
+        };
         if (typeof p.interactiveMode === "boolean") {
           useStore.getState().setInteractiveMode(p.interactiveMode);
+        }
+        // v2.6: mirror permissionMode so the Header bypass badge can
+        // render (see UISlice.serverPermissionMode doc).
+        // 中: 镜像 permissionMode,供 Header bypass 徽标用。
+        if (typeof p.permissionMode === "string") {
+          useStore.getState().setServerPermissionMode(p.permissionMode);
         }
       } catch {
         // Fall back to default (interactiveMode=true). Better to

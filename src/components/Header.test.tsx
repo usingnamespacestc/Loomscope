@@ -64,4 +64,24 @@ describe("Header", () => {
     expect(screen.getByText(/feat\/x/)).toBeTruthy();
     expect(screen.getByText(/2026-05-01 10:00/)).toBeTruthy();
   });
+
+  // v2.6 security batch: bypassPermissions badge.
+  // 中: bypass 常驻徽标——bypass 时显示,其他模式/未知时不显示。
+  it("shows the bypass badge when serverPermissionMode is bypassPermissions", () => {
+    useStore.setState({ serverPermissionMode: "bypassPermissions" }, false);
+    render(<Header />);
+    const badge = screen.getByTestId("bypass-permissions-badge");
+    expect(badge).toBeTruthy();
+    expect(badge.getAttribute("title")).toBeTruthy();
+  });
+
+  it("hides the badge for other modes and before preferences load", () => {
+    useStore.setState({ serverPermissionMode: "default" }, false);
+    const r1 = render(<Header />);
+    expect(screen.queryByTestId("bypass-permissions-badge")).toBeNull();
+    r1.unmount();
+    useStore.setState({ serverPermissionMode: null }, false);
+    render(<Header />);
+    expect(screen.queryByTestId("bypass-permissions-badge")).toBeNull();
+  });
 });

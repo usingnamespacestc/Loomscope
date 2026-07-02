@@ -1,4 +1,6 @@
 // v2.6: EACCES/EPERM watcher-log de-noising (root-owned project dirs).
+// 中: watcher 权限错误降噪单测——同 (来源,路径) 只警告一次,
+// 非权限错误照旧每次打印。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {

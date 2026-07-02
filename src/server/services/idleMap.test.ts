@@ -1,6 +1,8 @@
 // v2.6: tests for the idle-evicting stash map (leak fix — see
 // idleMap.ts docblock for why unsubscribe-time cleanup was not an
 // option).
+// 中: 闲置淘汰 Map 单测——TTL 淘汰、读不复活过期项、touch 保活
+// (D5 重连场景)、LRU 上限、clear。
 import { describe, expect, it } from "vitest";
 
 import { createIdleMap } from "./idleMap";

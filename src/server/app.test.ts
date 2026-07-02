@@ -726,16 +726,35 @@ describe("CSRF middleware", () => {
     expect(res.status).toBe(403);
   });
 
-  // v1.6: /api/fs/* (validate-cwd + mkdir) is on the prefix bypass —
-  // same Mode A rationale as /api/sessions/*. Without this bypass the
-  // new-session modal couldn't validate the cwd or create dirs.
-  it("does NOT 403 /api/fs/validate-cwd without a token", async () => {
-    const res = await app.request("/api/fs/validate-cwd", {
+  // v2.6 security batch: /api/fs/* left the bypass list — the browser
+  // client now sends the token via apiFetch, so the middleware must
+  // enforce it here like everywhere else.
+  // 中: fs 路由离开 bypass 名单,无 token 403、带 token 放行。
+  it("403s /api/fs/validate-cwd without a token, passes with it", async () => {
+    const bare = await app.request("/api/fs/validate-cwd", {
       method: "POST",
       headers: { "content-type": "application/json", origin: ORIGIN },
       body: JSON.stringify({ path: "/tmp" }),
     });
-    expect(res.status).not.toBe(403);
+    expect(bare.status).toBe(403);
+    const withToken = await app.request("/api/fs/validate-cwd", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: ORIGIN,
+        "x-loomscope-token": TOKEN,
+      },
+      body: JSON.stringify({ path: "/tmp" }),
+    });
+    expect(withToken.status).not.toBe(403);
+  });
+
+  it("GET /api/csrf-token hands the token to the same-origin client", async () => {
+    const res = await app.request("/api/csrf-token", {
+      headers: { origin: ORIGIN },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ token: TOKEN });
   });
 });
 

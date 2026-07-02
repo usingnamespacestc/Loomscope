@@ -18,6 +18,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 
+import { checkSpawnCwd } from "@/server/services/pathPolicy";
 import type { SessionRegistry } from "@/server/services/sessionRegistry";
 
 const schema = z.object({
@@ -46,6 +47,16 @@ export function newSessionRouter(opts: NewSessionRouterOptions) {
 
   app.post("/new", zValidator("json", schema), async (c) => {
     const body = c.req.valid("json");
+
+    // v2.6 security: spawn cwd is confined to $HOME + /tmp. This
+    // route is RCE-equivalent power (spawns an agent, by default in
+    // bypassPermissions); the cwd used to be passed through
+    // unvalidated. See pathPolicy.ts for the threat model.
+    // 中: spawn 的 cwd 限 $HOME + /tmp,越界 400。
+    const policy = checkSpawnCwd(body.cwd);
+    if (!policy.allowed) {
+      return c.json({ error: `cwd rejected: ${policy.reason}` }, 400);
+    }
 
     // Sync per-turn settings before spawn — same pattern as
     // turns route. Settings stick on registry opts; spawnNewSession

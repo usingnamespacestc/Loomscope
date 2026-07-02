@@ -27,6 +27,7 @@ import { z } from "zod";
 
 import {
   deletePermissionRule,
+  deriveCommandPrefix,
   loadPermissionRules,
   savePermissionRule,
 } from "@/server/services/permissionRules";
@@ -98,9 +99,19 @@ export function permissionPromptsRouter(opts: PermissionPromptsRouterOptions) {
       // the request body — keeps clients from saving rules for
       // tools they didn't actually grant.
       if (body.persist === true && body.behavior === "allow") {
+        // v2.6 security: for Bash, scope the rule to the command's
+        // first token (derived from the server-trusted pending input,
+        // NOT the request body) so "always allow" doesn't become
+        // "allow every command". Non-Bash tools get an undefined
+        // prefix = toolName-only match, unchanged.
+        // 中: Bash 规则按服务端可信输入派生首 token 收窄,非 Bash 不变。
         await savePermissionRule({
           toolName: resolved.toolName,
           behavior: "allow",
+          commandPrefix: deriveCommandPrefix(
+            resolved.toolName,
+            resolved.toolInput,
+          ),
         });
         await opts.registry.refreshPermissionRules();
       }

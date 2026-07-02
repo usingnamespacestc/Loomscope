@@ -7,7 +7,9 @@
     "connecting": "connecting",
     "reconnecting": "reconnecting",
     "offline": "offline",
-    "live_tooltip": "live: session={{session}}, workspaces={{workspaces}}"
+    "live_tooltip": "live: session={{session}}, workspaces={{workspaces}}",
+    "bypass_badge": "bypass",
+    "bypass_badge_tooltip": "Permission mode is bypassPermissions: Loomscope-spawned agents run every tool without asking. Click to open Settings."
   },
   "sidebar": {
     "search_placeholder": "Search sessions…",

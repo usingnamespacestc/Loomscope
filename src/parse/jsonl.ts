@@ -129,7 +129,9 @@ export interface RecordsOnlyIncrementalState {
   mtimeMs: number;
   /** #4b: trailing partial line as RAW BYTES (no `\n` yet). Kept as a
    * Buffer — not a string — because the tear can land mid-multibyte
-   * UTF-8 character; decoding happens only on complete lines. */
+   * UTF-8 character; decoding happens only on complete lines.
+   * 中: 尾部残行按原始字节存(撕裂点可能在多字节字符中间,不能过
+   * string);只有完整行才解码。 */
   pendingBytes: Buffer;
 }
 
@@ -296,6 +298,7 @@ async function streamLinesByteAccurate(
       while (nl >= 0) {
         let end = nl;
         // Tolerate CRLF the same way readline's crlfDelay does.
+        // 中: 兼容 CRLF,对齐 readline crlfDelay 的行为。
         if (end > 0 && pending[end - 1] === 0x0d) end -= 1;
         if (end > 0) onLine(pending.subarray(0, end).toString("utf8"));
         pending = pending.subarray(nl + 1);
@@ -305,6 +308,7 @@ async function streamLinesByteAccurate(
   }
   // Copy the leftover out of the last (chunk-sized) buffer so callers
   // stashing it long-term don't pin the whole 64KB chunk in memory.
+  // 中: 把残行从大 chunk buffer 里拷出来,避免 stash 长期钉住整块内存。
   return pending.length > 0 ? Buffer.from(pending) : EMPTY_PENDING;
 }
 

@@ -97,7 +97,11 @@ describe("POST /api/cc-hook-onboarding/patch", () => {
   it("mode=add writes settings.json with all 11 events in CC matcher schema", async () => {
     const res = await app.request("/api/cc-hook-onboarding/patch", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // v2.6: onboarding left the CSRF bypass list — token required.
+        "x-loomscope-token": "csrf-token",
+      },
       body: JSON.stringify({ mode: "add" }),
     });
     expect(res.status).toBe(200);
@@ -145,7 +149,11 @@ describe("POST /api/cc-hook-onboarding/patch", () => {
     );
     const res = await app.request("/api/cc-hook-onboarding/patch", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // v2.6: onboarding left the CSRF bypass list — token required.
+        "x-loomscope-token": "csrf-token",
+      },
       body: JSON.stringify({ mode: "remove" }),
     });
     expect(res.status).toBe(200);
@@ -169,7 +177,11 @@ describe("POST /api/cc-hook-onboarding/patch", () => {
     await fs.writeFile(settingsFile, "{not-valid-json");
     const res = await app.request("/api/cc-hook-onboarding/patch", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // v2.6: onboarding left the CSRF bypass list — token required.
+        "x-loomscope-token": "csrf-token",
+      },
       body: JSON.stringify({ mode: "add" }),
     });
     expect(res.status).toBe(409);
@@ -180,7 +192,11 @@ describe("POST /api/cc-hook-onboarding/patch", () => {
   it("400 on invalid mode", async () => {
     const res = await app.request("/api/cc-hook-onboarding/patch", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // v2.6: onboarding left the CSRF bypass list — token required.
+        "x-loomscope-token": "csrf-token",
+      },
       body: JSON.stringify({ mode: "delete-all-the-things" }),
     });
     expect(res.status).toBe(400);
@@ -191,7 +207,11 @@ describe("POST /api/cc-hook-onboarding/patch", () => {
     // CSRF_BYPASS_PATHS.
     const res = await app.request("/api/cc-hook-onboarding/patch", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // v2.6: onboarding left the CSRF bypass list — token required.
+        "x-loomscope-token": "csrf-token",
+      },
       body: JSON.stringify({ mode: "add" }),
     });
     expect(res.status).toBe(200);
@@ -240,7 +260,7 @@ describe("POST /api/cc-hook-onboarding/rotate-secret", () => {
 
     const res = await rotatingApp.request(
       "/api/cc-hook-onboarding/rotate-secret",
-      { method: "POST" },
+      { method: "POST", headers: { "x-loomscope-token": "csrf-token" } },
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -257,7 +277,7 @@ describe("POST /api/cc-hook-onboarding/rotate-secret", () => {
   it("subsequent /status reads the rotated secret (accessor pattern verified end-to-end)", async () => {
     const rotateRes = await rotatingApp.request(
       "/api/cc-hook-onboarding/rotate-secret",
-      { method: "POST" },
+      { method: "POST", headers: { "x-loomscope-token": "csrf-token" } },
     );
     const rotated = (await rotateRes.json()) as { shellRcSnippet: string };
 

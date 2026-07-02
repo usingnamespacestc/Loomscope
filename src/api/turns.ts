@@ -7,6 +7,8 @@
 // Backend endpoints land at /api/sessions/:id/...; see
 // src/server/routes/turns.ts.
 
+import { apiFetch } from "@/api/http";
+
 interface TurnPayload {
   text: string;
   cwd: string;
@@ -52,7 +54,7 @@ export interface ApiError {
 
 async function post<T>(path: string, body: unknown): Promise<T | ApiError> {
   try {
-    const res = await fetch(path, {
+    const res = await apiFetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -73,7 +75,7 @@ async function post<T>(path: string, body: unknown): Promise<T | ApiError> {
 
 async function del<T>(path: string): Promise<T | ApiError> {
   try {
-    const res = await fetch(path, {
+    const res = await apiFetch(path, {
       method: "DELETE",
       credentials: "same-origin",
     });

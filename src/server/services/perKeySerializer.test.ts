@@ -1,6 +1,8 @@
 // v2.6: unit tests for the per-key serializer that guards the
 // main-jsonl change handler against overlapping runs (shared-stash
 // race — see perKeySerializer.ts docblock).
+// 中: per-key 串行器单测——同 key 不重叠、突发合并只排队一个、
+// 异 key 独立、抛错不断链。
 import { describe, expect, it } from "vitest";
 
 import { createPerKeySerializer } from "./perKeySerializer";

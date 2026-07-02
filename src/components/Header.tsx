@@ -29,6 +29,13 @@ export function Header() {
   const draftSession = useStore((s) => s.draftSession);
   const isDraft = !!activeId && activeId === draftSession?.id;
   const liveStatus = useStore((s) => s.liveStatus);
+  // v2.6 security batch: persistent badge while bypassPermissions is
+  // active — agents run every tool unprompted in that mode; the user
+  // chose it deliberately but it must stay visible.
+  // 中: bypass 生效时的常驻徽标——有意开启,但不该无感。
+  const bypassActive = useStore(
+    (s) => s.serverPermissionMode === "bypassPermissions",
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Other parts of the tree (notably HookOnboardingModal) ask Header
@@ -87,6 +94,17 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-2 flex-shrink-0">
+        {bypassActive && (
+          <button
+            type="button"
+            data-testid="bypass-permissions-badge"
+            title={t("header.bypass_badge_tooltip")}
+            onClick={() => setSettingsOpen(true)}
+            className="inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 hover:bg-amber-100 cursor-pointer"
+          >
+            ⚡ {t("header.bypass_badge")}
+          </button>
+        )}
         <SessionUsageChip />
         <HookStatusChip />
         <LiveIndicator

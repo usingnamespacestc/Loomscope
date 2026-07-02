@@ -1,4 +1,5 @@
 import type { StateCreator } from "zustand";
+import { apiFetch } from "@/api/http";
 
 import type { LoomscopeStore, UISlice } from "@/store/types";
 
@@ -17,6 +18,7 @@ export const createUISlice: StateCreator<LoomscopeStore, [], [], UISlice> = (set
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   sidebarCollapsed: false,
   interactiveMode: true,
+  serverPermissionMode: null,
   drillPanelWidth: DEFAULT_DRILL_PANEL_WIDTH,
   drillPanelCollapsed: false,
   // v0.8.1 #7: full-canvas mode. When true, the panel covers the
@@ -106,6 +108,8 @@ export const createUISlice: StateCreator<LoomscopeStore, [], [], UISlice> = (set
 
   setInteractiveMode: (next) => set({ interactiveMode: next }),
 
+  setServerPermissionMode: (mode) => set({ serverPermissionMode: mode }),
+
   saveInteractiveMode: async (next) => {
     // Optimistic flip — if the PATCH fails we roll back. Keeps the
     // toggle responsive on slow networks while still surfacing
@@ -113,7 +117,7 @@ export const createUISlice: StateCreator<LoomscopeStore, [], [], UISlice> = (set
     // value lands here.
     set({ interactiveMode: next });
     try {
-      const res = await fetch("/api/preferences", {
+      const res = await apiFetch("/api/preferences", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ interactiveMode: next }),

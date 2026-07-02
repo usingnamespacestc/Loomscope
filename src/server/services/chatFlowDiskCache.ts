@@ -236,7 +236,9 @@ export async function writeDiskCache(args: {
 
 /** v2.6: total-size budget for the disk cache directory. Generous —
  * the point is "bounded", not "small": at the documented ~100%-of-
- * jsonl entry size this is roughly 40 large sessions' worth. */
+ * jsonl entry size this is roughly 40 large sessions' worth.
+ * 中: 缓存目录总量预算。目标是"有界"而非"省":约等于 40 个大
+ * session 的量。 */
 const DISK_CACHE_BUDGET_BYTES = 1 * 1024 * 1024 * 1024; // 1 GiB
 
 let budgetOverride: number | null = null;
@@ -251,7 +253,9 @@ function budgetBytes(): number {
 /** Delete oldest-mtime cache entries until the directory fits the
  * budget. Never touches `justWrote` (the entry that triggered the
  * sweep) or in-flight `.tmp.*` files. Best-effort: any fs error just
- * ends the sweep — next write retries. */
+ * ends the sweep — next write retries.
+ * 中: 按 mtime 从最老开始删到预算以内;不碰刚写入的条目和 .tmp;
+ * 任何 fs 错误直接结束本轮,下次写入再试。 */
 async function sweepDiskCache(
   root: string,
   justWrote: string,

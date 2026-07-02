@@ -49,6 +49,7 @@ export function createIdleMap<V>(opts: {
   const now = opts.now ?? Date.now;
   // Insertion order ≈ touch order: get() and set() re-insert, so the
   // first key is always the least-recently-touched.
+  // 中: 利用 Map 插入序,get/set 都重插,队首永远是最久未碰的。
   const entries = new Map<string, { value: V; touched: number }>();
 
   function sweep(): void {
@@ -71,6 +72,7 @@ export function createIdleMap<V>(opts: {
       if (!e) return undefined;
       // TTL is checked lazily on read too, so a stale entry can't be
       // revived by the very access that should have found it gone.
+      // 中: 读的时候也懒检 TTL,过期条目不会被这次访问"救活"。
       if (e.touched <= now() - ttlMs) {
         entries.delete(key);
         return undefined;

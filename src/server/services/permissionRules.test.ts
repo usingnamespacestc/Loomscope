@@ -8,6 +8,7 @@ import {
   _resetRulesForTests,
   _setRulesPathForTests,
   deletePermissionRule,
+  deriveCommandPrefix,
   loadPermissionRules,
   matchRule,
   savePermissionRule,
@@ -99,6 +100,66 @@ describe("permissionRules", () => {
 
   it("matchRule returns null on empty rule list", () => {
     expect(matchRule([], "Bash", {})).toBeNull();
+  });
+
+  // v2.6 security batch: Bash commandPrefix scoping.
+  // 中: Bash 命令前缀收窄——带前缀只匹配同首词,不误放行其他命令。
+  describe("commandPrefix (Bash rule scoping)", () => {
+    const npmRule: PermissionRule = {
+      id: "1",
+      toolName: "Bash",
+      behavior: "allow",
+      commandPrefix: "npm",
+      createdAt: 0,
+    };
+
+    it("allows a Bash command whose first token matches the prefix", () => {
+      expect(matchRule([npmRule], "Bash", { command: "npm test" })).toBe(
+        "allow",
+      );
+      expect(
+        matchRule([npmRule], "Bash", { command: "  npm   run build" }),
+      ).toBe("allow");
+    });
+
+    it("does NOT allow a different command (the core hole this closes)", () => {
+      expect(matchRule([npmRule], "Bash", { command: "rm -rf /" })).toBeNull();
+      expect(matchRule([npmRule], "Bash", { command: "npmfake x" })).toBeNull();
+      expect(matchRule([npmRule], "Bash", {})).toBeNull();
+      expect(
+        matchRule([npmRule], "Bash", { command: 123 as unknown as string }),
+      ).toBeNull();
+    });
+
+    it("a prefix-less Bash rule keeps blanket (legacy) semantics", () => {
+      const legacy: PermissionRule = {
+        id: "2",
+        toolName: "Bash",
+        behavior: "allow",
+        createdAt: 0,
+      };
+      expect(matchRule([legacy], "Bash", { command: "anything goes" })).toBe(
+        "allow",
+      );
+    });
+
+    it("deriveCommandPrefix peels env-var assignments and leading sudo", () => {
+      expect(deriveCommandPrefix("Bash", { command: "npm test" })).toBe("npm");
+      expect(deriveCommandPrefix("Bash", { command: "FOO=bar npm x" })).toBe(
+        "npm",
+      );
+      expect(
+        deriveCommandPrefix("Bash", { command: "sudo systemctl restart x" }),
+      ).toBe("systemctl");
+      expect(
+        deriveCommandPrefix("Bash", { command: "A=1 sudo B=2 make" }),
+      ).toBe("make");
+    });
+
+    it("deriveCommandPrefix returns undefined for non-Bash or missing command", () => {
+      expect(deriveCommandPrefix("Read", { command: "npm" })).toBeUndefined();
+      expect(deriveCommandPrefix("Bash", {})).toBeUndefined();
+    });
   });
 
   it("normalize drops malformed entries silently (forward-compat)", async () => {

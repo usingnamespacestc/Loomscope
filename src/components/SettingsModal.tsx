@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { apiFetch } from "@/api/http";
 
 import { postTurn } from "@/api/turns";
 import { useStore } from "@/store/index";
@@ -185,7 +186,7 @@ function HooksPanel() {
     try {
       const body: { mode: "add" | "remove"; events?: string[] } = { mode };
       if (events && events.length > 0) body.events = events;
-      const res = await fetch(PATCH_URL, {
+      const res = await apiFetch(PATCH_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -229,7 +230,7 @@ function HooksPanel() {
     setWorking("rotate");
     setError(null);
     try {
-      const res = await fetch(ROTATE_URL, { method: "POST" });
+      const res = await apiFetch(ROTATE_URL, { method: "POST" });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as {
           error?: string;
@@ -597,7 +598,7 @@ function usePreferences() {
       setSaving(true);
       setError(null);
       try {
-        const res = await fetch("/api/preferences", {
+        const res = await apiFetch("/api/preferences", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -605,6 +606,12 @@ function usePreferences() {
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const next = await res.json();
+        // v2.6: keep the Header bypass badge live — mirror the echoed
+        // permissionMode into the store the moment the PATCH lands.
+        // 中: PATCH 回显时同步 store,Header 徽标即时切换。
+        if (typeof next.permissionMode === "string") {
+          useStore.getState().setServerPermissionMode(next.permissionMode);
+        }
         setPrefs((cur) => ({
           idleTimeoutMin:
             typeof next.idleTimeoutMin === "number"
@@ -1118,6 +1125,10 @@ interface PermRule {
   id: string;
   toolName: string;
   behavior: "allow" | "deny";
+  // v2.6: Bash rules carry the command's first token; shown as
+  // `Bash · npm` so the user sees a saved rule is scoped, not blanket.
+  // 中: Bash 规则的命令首 token,列表里显示 `Bash · npm` 表明是限定的。
+  commandPrefix?: string;
   createdAt: number;
 }
 
@@ -1147,7 +1158,7 @@ function PermissionRulesSection() {
 
   const removeRule = async (id: string) => {
     try {
-      const res = await fetch(`/api/permission-rules/${id}`, {
+      const res = await apiFetch(`/api/permission-rules/${id}`, {
         method: "DELETE",
         credentials: "same-origin",
       });
@@ -1192,7 +1203,10 @@ function PermissionRulesSection() {
             {rules.map((r) => (
               <tr key={r.id} className="border-t border-gray-100">
                 <td className="py-1 font-mono">
-                  {r.toolName}{" "}
+                  {r.toolName}
+                  {r.commandPrefix && (
+                    <span className="text-gray-400"> · {r.commandPrefix}</span>
+                  )}{" "}
                   {r.behavior === "deny" && (
                     <span className="ml-1 text-[9px] rounded bg-rose-100 px-1 text-rose-700">
                       deny
@@ -1275,7 +1289,7 @@ function HookPathsSection() {
     setSaving(true);
     setErr(null);
     try {
-      const res = await fetch("/api/preferences", {
+      const res = await apiFetch("/api/preferences", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
