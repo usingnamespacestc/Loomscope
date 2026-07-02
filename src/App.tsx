@@ -546,6 +546,9 @@ export default function App() {
            *  Loomscope-spawned canUseTool path. Drives banner chip
            *  + decision endpoint routing. */
           source?: "sdk" | "http";
+          /** v2.7: stable CC tool_use_id (HTTP-hook path) — dedup key
+           *  so a re-fired PreToolUse doesn't spawn a duplicate form. */
+          toolUseId?: string;
         };
         if (payload.sessionId !== activeId) return;
         useStore.getState().addCanUseToolPrompt(activeId, {
@@ -558,6 +561,7 @@ export default function App() {
           blockedPath: payload.blockedPath,
           receivedAt: Date.now(),
           source: payload.source ?? "sdk",
+          toolUseId: payload.toolUseId,
         });
       } catch (err) {
         console.error("[loomscope] sse permission-prompt parse failed:", err);
