@@ -44,6 +44,7 @@ import {
   type HookEventName,
 } from "@/server/services/hookEventBus";
 import {
+  dismissByToolUseId,
   dismissPrompt,
   peekPrompt,
   requestDecision,
@@ -203,6 +204,22 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
       }
 
       publishHook(event, envelope);
+
+      // v2.7: PostToolUse fallback — clear any gate pending left over
+      // for this tool_use_id. AskUserQuestion always creates a gate
+      // pending (for the conversation Panel); when answered in the
+      // terminal rather than via Loomscope, the normal settle paths
+      // can miss it, leaving the Panel form dangling next to the
+      // already-answered transcript (= the question shows twice). The
+      // tool completing always emits PostToolUse with the same
+      // tool_use_id. No-op when the normal path already settled it.
+      // 中: PostToolUse 兜底清残留 pending。终端回答 AUQ 时正常路径
+      // 可能漏清,导致 Panel 表单与已回答 transcript 并排 = 显示两次。
+      if (event === "PostToolUse") {
+        const postToolUseId =
+          typeof extras.tool_use_id === "string" ? extras.tool_use_id : "";
+        if (postToolUseId) dismissByToolUseId(postToolUseId);
+      }
 
       // v2.3 PR F1: PreToolUse interactive gate. Three gating checks
       // BEFORE entering the long-poll path:

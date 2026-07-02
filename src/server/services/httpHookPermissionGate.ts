@@ -216,6 +216,41 @@ export function dismissPrompt(promptId: string): boolean {
   return true;
 }
 
+/** v2.7: settle every pending prompt matching `toolUseId` — the
+ *  PostToolUse fallback. AskUserQuestion always creates a gate pending
+ *  (so Loomscope's conversation Panel can render the answer form),
+ *  even for terminal-CC sessions. When the user answers in the
+ *  TERMINAL rather than via Loomscope's /decision, the gate's normal
+ *  settle paths can miss it: CC may complete the tool without the
+ *  hook request's AbortSignal firing on our side, so the pending
+ *  survives until the 9-min timeout — and during that window the
+ *  Panel (pending form) renders NEXT TO the already-answered
+ *  AskUserQuestionTranscript, i.e. the question shows up twice.
+ *
+ *  PostToolUse fires whenever the tool completes (wherever it was
+ *  answered) and carries the same tool_use_id, so settling the
+ *  matching gate here reliably clears the ghost pending. Runs the
+ *  same cleanup() path as abort/timeout → the existing
+ *  `permission-prompt-resolved` SSE clears the client's Panel.
+ *  Idempotent; returns the count cleared (0 when the normal path
+ *  already settled it).
+ *  中: PostToolUse 兜底,按 toolUseId 清掉残留 pending。终端里回答
+ *  AUQ 时正常 settle 路径可能漏清,导致 Panel(表单)和已回答的
+ *  transcript 并排出现 = 问题显示两次。工具完成必发 PostToolUse 且
+ *  带同一 tool_use_id,在此清掉。走 cleanup 复用现有 resolved SSE。 */
+export function dismissByToolUseId(toolUseId: string): number {
+  if (!toolUseId) return 0;
+  let cleared = 0;
+  // Snapshot values first — cleanup() deletes from `pending`.
+  for (const entry of [...pending.values()]) {
+    if (entry.toolUseId === toolUseId) {
+      entry.cleanup();
+      cleared += 1;
+    }
+  }
+  return cleared;
+}
+
 /** EN: snapshot of currently-pending prompts for one session. Used by
  *  the SSE /events route on subscribe so a late-joining tab sees the
  *  banner instead of waiting for the next prompt.
