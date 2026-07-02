@@ -52,6 +52,7 @@ import {
 } from "@/server/services/httpHookPermissionGate";
 import { timingSafeEqualHex } from "@/server/services/loomscopeSecret";
 import {
+  deriveCommandPrefix,
   matchRule,
   savePermissionRule,
   type PermissionRule,
@@ -360,7 +361,16 @@ export function ccHookRouter(opts: CcHookRouteOptions) {
       // Allow on a back-to-back tool sequence.
       // 中: 先存规则再 resolve；快速连点时下一次 tool 已能 hit cache。
       if (saveAsRule && behavior === "allow") {
-        await savePermissionRule({ toolName: peek.toolName, behavior });
+        // v2.6 security: scope Bash rules to the command's first
+        // token (from the server-trusted peeked input) so "always
+        // allow" isn't "allow every command". Non-Bash → undefined
+        // prefix = toolName-only match.
+        // 中: Bash 规则按可信输入派生首 token 收窄。
+        await savePermissionRule({
+          toolName: peek.toolName,
+          behavior,
+          commandPrefix: deriveCommandPrefix(peek.toolName, peek.toolInput),
+        });
         if (opts.refreshPermissionRules) {
           await opts.refreshPermissionRules();
         }

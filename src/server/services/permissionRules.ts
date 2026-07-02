@@ -39,13 +39,21 @@ export type PermissionBehavior = "allow" | "deny";
 export interface PermissionRule {
   /** Stable id for delete-from-Settings + dedup. UUIDv4. */
   id: string;
-  /** Tool name (e.g. "Bash", "Edit", "Read"). Exact match for MVP. */
+  /** Tool name (e.g. "Bash", "Edit", "Read"). Exact match. */
   toolName: string;
   /** Allow or deny on match. Currently the canUseTool flow only
    *  saves "allow" rules (denies are one-shot — user clicks Deny
    *  but doesn't get an "always deny" affordance for safety). The
    *  schema supports both for future expansion. */
   behavior: PermissionBehavior;
+  /** v2.6 security batch: for Bash rules, the command's first token
+   *  (e.g. "npm", "git", "ls"). When set, the rule ONLY matches a
+   *  Bash call whose command's first token equals this — so
+   *  "always allow npm" no longer silently allows `rm -rf`. Absent
+   *  (undefined) preserves the old toolName-only semantics for
+   *  non-Bash tools and legacy rules.
+   *  中: Bash 规则记命令首 token,只匹配同首词命令;缺省 = 仅按工具名。 */
+  commandPrefix?: string;
   /** Wall-clock created. UI shows "added 2h ago" etc. */
   createdAt: number;
 }
@@ -132,19 +140,28 @@ async function persist(file: PermissionRulesFile): Promise<void> {
 export async function savePermissionRule(args: {
   toolName: string;
   behavior: PermissionBehavior;
+  /** v2.6: Bash command first-token scope (see PermissionRule doc). */
+  commandPrefix?: string;
 }): Promise<PermissionRule> {
   const cur = await loadPermissionRules();
-  // Dedup: if a rule with same (toolName, behavior) already exists,
-  // return the existing one (stable id) rather than appending a
-  // second equivalent.
+  // Dedup on the full (toolName, behavior, commandPrefix) key so
+  // "allow npm" and "allow git" coexist as distinct rules but a
+  // repeat click on the same one is a no-op.
+  // 中: 按 (工具名, 行为, 前缀) 三元组去重,不同前缀各自独立。
   const existing = cur.rules.find(
-    (r) => r.toolName === args.toolName && r.behavior === args.behavior,
+    (r) =>
+      r.toolName === args.toolName &&
+      r.behavior === args.behavior &&
+      r.commandPrefix === args.commandPrefix,
   );
   if (existing) return existing;
   const fresh: PermissionRule = {
     id: crypto.randomUUID(),
     toolName: args.toolName,
     behavior: args.behavior,
+    ...(args.commandPrefix !== undefined && {
+      commandPrefix: args.commandPrefix,
+    }),
     createdAt: Date.now(),
   };
   await persist({ rules: [...cur.rules, fresh] });
@@ -170,13 +187,62 @@ export async function deletePermissionRule(id: string): Promise<boolean> {
  *  reserved for future per-input pattern matching; it's accepted
  *  now so callers don't have to be re-wired when the matcher gets
  *  smarter. */
+/**
+ * v2.6 security batch: extract the first shell token of a command
+ * string — the coarse "which program" signal a Bash rule keys on.
+ * Trims leading whitespace, then reads up to the first whitespace.
+ * Env-var prefixes (`FOO=bar cmd`) and leading `sudo` are common
+ * enough to be worth peeling so the rule keys on the real program;
+ * anything fancier (pipes, subshells) just keys on the literal first
+ * token, which is conservative (a different first token → no match →
+ * re-prompt, never a wrongful allow).
+ * 中: 取命令首 token(哪个程序)。剥掉前导 VAR=val 和 sudo;更复杂的
+ * 管道/子shell 就按字面首 token,保守(不同 token = 不匹配 = 重新
+ * 询问,绝不误放行)。
+ */
+export function deriveCommandPrefix(
+  toolName: string,
+  input: Record<string, unknown>,
+): string | undefined {
+  if (toolName !== "Bash") return undefined;
+  const command = input?.["command"];
+  if (typeof command !== "string") return undefined;
+  const tokens = command.trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  // Peel env-var assignments (FOO=bar) and a leading sudo.
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;
+  if (i < tokens.length && tokens[i] === "sudo") i += 1;
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;
+  return tokens[i];
+}
+
+/**
+ * Synchronous matcher for the canUseTool hot path.
+ *
+ * v2.6 security batch: a rule carrying `commandPrefix` matches ONLY a
+ * Bash call whose derived first token equals it. Previously matchRule
+ * compared toolName alone (`_input` was ignored), so a single "always
+ * allow Bash" rule allowed EVERY command — the biggest gap in the
+ * saved-rules design. Rules without commandPrefix keep the toolName-
+ * only behavior (non-Bash tools, and legacy Bash rules saved before
+ * this change; the save path no longer creates prefix-less Bash allow
+ * rules).
+ * 中: 带 commandPrefix 的规则只匹配同首词 Bash 命令。以前只按工具名,
+ * "总是允许 Bash" = 放行一切,是最大漏洞。无 prefix 的规则保持旧语义
+ * (非 Bash / 老规则);新保存路径不再产生无 prefix 的 Bash allow 规则。
+ */
 export function matchRule(
   rules: ReadonlyArray<PermissionRule>,
   toolName: string,
-  _input: Record<string, unknown>,
+  input: Record<string, unknown>,
 ): PermissionBehavior | null {
   for (const r of rules) {
-    if (r.toolName === toolName) return r.behavior;
+    if (r.toolName !== toolName) continue;
+    if (r.commandPrefix !== undefined) {
+      if (toolName !== "Bash") continue;
+      if (deriveCommandPrefix(toolName, input) !== r.commandPrefix) continue;
+    }
+    return r.behavior;
   }
   return null;
 }

@@ -1125,6 +1125,10 @@ interface PermRule {
   id: string;
   toolName: string;
   behavior: "allow" | "deny";
+  // v2.6: Bash rules carry the command's first token; shown as
+  // `Bash · npm` so the user sees a saved rule is scoped, not blanket.
+  // 中: Bash 规则的命令首 token,列表里显示 `Bash · npm` 表明是限定的。
+  commandPrefix?: string;
   createdAt: number;
 }
 
@@ -1199,7 +1203,10 @@ function PermissionRulesSection() {
             {rules.map((r) => (
               <tr key={r.id} className="border-t border-gray-100">
                 <td className="py-1 font-mono">
-                  {r.toolName}{" "}
+                  {r.toolName}
+                  {r.commandPrefix && (
+                    <span className="text-gray-400"> · {r.commandPrefix}</span>
+                  )}{" "}
                   {r.behavior === "deny" && (
                     <span className="ml-1 text-[9px] rounded bg-rose-100 px-1 text-rose-700">
                       deny

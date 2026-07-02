@@ -254,6 +254,9 @@ export function peekPrompt(promptId: string): {
   sessionId: string;
   toolName: string;
   toolUseId?: string;
+  /** v2.6: server-trusted tool input, used to derive a Bash
+   *  commandPrefix when saving an "always allow" rule. */
+  toolInput: Record<string, unknown>;
 } | null {
   const entry = pending.get(promptId);
   if (!entry) return null;
@@ -261,6 +264,7 @@ export function peekPrompt(promptId: string): {
     sessionId: entry.sessionId,
     toolName: entry.toolName,
     toolUseId: entry.toolUseId,
+    toolInput: entry.toolInput,
   };
 }
 

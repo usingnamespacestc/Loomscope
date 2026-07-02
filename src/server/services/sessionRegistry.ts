@@ -633,7 +633,11 @@ export class SessionRegistry {
        *  中: AskUserQuestion 走 updatedInput 把用户填的 answers 喂回。 */
       updatedInput?: Record<string, unknown>;
     },
-  ): { sessionId: string; toolName: string } | null {
+  ): {
+    sessionId: string;
+    toolName: string;
+    toolInput: Record<string, unknown>;
+  } | null {
     const p = this.pendingPermissionPrompts.get(promptId);
     if (!p) return null;
     this.pendingPermissionPrompts.delete(promptId);
@@ -645,7 +649,15 @@ export class SessionRegistry {
         err,
       );
     }
-    return { sessionId: p.sessionId, toolName: p.toolName };
+    // v2.6: return the server-trusted toolInput so the decision route
+    // can derive a Bash commandPrefix for "always allow" without
+    // trusting client-supplied fields.
+    // 中: 返回服务端可信的 toolInput,让决策路由据此派生 Bash 前缀。
+    return {
+      sessionId: p.sessionId,
+      toolName: p.toolName,
+      toolInput: p.toolInput,
+    };
   }
 
   /** Snapshot pending prompts for a session — used by the SSE late-
