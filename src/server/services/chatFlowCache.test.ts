@@ -208,7 +208,7 @@ describe("incremental parse state stash (M1)", () => {
       parseFailures: 0,
       byteSize: 100 * records,
       mtimeMs: 1,
-      pendingFragment: "",
+      pendingBytes: Buffer.alloc(0),
       chatFlow: null,
     };
   }

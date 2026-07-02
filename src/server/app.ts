@@ -51,6 +51,7 @@ import { findForkClosure } from "@/server/services/forkTree";
 import { locateSessionJsonl } from "@/server/services/locateJsonl";
 import { initHookLifecycleReducer } from "@/server/services/hookLifecycleReducer";
 import { initPendingPermissionTracker } from "@/server/services/pendingPermissionTracker";
+import { createPerKeySerializer } from "@/server/services/perKeySerializer";
 import { loadPreferences } from "@/server/services/preferences";
 import { realSdkQuery, resolveClaudePath } from "@/server/services/sdkAdapter";
 import { SessionRegistry } from "@/server/services/sessionRegistry";
@@ -224,10 +225,20 @@ export function createApp(opts: AppOptions) {
   // 中: PR D1 注册 delta handler。fire-and-forget；用同一 LRU 缓存
   // 装新 ChatFlow，丢进 delta engine 算 diff，推语义 SSE 事件。
   if (!opts.registry) {
+    // v2.6: per-session serialization. This handler used to be plain
+    // fire-and-forget, but buildChatFlow takes 1.5-2.5s while the
+    // watcher throttle only guarantees ~250ms spacing — two overlapping
+    // runs for the same session would mutate the shared incremental
+    // stashes (stateStash / closureMemberStash) concurrently and could
+    // compute newRecords against an already-advanced baseline. The
+    // serializer chains same-session runs and coalesces bursts to at
+    // most one queued run (which re-reads the file, losing nothing).
+    // 中: 同 session 串行 + 合并排队,防重叠运行竞态改写共享 stash。
+    const changeSerializer = createPerKeySerializer();
     setMainJsonlChangeHandler((sessionId, jsonlPath /* reason */) => {
       // Fire-and-forget — never throws into the watcher pipeline.
       // 中: 异步执行，watcher 不阻塞。错误吞到 console。
-      void (async () => {
+      changeSerializer.run(sessionId, async () => {
         try {
           const projectDir = path.dirname(jsonlPath);
           const closure = await findForkClosure({
@@ -291,7 +302,7 @@ export function createApp(opts: AppOptions) {
             err,
           );
         }
-      })();
+      });
     });
   }
   // ccHook router needs `registry.isHookHttpPathEnabled()` for the

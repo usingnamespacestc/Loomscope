@@ -37,6 +37,7 @@ import { FSWatcher, watch } from "chokidar";
 
 import { dropDiskCache } from "@/server/services/chatFlowDiskCache";
 import { broadcast } from "@/server/services/sseHub";
+import { logWatcherError } from "@/server/services/watcherErrors";
 
 const WORKSPACES_CHANNEL = "workspaces";
 
@@ -123,7 +124,7 @@ export function ensureWorkspaceWatcher(rootDir: string): void {
     });
   });
   watcher.on("error", (err) => {
-    console.error("[workspaceWatcher] chokidar error:", err);
+    logWatcherError("workspaceWatcher", err);
   });
 }
 

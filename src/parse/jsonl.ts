@@ -127,7 +127,10 @@ export interface RecordsOnlyIncrementalState {
   parseFailures: number;
   byteSize: number;
   mtimeMs: number;
-  pendingFragment: string;
+  /** #4b: trailing partial line as RAW BYTES (no `\n` yet). Kept as a
+   * Buffer — not a string — because the tear can land mid-multibyte
+   * UTF-8 character; decoding happens only on complete lines. */
+  pendingBytes: Buffer;
 }
 
 /**
@@ -158,46 +161,46 @@ export async function readRecordsIncremental(
     !(prevState.byteSize === curSize && prevState.mtimeMs !== curMtime);
 
   if (!canIncremental) {
-    const { records, parseFailures } = await readRecordsFromFile(jsonlPath);
+    // #4b: full read goes through the byte-accurate streamer too, so a
+    // torn tail (no trailing `\n` at snapshot time) lands in
+    // pendingBytes instead of being consumed as one corrupt "line" —
+    // readline would emit the fragment as complete, fail the parse,
+    // and the record would be lost forever once byteSize moved past it.
+    // 中: 全量路径也走字节切行,撕裂尾行进 pendingBytes 而不是被当成
+    // 坏行吞掉。
+    const full = await readAllByteAccurate(jsonlPath, curSize);
     return {
-      records,
+      records: full.records,
       state: {
-        records,
-        parseFailures,
+        records: full.records,
+        parseFailures: full.parseFailures,
         byteSize: curSize,
         mtimeMs: curMtime,
-        pendingFragment: "",
+        pendingBytes: full.pendingBytes,
       },
       usedIncremental: false,
     };
   }
   const records = prevState!.records.slice();
   let parseFailures = prevState!.parseFailures;
-  let pendingFragment = prevState!.pendingFragment;
+  let pendingBytes = prevState!.pendingBytes;
   if (prevState!.byteSize < curSize) {
     try {
-      const stream = fs.createReadStream(jsonlPath, {
-        encoding: "utf8",
-        start: prevState!.byteSize,
-      });
-      for await (const chunk of stream) {
-        pendingFragment += chunk as string;
-        let nl = pendingFragment.indexOf("\n");
-        while (nl >= 0) {
-          const line = pendingFragment.slice(0, nl);
-          pendingFragment = pendingFragment.slice(nl + 1);
-          if (line) {
-            const r = parseLine(line);
-            if (r) records.push(r);
-            else parseFailures += 1;
-          }
-          nl = pendingFragment.indexOf("\n");
-        }
-      }
+      pendingBytes = await streamLinesByteAccurate(
+        jsonlPath,
+        prevState!.byteSize,
+        curSize,
+        pendingBytes,
+        (line) => {
+          const r = parseLine(line);
+          if (r) records.push(r);
+          else parseFailures += 1;
+        },
+      );
     } catch {
       // Read race / permission flap — full reparse rather than poison.
       // 中: 读取过程中失败 → 退回全量，不污染 state。
-      const full = await readRecordsFromFile(jsonlPath);
+      const full = await readAllByteAccurate(jsonlPath, curSize);
       return {
         records: full.records,
         state: {
@@ -205,7 +208,7 @@ export async function readRecordsIncremental(
           parseFailures: full.parseFailures,
           byteSize: curSize,
           mtimeMs: curMtime,
-          pendingFragment: "",
+          pendingBytes: full.pendingBytes,
         },
         usedIncremental: false,
       };
@@ -218,7 +221,7 @@ export async function readRecordsIncremental(
       parseFailures,
       byteSize: curSize,
       mtimeMs: curMtime,
-      pendingFragment,
+      pendingBytes,
     },
     usedIncremental: true,
   };
@@ -242,6 +245,96 @@ async function readRecordsFromFile(
     else parseFailures += 1;
   }
   return { records, parseFailures };
+}
+
+const EMPTY_PENDING = Buffer.alloc(0);
+
+// #4b: byte-accurate line streamer shared by every read path that
+// carries continuation state. Reads `[start, endExclusive)` as RAW
+// BYTES, splits on the newline byte (0x0A) and only THEN decodes each
+// complete line as UTF-8 — a complete jsonl line is always a complete
+// UTF-8 byte sequence, so per-line decoding can never tear a
+// character.
+//
+// Why not `createReadStream({ encoding: "utf8", start })`: resuming a
+// DECODED stream at a byte offset loses data whenever the previous
+// read ended mid-multibyte-character. Node's StringDecoder buffers the
+// incomplete trailing bytes and never emits them as string output, but
+// they ARE counted in the byte offset we persist — so the next read
+// starts past them, the character is gone, and the whole JSON line is
+// silently corrupted (one `parseFailures++`, record lost forever).
+//
+// The explicit `endExclusive` bound (from the caller's `fs.stat`)
+// also closes a stat/read race: without it, a write landing between
+// the stat and the read-to-EOF would be consumed now AND re-read on
+// the next incremental call → duplicate records.
+//
+// Returns the trailing partial line (bytes after the last `\n`) to be
+// re-prepended verbatim on the next call.
+//
+// 中(#4b): 续读必须按字节切行、整行再解码。utf8 流在多字节字符中间
+// 断点续读时,StringDecoder 吞掉的半个字符已计入 byteSize 却从未输出,
+// 下次从它之后开始读 → 整行 JSON 永久损坏。残行以原始字节保存,下次
+// 原样拼回;endExclusive 精确限界消掉 stat 与读取之间的增长竞态。
+async function streamLinesByteAccurate(
+  jsonlPath: string,
+  start: number,
+  endExclusive: number,
+  prevPending: Buffer,
+  onLine: (line: string) => void,
+): Promise<Buffer> {
+  let pending = prevPending;
+  if (endExclusive > start) {
+    const stream = fs.createReadStream(jsonlPath, {
+      start,
+      end: endExclusive - 1, // createReadStream's `end` is inclusive
+    });
+    for await (const chunk of stream) {
+      const buf = chunk as Buffer;
+      pending = pending.length > 0 ? Buffer.concat([pending, buf]) : buf;
+      let nl = pending.indexOf(0x0a);
+      while (nl >= 0) {
+        let end = nl;
+        // Tolerate CRLF the same way readline's crlfDelay does.
+        if (end > 0 && pending[end - 1] === 0x0d) end -= 1;
+        if (end > 0) onLine(pending.subarray(0, end).toString("utf8"));
+        pending = pending.subarray(nl + 1);
+        nl = pending.indexOf(0x0a);
+      }
+    }
+  }
+  // Copy the leftover out of the last (chunk-sized) buffer so callers
+  // stashing it long-term don't pin the whole 64KB chunk in memory.
+  return pending.length > 0 ? Buffer.from(pending) : EMPTY_PENDING;
+}
+
+// #4b: full byte-accurate read shared by the stateful entry points'
+// full-parse branches (first visit / shrink / #4a rewrite / error
+// fallback). A torn tail at snapshot time lands in pendingBytes
+// instead of being consumed as one corrupt "line".
+// 中: 有状态入口的全量分支共用;撕裂尾行落进 pendingBytes。
+async function readAllByteAccurate(
+  jsonlPath: string,
+  endExclusive: number,
+): Promise<{
+  records: RawRecord[];
+  parseFailures: number;
+  pendingBytes: Buffer;
+}> {
+  const records: RawRecord[] = [];
+  let parseFailures = 0;
+  const pendingBytes = await streamLinesByteAccurate(
+    jsonlPath,
+    0,
+    endExclusive,
+    EMPTY_PENDING,
+    (line) => {
+      const r = parseLine(line);
+      if (r) records.push(r);
+      else parseFailures += 1;
+    },
+  );
+  return { records, parseFailures, pendingBytes };
 }
 
 // ─── Incremental parse (v0.10 收尾 / v0.11 prep) ──────────────────────
@@ -269,15 +362,17 @@ async function readRecordsFromFile(
 //
 // Partial-line tail: chokidar's `awaitWriteFinish: 80 ms` makes mid-
 // flush reads rare, but the format isn't bounded. If the trailing
-// bytes don't end with `\n`, we save them in `pendingFragment` and
-// re-prepend on the next incremental call. A torn write that completes
-// mid-record between snapshots survives intact.
+// bytes don't end with `\n`, we save them — as RAW BYTES, see #4b in
+// `streamLinesByteAccurate` — in `pendingBytes` and re-prepend on the
+// next incremental call. A torn write that completes mid-record (even
+// mid-multibyte-character) between snapshots survives intact.
 //
 // 中: 增量 parse 入口。state 含 records[] / byteSize / mtimeMs /
-// pendingFragment（尾部不带 \n 的残片）。文件长大 → 只读尾部新 bytes
+// pendingBytes（尾部不带 \n 的残片,原始字节 — #4b 撕裂点可能落在
+// 多字节字符中间,不能存成 string）。文件长大 → 只读尾部新 bytes
 // 拼老 records 再 build；文件缩短 / 首次访问 / fork closure>1 → fallback
 // 全量。chokidar 80ms awaitWriteFinish 已大幅降低撕裂写入概率，
-// pendingFragment 兜底其余情况。
+// pendingBytes 兜底其余情况。
 
 export interface IncrementalParseState {
   /** Records seen so far across all parse passes. */
@@ -291,10 +386,11 @@ export interface IncrementalParseState {
    * size growth, not mtime delta (writes that don't grow size aren't
    * meaningful for an append-only jsonl). */
   mtimeMs: number;
-  /** Partial-line tail from a previous incremental tail-read (no `\n`
-   * yet). "" for state produced by `readRecordsFromFile` since
-   * readline emits any final fragment as a "complete" line. */
-  pendingFragment: string;
+  /** Partial-line tail from a previous read (no `\n` yet), as RAW
+   * BYTES — the tear can land mid-multibyte UTF-8 character, so this
+   * must not round-trip through a string (#4b). Empty Buffer when the
+   * file ended on a clean `\n`. */
+  pendingBytes: Buffer;
   /** v0.10 收尾 / M2: most recent ChatFlow snapshot. Threaded back
    * to `buildChatFlow` as the `reuse` hint so unchanged buckets
    * skip the per-bucket WorkFlow build + summary recompute. Null
@@ -337,17 +433,20 @@ export async function parseJsonlFileIncremental(
     !(prevState.byteSize === curSize && prevState.mtimeMs !== curMtime);
 
   if (!canIncremental) {
-    const { records, parseFailures } = await readRecordsFromFile(jsonlPath);
-    const chatFlow = buildChatFlow(records, jsonlPath, options);
+    // #4b: byte-accurate full read — a torn tail lands in pendingBytes
+    // instead of being consumed as one corrupt "line" (see
+    // readAllByteAccurate).
+    const full = await readAllByteAccurate(jsonlPath, curSize);
+    const chatFlow = buildChatFlow(full.records, jsonlPath, options);
     return {
       chatFlow,
-      parseFailures,
+      parseFailures: full.parseFailures,
       state: {
-        records,
-        parseFailures,
+        records: full.records,
+        parseFailures: full.parseFailures,
         byteSize: curSize,
         mtimeMs: curMtime,
-        pendingFragment: "",
+        pendingBytes: full.pendingBytes,
         chatFlow,
       },
       usedIncremental: false,
@@ -358,32 +457,25 @@ export async function parseJsonlFileIncremental(
   // state's array — callers keep stale snapshots around.
   const records = prevState!.records.slice();
   let parseFailures = prevState!.parseFailures;
-  let pendingFragment = prevState!.pendingFragment;
+  let pendingBytes = prevState!.pendingBytes;
 
   if (prevState!.byteSize < curSize) {
     try {
-      const stream = fs.createReadStream(jsonlPath, {
-        encoding: "utf8",
-        start: prevState!.byteSize,
-      });
-      for await (const chunk of stream) {
-        pendingFragment += chunk as string;
-        let nl = pendingFragment.indexOf("\n");
-        while (nl >= 0) {
-          const line = pendingFragment.slice(0, nl);
-          pendingFragment = pendingFragment.slice(nl + 1);
-          if (line) {
-            const r = parseLine(line);
-            if (r) records.push(r);
-            else parseFailures += 1;
-          }
-          nl = pendingFragment.indexOf("\n");
-        }
-      }
+      pendingBytes = await streamLinesByteAccurate(
+        jsonlPath,
+        prevState!.byteSize,
+        curSize,
+        pendingBytes,
+        (line) => {
+          const r = parseLine(line);
+          if (r) records.push(r);
+          else parseFailures += 1;
+        },
+      );
     } catch {
       // File races (deletion mid-read, permission flap, etc.) — fall
       // back to a full parse rather than poisoning the cache.
-      const full = await readRecordsFromFile(jsonlPath);
+      const full = await readAllByteAccurate(jsonlPath, curSize);
       const chatFlow = buildChatFlow(full.records, jsonlPath, options);
       return {
         chatFlow,
@@ -393,7 +485,7 @@ export async function parseJsonlFileIncremental(
           parseFailures: full.parseFailures,
           byteSize: curSize,
           mtimeMs: curMtime,
-          pendingFragment: "",
+          pendingBytes: full.pendingBytes,
           chatFlow,
         },
         usedIncremental: false,
@@ -419,7 +511,7 @@ export async function parseJsonlFileIncremental(
       parseFailures,
       byteSize: curSize,
       mtimeMs: curMtime,
-      pendingFragment,
+      pendingBytes,
       chatFlow,
     },
     usedIncremental: true,
