@@ -100,6 +100,7 @@ describe("POST /api/cc-hook-onboarding/patch", () => {
       headers: {
         "Content-Type": "application/json",
         // v2.6: onboarding left the CSRF bypass list — token required.
+        // 中: onboarding 离开 CSRF bypass,必须带 token。
         "x-loomscope-token": "csrf-token",
       },
       body: JSON.stringify({ mode: "add" }),
@@ -152,6 +153,7 @@ describe("POST /api/cc-hook-onboarding/patch", () => {
       headers: {
         "Content-Type": "application/json",
         // v2.6: onboarding left the CSRF bypass list — token required.
+        // 中: onboarding 离开 CSRF bypass,必须带 token。
         "x-loomscope-token": "csrf-token",
       },
       body: JSON.stringify({ mode: "remove" }),
@@ -180,6 +182,7 @@ describe("POST /api/cc-hook-onboarding/patch", () => {
       headers: {
         "Content-Type": "application/json",
         // v2.6: onboarding left the CSRF bypass list — token required.
+        // 中: onboarding 离开 CSRF bypass,必须带 token。
         "x-loomscope-token": "csrf-token",
       },
       body: JSON.stringify({ mode: "add" }),
@@ -195,6 +198,7 @@ describe("POST /api/cc-hook-onboarding/patch", () => {
       headers: {
         "Content-Type": "application/json",
         // v2.6: onboarding left the CSRF bypass list — token required.
+        // 中: onboarding 离开 CSRF bypass,必须带 token。
         "x-loomscope-token": "csrf-token",
       },
       body: JSON.stringify({ mode: "delete-all-the-things" }),
@@ -202,19 +206,27 @@ describe("POST /api/cc-hook-onboarding/patch", () => {
     expect(res.status).toBe(400);
   });
 
-  it("does NOT require X-Loomscope-Token (CSRF bypass for same-origin onboarding flow)", async () => {
-    // No CSRF header. Should still succeed because the path is in
-    // CSRF_BYPASS_PATHS.
-    const res = await app.request("/api/cc-hook-onboarding/patch", {
+  it("requires X-Loomscope-Token (v2.6: onboarding left the CSRF bypass list)", async () => {
+    // v2.6 security batch: rotate-secret rotates the hook secret, so
+    // the whole onboarding namespace must carry the CSRF token now.
+    // 中: onboarding 离开 CSRF bypass(rotate-secret 能换 hook secret),
+    // 现在必须带 token:无 token 403,带 token 200。
+    const noToken = await app.request("/api/cc-hook-onboarding/patch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "add" }),
+    });
+    expect(noToken.status).toBe(403);
+
+    const withToken = await app.request("/api/cc-hook-onboarding/patch", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        // v2.6: onboarding left the CSRF bypass list — token required.
         "x-loomscope-token": "csrf-token",
       },
       body: JSON.stringify({ mode: "add" }),
     });
-    expect(res.status).toBe(200);
+    expect(withToken.status).toBe(200);
   });
 });
 

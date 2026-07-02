@@ -39,7 +39,8 @@ export type PermissionBehavior = "allow" | "deny";
 export interface PermissionRule {
   /** Stable id for delete-from-Settings + dedup. UUIDv4. */
   id: string;
-  /** Tool name (e.g. "Bash", "Edit", "Read"). Exact match. */
+  /** Tool name (e.g. "Bash", "Edit", "Read"). Exact match.
+   *  中: 工具名,精确匹配。 */
   toolName: string;
   /** Allow or deny on match. Currently the canUseTool flow only
    *  saves "allow" rules (denies are one-shot — user clicks Deny
@@ -140,7 +141,8 @@ async function persist(file: PermissionRulesFile): Promise<void> {
 export async function savePermissionRule(args: {
   toolName: string;
   behavior: PermissionBehavior;
-  /** v2.6: Bash command first-token scope (see PermissionRule doc). */
+  /** v2.6: Bash command first-token scope (see PermissionRule doc).
+   *  中: Bash 命令首 token 收窄(见 PermissionRule 字段说明)。 */
   commandPrefix?: string;
 }): Promise<PermissionRule> {
   const cur = await loadPermissionRules();
@@ -210,6 +212,7 @@ export function deriveCommandPrefix(
   const tokens = command.trim().split(/\s+/).filter(Boolean);
   let i = 0;
   // Peel env-var assignments (FOO=bar) and a leading sudo.
+  // 中: 剥掉前导 VAR=val 赋值和一个 sudo。
   while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;
   if (i < tokens.length && tokens[i] === "sudo") i += 1;
   while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1;

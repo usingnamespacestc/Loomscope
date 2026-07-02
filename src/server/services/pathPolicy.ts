@@ -22,7 +22,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 
-/** Test override for the home root. */
+/** Test override for the home root. 中: 测试覆盖 home 根。 */
 let homeOverride: string | null = null;
 export function _setHomeForTests(dir: string | null): void {
   homeOverride = dir;
@@ -36,7 +36,8 @@ export type CwdPolicyResult =
   | { allowed: true; resolved: string }
   | { allowed: false; reason: string };
 
-/** Is `p` inside (or equal to) root after path normalization? */
+/** Is `p` inside (or equal to) root after path normalization?
+ *  中: 归一化后 p 是否在 root 内(或等于 root)。 */
 function within(p: string, root: string): boolean {
   const rel = path.relative(root, p);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));

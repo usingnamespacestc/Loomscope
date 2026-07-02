@@ -87,6 +87,7 @@ describe("apiFetch", () => {
     const res = await apiFetch("/api/x", { method: "POST" });
     expect(res.status).toBe(403);
     // probe, attempt, re-probe — then give up (no second attempt).
+    // 中: 探测→尝试→再探测,token 没变即真拒绝,不再重试。
     expect(calls.map((c) => c.url)).toEqual([
       "/api/csrf-token",
       "/api/x",

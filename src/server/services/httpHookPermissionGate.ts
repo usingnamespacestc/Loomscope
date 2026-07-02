@@ -255,7 +255,8 @@ export function peekPrompt(promptId: string): {
   toolName: string;
   toolUseId?: string;
   /** v2.6: server-trusted tool input, used to derive a Bash
-   *  commandPrefix when saving an "always allow" rule. */
+   *  commandPrefix when saving an "always allow" rule.
+   *  中: 服务端可信 toolInput,存"总是允许"时据此派生 Bash 前缀。 */
   toolInput: Record<string, unknown>;
 } | null {
   const entry = pending.get(promptId);
