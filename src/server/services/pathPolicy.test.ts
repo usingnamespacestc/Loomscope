@@ -38,6 +38,7 @@ describe("checkSpawnCwd", () => {
     expect(checkSpawnCwd(`${HOME}/../../etc`).allowed).toBe(false);
     expect(checkSpawnCwd("/tmp/../etc").allowed).toBe(false);
     // .. that stays inside is fine.
+    // 中: 归一化后仍落在根内的 .. 允许。
     expect(checkSpawnCwd(`${HOME}/a/../b`)).toMatchObject({
       allowed: true,
       resolved: `${HOME}/b`,

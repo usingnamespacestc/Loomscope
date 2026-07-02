@@ -110,7 +110,8 @@ export interface UISlice {
   /** Set + persist via PATCH /api/preferences. Resolves to true on
    *  success, false on network error (caller can show inline error). */
   saveInteractiveMode: (next: boolean) => Promise<boolean>;
-  /** In-memory only — server is authoritative (see field doc). */
+  /** In-memory only — server is authoritative (see field doc).
+   *  中: 仅内存,服务端为准(见字段说明)。 */
   setServerPermissionMode: (mode: string | null) => void;
 }
 

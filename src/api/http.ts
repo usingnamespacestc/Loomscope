@@ -48,7 +48,8 @@ function ensureToken(): Promise<string | null> {
   return inflight;
 }
 
-/** Test-only: reset the module-level token cache. */
+/** Test-only: reset the module-level token cache.
+ *  中: 测试用,清掉模块级 token 缓存。 */
 export function _resetCsrfTokenForTests(): void {
   cachedToken = null;
   inflight = null;
