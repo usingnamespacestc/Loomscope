@@ -55,6 +55,7 @@ import { parseAgentId } from "@/parse/sidecar";
 import { invalidateSession } from "@/server/services/chatFlowCache";
 import { broadcast } from "@/server/services/sseHub";
 import { tasksDirFor } from "@/server/services/taskList";
+import { logWatcherError } from "@/server/services/watcherErrors";
 
 type WatchedPathKind = "main" | "sidecar-dir" | "tasks-dir";
 
@@ -241,7 +242,7 @@ function ensureWatcher(): FSWatcher {
   // the same dispatcher.
   watcher.on("unlink", (filePath: string) => scheduleFire(filePath, "unlink"));
   watcher.on("error", (err) => {
-    console.error("[sessionWatcher] chokidar error:", err);
+    logWatcherError("sessionWatcher", err);
   });
   return watcher;
 }
